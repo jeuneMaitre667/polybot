@@ -78,6 +78,25 @@ export function TradeHistory() {
     });
   }, [trades, search, dateFrom, dateTo]);
 
+  const today = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+    return { start: start.getTime(), end: end.getTime() };
+  }, []);
+
+  const tradesToday = useMemo(() => {
+    return (filtered || []).filter((t) => {
+      const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : 0;
+      return ts >= today.start && ts <= today.end;
+    });
+  }, [filtered, today]);
+
+  const fluxToday = useMemo(() => {
+    return tradesToday.reduce((acc, t) => acc + tradeValue(t), 0);
+  }, [tradesToday]);
+
   const pnlCurve = useMemo(() => {
     const sorted = [...filtered].sort((a, b) => {
       const ta = a.timestamp != null ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000) : 0;
@@ -124,6 +143,26 @@ export function TradeHistory() {
           <p className="text-sm text-muted-foreground">Aucun trade trouvé pour ce wallet.</p>
         ) : (
           <>
+            <div className="rounded-lg border border-border/50 bg-muted/10 p-3 mb-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <div>
+                <span className="text-xs text-muted-foreground block">Trades aujourd&apos;hui</span>
+                <span className="font-semibold">{tradesToday.length}</span>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground block">Flux du jour (estim.)</span>
+                <span className={`font-semibold ${fluxToday >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {fluxToday >= 0 ? '+' : ''}{fluxToday.toFixed(2)} $
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground block">Total trades (affiché)</span>
+                <span className="font-semibold">{filtered.length}</span>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground block">Courbe</span>
+                <span className="text-muted-foreground text-xs">Flux cumulé ci-dessous</span>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-3 items-end">
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Recherche (marché, outcome)</span>

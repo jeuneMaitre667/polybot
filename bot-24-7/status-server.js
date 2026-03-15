@@ -7,6 +7,10 @@
  */
 import http from 'http';
 import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+
+const BOT_DIR = process.env.BOT_DIR || path.join(process.env.HOME || '/home/ubuntu', 'bot-24-7');
 
 const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
 const SECRET = process.env.BOT_STATUS_SECRET || '';
@@ -46,6 +50,24 @@ function getLogs(lines = 40) {
   }
 }
 
+function readJsonFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function getLastOrder() {
+  return readJsonFile(path.join(BOT_DIR, 'last-order.json'));
+}
+
+function getBalanceFromFile() {
+  const o = readJsonFile(path.join(BOT_DIR, 'balance.json'));
+  return o && typeof o.balance === 'number' ? o.balance : null;
+}
+
 const server = http.createServer((req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') {
@@ -70,14 +92,15 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/bot-status') {
-    const lines = Math.min(100, Math.max(10, Number(url.searchParams.get('lines')) || 40));
     const pm2 = getPm2List();
-    const logs = getLogs(lines);
+    const lastOrder = getLastOrder();
+    const balanceUsd = getBalanceFromFile();
     return json(res, {
       status: pm2.status,
       uptime: pm2.uptime,
       pid: pm2.pid,
-      logs,
+      balanceUsd,
+      lastOrder,
       at: new Date().toISOString(),
     });
   }

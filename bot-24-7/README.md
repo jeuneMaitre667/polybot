@@ -47,6 +47,8 @@ Commandes utiles : `pm2 logs polymarket-bot`, `pm2 restart polymarket-bot`, `pm2
 
 **Serveur de statut (optionnel)** : voir `STATUS-SERVER.md` pour exposer statut et logs au dashboard.
 
+**Alerte si le bot plante** : configurer `ALERT_DISCORD_WEBHOOK_URL` ou `ALERT_TELEGRAM_*` dans `.env`, puis mettre en cron : `*/5 * * * * bash ~/bot-24-7/check-bot-health.sh` (toutes les 5 min).
+
 ## Hébergement VPS — région autorisée + latence minimale
 
 Polymarket **bloque le placement d’ordres** depuis certaines IP (pays/régions). Les ordres depuis une région bloquée sont **rejetés**. Référence officielle : [Geographic Restrictions – Polymarket](https://docs.polymarket.com/api-reference/geoblock#blocked-countries).

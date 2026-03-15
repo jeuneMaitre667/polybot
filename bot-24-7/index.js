@@ -11,9 +11,27 @@
  * Config : .env (voir .env.example)
  */
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import { ethers } from 'ethers';
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import axios from 'axios';
+
+const BOT_DIR = path.resolve(process.cwd());
+const LAST_ORDER_FILE = path.join(BOT_DIR, 'last-order.json');
+const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
+
+function writeLastOrder(data) {
+  try {
+    fs.writeFileSync(LAST_ORDER_FILE, JSON.stringify(data), 'utf8');
+  } catch (_) {}
+}
+
+function writeBalance(balanceUsd) {
+  try {
+    fs.writeFileSync(BALANCE_FILE, JSON.stringify({ balance: balanceUsd, at: new Date().toISOString() }), 'utf8');
+  } catch (_) {}
+}
 
 // ——— Config ———
 const GAMMA_EVENTS_URL = 'https://gamma-api.polymarket.com/events';
@@ -282,6 +300,7 @@ async function run() {
     else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
     else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
     if (amountUsd < orderSizeMinUsd) return;
+    if (balance != null) writeBalance(balance);
   }
 
   for (const s of signals) {
@@ -300,6 +319,7 @@ async function run() {
     const result = await placeOrder(s, amountUsd, clobClient);
     const time = new Date().toISOString();
     if (result.ok) {
+      writeLastOrder({ at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID });
       console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
     } else {
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);

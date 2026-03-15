@@ -17,7 +17,7 @@ function useBotStatus(url, refreshIntervalMs = 15000) {
     }
     setError(null);
     try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/api/bot-status?lines=25`, { method: 'GET' });
+      const res = await fetch(`${url.replace(/\/$/, '')}/api/bot-status`, { method: 'GET' });
       if (!res.ok) throw new Error(res.status === 401 ? 'Token invalide' : `HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -106,11 +106,44 @@ export function BotStatus() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-3">
         {error && !data && (
           <p className="text-sm text-amber-600 dark:text-amber-400">
             Impossible de joindre le serveur de statut. Vérifie que le port 3001 est ouvert sur Lightsail et que <code className="rounded bg-muted px-1">bot-status-server</code> tourne (pm2 list).
           </p>
+        )}
+        {(data?.balanceUsd != null || data?.lastOrder) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+            {data?.balanceUsd != null && (
+              <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
+                <span className="text-muted-foreground block text-xs font-medium">Solde USDC (bot)</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400">{Number(data.balanceUsd).toFixed(2)} $</span>
+              </div>
+            )}
+            {data?.lastOrder && (
+              <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
+                <span className="text-muted-foreground block text-xs font-medium">Dernier ordre</span>
+                <span className="font-medium">{data.lastOrder.takeSide}</span>
+                <span className="text-muted-foreground"> — {Number(data.lastOrder.amountUsd).toFixed(2)} $</span>
+                {data.lastOrder.at && (
+                  <span className="block text-xs text-muted-foreground mt-0.5">
+                    {new Date(data.lastOrder.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
+              <span className="text-muted-foreground block text-xs font-medium">Prochain créneau</span>
+              <span className="font-medium">
+                {(() => {
+                  const now = new Date();
+                  const next = new Date(now);
+                  next.setHours(next.getHours() + 1, 0, 0, 0);
+                  return next.toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' (UTC)';
+                })()}
+              </span>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
