@@ -1,16 +1,39 @@
-# React + Vite
+# Polymarket Dashboard & Bot
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+- **Dashboard** : app React (Vite) pour suivre les marchés Polymarket, la stratégie Bitcoin Up or Down, l’historique des trades et un calculateur d’intérêts composés.
+- **Bot 24/7** : script Node.js qui tourne sur une instance (ex. AWS Lightsail), surveille les signaux Bitcoin Up or Down et place des ordres sur le CLOB Polymarket.
 
-Currently, two official plugins are available:
+## Démarrage rapide
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### Dashboard
 
-## React Compiler
+```bash
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Bot (local)
 
-## Expanding the ESLint configuration
+```bash
+cd bot-24-7
+cp .env.example .env
+# Éditer .env : PRIVATE_KEY=0x...
+npm install
+npm start
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Déploiement du bot sur Lightsail
+
+1. Depuis ton PC : `.\deploy-bot.ps1` (envoie le dossier `bot-24-7` sur l’instance).
+2. En SSH : configurer `PRIVATE_KEY` dans `~/bot-24-7/.env`, puis `pm2 restart polymarket-bot`.
+
+Pour **redéployer depuis Lightsail** (sans repasser par le PC), voir `bot-24-7/REDEPLOY-LIGHTSAIL.md`.
+
+## Structure
+
+- `src/` — code du dashboard (React, composants, hooks, contexte wallet).
+- `bot-24-7/` — bot Node (signaux Gamma, CLOB, solde USDC via API, ordres limite/marché).
+
+## Licence
+
+Usage personnel / projet perso.

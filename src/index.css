@@ -92,12 +92,28 @@ body {
     --font-sans: 'Geist Variable', sans-serif;
   }
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
+  }
+  *:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
   body {
     @apply bg-background text-foreground;
+    background: linear-gradient(160deg, #0f172a 0%, #0c1222 40%, #0a0f1a 100%) !important;
+    min-height: 100vh;
   }
   html {
     @apply font-sans;
+  }
+  /* Masquer les flèches (spinner) des champs number */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
   }
 }
