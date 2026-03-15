@@ -1,5 +1,6 @@
 import { CompoundInterestCalculator } from './components/CompoundInterestCalculator';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
+import { BotStatus } from './components/BotStatus';
 import { TradeHistory } from './components/TradeHistory';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <div className="space-y-8">
+          <BotStatus />
           <BitcoinUpDownStrategy />
           <TradeHistory />
           <CompoundInterestCalculator />

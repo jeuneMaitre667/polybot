@@ -1,0 +1,90 @@
+/**
+ * Petit serveur HTTP sur Lightsail : expose le statut PM2 et les derniers logs du bot.
+ * À lancer avec PM2 : pm2 start status-server.js --name bot-status-server
+ * Ouvrir le port 3001 dans le pare-feu Lightsail (Réseau de l'instance).
+ *
+ * Variables d'env : BOT_STATUS_PORT=3001, BOT_STATUS_SECRET=optionnel (pour ?token=...)
+ */
+import http from 'http';
+import { execSync } from 'child_process';
+
+const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
+const SECRET = process.env.BOT_STATUS_SECRET || '';
+
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+function json(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function getPm2List() {
+  try {
+    const out = execSync('pm2 jlist', { encoding: 'utf8', timeout: 5000 });
+    const list = JSON.parse(out);
+    const bot = Array.isArray(list) ? list.find((p) => p.name === 'polymarket-bot') : null;
+    return {
+      status: bot?.pm2_env?.status === 'online' ? 'online' : 'offline',
+      uptime: bot?.pm2_env?.pm_uptime ?? null,
+      pid: bot?.pid ?? null,
+    };
+  } catch (e) {
+    return { status: 'error', error: String(e.message) };
+  }
+}
+
+function getLogs(lines = 40) {
+  try {
+    const out = execSync(`pm2 logs polymarket-bot --nostream --lines ${lines} 2>&1`, { encoding: 'utf8', timeout: 5000 });
+    return String(out).trim();
+  } catch (e) {
+    return `Erreur logs: ${e.message}`;
+  }
+}
+
+const server = http.createServer((req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (req.method !== 'GET') {
+    json(res, { error: 'Method not allowed' }, 405);
+    return;
+  }
+
+  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const token = url.searchParams.get('token');
+  if (SECRET && token !== SECRET) {
+    json(res, { error: 'Unauthorized' }, 401);
+    return;
+  }
+
+  if (url.pathname === '/' || url.pathname === '/api/health') {
+    return json(res, { ok: true, service: 'bot-status' });
+  }
+
+  if (url.pathname === '/api/bot-status') {
+    const lines = Math.min(100, Math.max(10, Number(url.searchParams.get('lines')) || 40));
+    const pm2 = getPm2List();
+    const logs = getLogs(lines);
+    return json(res, {
+      status: pm2.status,
+      uptime: pm2.uptime,
+      pid: pm2.pid,
+      logs,
+      at: new Date().toISOString(),
+    });
+  }
+
+  json(res, { error: 'Not found' }, 404);
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Bot status server: http://0.0.0.0:${PORT}`);
+});

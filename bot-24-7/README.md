@@ -41,6 +41,12 @@ pm2 startup   # à exécuter une fois (suit les instructions)
 
 Commandes utiles : `pm2 logs polymarket-bot`, `pm2 restart polymarket-bot`, `pm2 stop polymarket-bot`.
 
+**Démarrage au boot** : exécuter une fois `~/bot-24-7/pm2-startup.sh` puis la commande `sudo env PATH=... pm2 startup systemd ...` affichée par PM2 pour que le bot (et le serveur de statut si utilisé) redémarre après un reboot.
+
+**Sauvegarde de la config (sans la clé)** : `~/bot-24-7/backup-env.sh` crée `.env.backup.redacted` avec `PRIVATE_KEY` masquée ; à stocker ailleurs. La vraie clé reste à sauvegarder séparément (ex. coffre-fort).
+
+**Serveur de statut (optionnel)** : voir `STATUS-SERVER.md` pour exposer statut et logs au dashboard.
+
 ## Hébergement VPS — région autorisée + latence minimale
 
 Polymarket **bloque le placement d’ordres** depuis certaines IP (pays/régions). Les ordres depuis une région bloquée sont **rejetés**. Référence officielle : [Geographic Restrictions – Polymarket](https://docs.polymarket.com/api-reference/geoblock#blocked-countries).

@@ -1,6 +1,10 @@
+import { useMemo, useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { useWallet } from '../context/WalletContext';
 import { useTradeHistory } from '../hooks/useTradeHistory';
+import { format } from 'date-fns';
+import { fr } from 'date-fns/locale';
 
 function formatDate(ts) {
   if (ts == null) return '—';
@@ -13,18 +17,98 @@ function formatPrice(p) {
   return `${(Number(p) * 100).toFixed(1)} %`;
 }
 
+function tradeValue(t) {
+  const size = Number(t.size) || 0;
+  const price = Number(t.price) || 0;
+  const v = size * price;
+  return t.side === 'BUY' ? -v : v;
+}
+
+function exportCSV(trades, columns) {
+  const header = columns.map((c) => c.label).join(',');
+  const escape = (v) => (v == null ? '' : String(v).includes(',') ? `"${String(v).replace(/"/g, '""')}"` : v);
+  const rows = trades.map((t) => columns.map((c) => escape(c.get(t))).join(','));
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `trades-polymarket-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export function TradeHistory() {
   const { address } = useWallet();
-  const { trades, loading, error, refresh } = useTradeHistory(address, { limit: 100 });
+  const { trades, loading, error, refresh } = useTradeHistory(address, { limit: 200 });
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  const filtered = useMemo(() => {
+    let list = Array.isArray(trades) ? [...trades] : [];
+    const q = (search || '').toLowerCase().trim();
+    if (q) {
+      list = list.filter(
+        (t) =>
+          (t.title && t.title.toLowerCase().includes(q)) ||
+          (t.slug && t.slug.toLowerCase().includes(q)) ||
+          (t.outcome && t.outcome.toLowerCase().includes(q))
+      );
+    }
+    if (dateFrom) {
+      const from = new Date(dateFrom);
+      from.setHours(0, 0, 0, 0);
+      list = list.filter((t) => {
+        const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : 0;
+        return new Date(ts) >= from;
+      });
+    }
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      list = list.filter((t) => {
+        const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : 0;
+        return new Date(ts) <= to;
+      });
+    }
+    return list.sort((a, b) => {
+      const ta = a.timestamp != null ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000) : 0;
+      const tb = b.timestamp != null ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000) : 0;
+      return tb - ta;
+    });
+  }, [trades, search, dateFrom, dateTo]);
+
+  const pnlCurve = useMemo(() => {
+    const sorted = [...filtered].sort((a, b) => {
+      const ta = a.timestamp != null ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000) : 0;
+      const tb = b.timestamp != null ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000) : 0;
+      return ta - tb;
+    });
+    let cum = 0;
+    return sorted.map((t) => {
+      cum += tradeValue(t);
+      const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : Date.now();
+      return { date: format(new Date(ts), 'dd/MM HH:mm', { locale: fr }), cumul: Math.round(cum * 100) / 100, ts };
+    });
+  }, [filtered]);
+
+  const csvColumns = [
+    { label: 'Date', get: (t) => formatDate(t.timestamp) },
+    { label: 'Marché', get: (t) => t.title || t.slug || '' },
+    { label: 'Côté', get: (t) => (t.side === 'BUY' ? 'Achat' : 'Vente') },
+    { label: 'Outcome', get: (t) => t.outcome ?? '' },
+    { label: 'Taille', get: (t) => (t.size != null ? Number(t.size).toFixed(2) : '') },
+    { label: 'Prix', get: (t) => (t.price != null ? (Number(t.price) * 100).toFixed(1) + '%' : '') },
+  ];
 
   return (
     <Card className="border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
       <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <CardTitle className="text-xl font-semibold tracking-tight">Historique des trades</CardTitle>
             <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-              Trades exécutés sur Polymarket pour le wallet connecté (Data API).
+              Trades exécutés sur Polymarket pour le wallet connecté (Data API). Filtres, export CSV et courbe de flux (coût net cumulé).
             </p>
           </div>
         </div>
@@ -40,6 +124,74 @@ export function TradeHistory() {
           <p className="text-sm text-muted-foreground">Aucun trade trouvé pour ce wallet.</p>
         ) : (
           <>
+            <div className="flex flex-wrap gap-3 items-end">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Recherche (marché, outcome)</span>
+                <input
+                  type="text"
+                  placeholder="Filtrer…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Du</span>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Au</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => exportCSV(filtered, csvColumns)}
+                disabled={filtered.length === 0}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                Exporter CSV
+              </button>
+              <button
+                type="button"
+                onClick={refresh}
+                disabled={loading}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                Rafraîchir
+              </button>
+            </div>
+
+            {pnlCurve.length > 0 && (
+              <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Flux cumulé (coût achats − ventes, USDC)</p>
+                <div className="h-[180px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={pnlCurve} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10 }} className="text-muted-foreground" />
+                      <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" tickFormatter={(v) => `${v}`} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 8 }}
+                        labelFormatter={(_, payload) => payload[0]?.payload?.date}
+                        formatter={(v) => [`${Number(v).toFixed(2)} USDC`, 'Cumul']}
+                      />
+                      <Line type="monotone" dataKey="cumul" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
             <div className="overflow-x-auto rounded-lg border border-border/50">
               <table className="w-full text-sm border-collapse">
                 <thead>
@@ -53,7 +205,7 @@ export function TradeHistory() {
                   </tr>
                 </thead>
                 <tbody>
-                  {trades.map((t, i) => (
+                  {filtered.map((t, i) => (
                     <tr
                       key={t.transactionHash ? `${t.transactionHash}-${i}` : `trade-${i}`}
                       className="border-b border-border/40 hover:bg-muted/20 transition-colors"
@@ -76,15 +228,9 @@ export function TradeHistory() {
               </table>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">{trades.length} trade(s) affiché(s)</span>
-              <button
-                type="button"
-                onClick={refresh}
-                disabled={loading}
-                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                Rafraîchir
-              </button>
+              <span className="text-xs text-muted-foreground">
+                {filtered.length} trade(s) affiché(s){filtered.length !== trades.length ? ` (${trades.length} au total)` : ''}
+              </span>
             </div>
           </>
         )}
