@@ -303,8 +303,11 @@ async function run() {
     if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
     else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
     else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
+    writeBalance(balance);
     if (amountUsd < orderSizeMinUsd) return;
-    if (balance != null) writeBalance(balance);
+  } else {
+    const balanceForStatus = await getBalance();
+    writeBalance(balanceForStatus);
   }
 
   for (const s of signals) {
