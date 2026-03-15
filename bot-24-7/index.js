@@ -67,7 +67,7 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
-let provider = new ethers.providers.JsonRpcProvider(polygonRpc, polygonNetwork);
+let provider = new ethers.JsonRpcProvider(polygonRpc, polygonNetwork);
 const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
@@ -138,8 +138,8 @@ async function getUsdcBalanceRpc() {
       );
       const hex = res.data?.result;
       if (hex && hex !== '0x') {
-        const bn = ethers.BigNumber.from(hex);
-        return Number(ethers.utils.formatUnits(bn, 6));
+        const bn = BigInt(hex);
+        return Number(ethers.formatUnits(bn, 6));
       }
       return 0;
     } catch (err) {
