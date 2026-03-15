@@ -23,18 +23,15 @@ if [ ! -f .env ]; then
   if [ ! -f .env ]; then
     echo "PRIVATE_KEY=0xREMPLACE_PAR_TA_CLE" > .env
     echo "ORDER_SIZE_USD=10" >> .env
-    echo "USE_MARKET_ORDER=false" >> .env
-    echo "POLL_INTERVAL_SEC=5" >> .env
+    echo "USE_MARKET_ORDER=true" >> .env
+    echo "POLL_INTERVAL_SEC=3" >> .env
   fi
   echo "⚠️  Ouvre le fichier .env et mets ta clé privée : nano .env"
 else
   echo "Le fichier .env existe déjà."
-  if grep -q '^USE_MARKET_ORDER=' .env 2>/dev/null; then
-    sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=false/' .env
-    echo "USE_MARKET_ORDER mis à false (ordres limite, règle du bot)."
-  else
-    echo "USE_MARKET_ORDER=false" >> .env
-  fi
+  grep -q '^USE_MARKET_ORDER=' .env 2>/dev/null && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' .env || echo "USE_MARKET_ORDER=true" >> .env
+  grep -q '^POLL_INTERVAL_SEC=' .env 2>/dev/null && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=3/' .env || echo "POLL_INTERVAL_SEC=3" >> .env
+  echo "USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=3 appliqués (latence min)."
 fi
 
 echo ""

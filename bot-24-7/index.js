@@ -55,9 +55,9 @@ const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
 const useBalanceAsSize = process.env.USE_BALANCE_AS_SIZE !== 'false';
 const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
-/** Ordre limite (prix 96,8–97 %) par défaut, comme dans les règles. Mettre USE_MARKET_ORDER=true pour ordre au marché. */
-const useMarketOrder = process.env.USE_MARKET_ORDER === 'true';
-const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 5;
+/** Ordre au marché par défaut (exécution immédiate, latence min). USE_MARKET_ORDER=false pour ordre limite. */
+const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
+const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const walletConfigured = !!privateKey;
@@ -324,7 +324,7 @@ async function run() {
     } else {
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 350));
   }
 }
 
