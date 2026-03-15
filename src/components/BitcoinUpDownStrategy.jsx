@@ -19,6 +19,21 @@ function formatMoney(value) {
   }).format(value);
 }
 
+const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
+
+/** Slug Polymarket du créneau Bitcoin Up or Down - Hourly pour l'heure actuelle (ET). */
+function getCurrentBitcoinUpDownEventSlug() {
+  const tz = 'America/New_York';
+  const d = new Date();
+  const month = d.toLocaleString('en-US', { timeZone: tz, month: 'long' }).toLowerCase();
+  const day = parseInt(d.toLocaleString('en-US', { timeZone: tz, day: 'numeric' }), 10);
+  const year = parseInt(d.toLocaleString('en-US', { timeZone: tz, year: 'numeric' }), 10);
+  let hour = parseInt(d.toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false }), 10);
+  const ampm = hour >= 12 ? 'pm' : 'am';
+  hour = hour % 12 || 12;
+  return `${BITCOIN_UP_DOWN_SLUG}-${month}-${day}-${year}-${hour}${ampm}-et`;
+}
+
 /** Point vert (Up) ou rouge (Down) comme sur Polymarket. */
 function UpDownDot({ side, title = true }) {
   if (side !== 'Up' && side !== 'Down') return null;
@@ -112,7 +127,7 @@ export function BitcoinUpDownStrategy() {
         const result = await placeOrderForSignal(signal);
         setPlaceResult({ key, ...result });
         setPlacingFor(null);
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 350));
       }
       autoPlaceInProgress.current = false;
     })();
@@ -129,12 +144,12 @@ export function BitcoinUpDownStrategy() {
                 Signal 96,8–97 % sur les créneaux horaires Bitcoin Up or Down (Polymarket). Un pari par créneau, ordre limite, réinvestissement du solde — objectif environ 3 % par heure.
               </p>
               <a
-                href="https://polymarket.com/search?q=bitcoin+up+or+down"
+                href={`https://polymarket.com/event/${getCurrentBitcoinUpDownEventSlug()}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
               >
-                Voir les créneaux horaires sur Polymarket
+                Voir le créneau horaire actuel sur Polymarket
                 <span className="text-muted-foreground">→</span>
               </a>
             </div>
@@ -205,122 +220,6 @@ export function BitcoinUpDownStrategy() {
                 </>
               )}
             </div>
-          </div>
-
-          <div className="rounded-xl border border-primary/20 bg-gradient-to-br from-primary/5 to-primary/10 p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-primary" aria-hidden />
-              Signaux 96,8–97 %
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Uniquement sur les marchés <strong>Bitcoin Up or Down - Hourly</strong>. On achète le côté à 96,8–97 % (le favori) pour viser au moins ~4 % de gain (ex. acheter à 95¢, toucher 1 $). Active « Le bot place l’ordre à ma place » (wallet connecté sur Polygon) pour que le bot envoie l’ordre automatiquement. Rafraîchissement ~10 s.
-            </p>
-            <div className="flex flex-wrap items-center gap-4">
-              <label className={`flex items-center gap-2 text-sm ${address && isPolygon ? 'cursor-pointer' : 'cursor-not-allowed opacity-70'}`}>
-                <input
-                  type="checkbox"
-                  checked={autoPlaceEnabled}
-                  onChange={(e) => setAutoPlaceEnabled(e.target.checked)}
-                  disabled={!address || !isPolygon}
-                  className="rounded border-input"
-                />
-                <span>Le bot place l&apos;ordre à ma place</span>
-                {(!address || !isPolygon) && (
-                  <span className="text-xs text-muted-foreground">(connecte ton wallet sur Polygon)</span>
-                )}
-              </label>
-              {address && isPolygon && (
-                <>
-                  <div className="flex items-center gap-2">
-                    <Label className="text-xs">Type d&apos;ordre</Label>
-                    <select
-                      value={useMarketOrder ? 'market' : 'limit'}
-                      onChange={(e) => setUseMarketOrder(e.target.value === 'market')}
-                      className={`${inputClass} w-40`}
-                    >
-                      <option value="market">Au marché (immédiat)</option>
-                      <option value="limit">Limite (96,8–97 %)</option>
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="order-size-usd" className="text-xs">Montant (USDC)</Label>
-                    <input
-                      id="order-size-usd"
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={orderSizeUsd}
-                      onChange={(e) => setOrderSizeUsd(e.target.value)}
-                      className={`${inputClass} w-24`}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-            {placeResult && (
-              <p className={`text-sm ${placeResult.error ? 'text-red-500 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                {placeResult.error ?? `Ordre placé. ID: ${placeResult.orderID}`}
-              </p>
-            )}
-            {signalsError && (
-              <p className="text-sm text-red-500 dark:text-red-400">{signalsError}</p>
-            )}
-            {signalsLoading ? (
-              <p className="text-sm text-muted-foreground">Chargement des marchés…</p>
-            ) : signals.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Aucun marché Bitcoin Up or Down - Hourly avec un prix entre 96,8 % et 97 % pour l’instant.</p>
-            ) : (
-              <ul className="space-y-2.5">
-                {signals.map((s, i) => {
-                const key = s.market?.conditionId ?? s.eventSlug ?? i;
-                const canPlace = address && isPolygon && s.tokenIdToBuy && placingFor !== key && !isInLastMinute(s);
-                return (
-                  <li key={key} className="flex flex-wrap items-center gap-3 rounded-lg border border-border/40 bg-card/50 px-4 py-3 hover:bg-card/70 transition-colors">
-                    <span className="text-muted-foreground line-clamp-1 flex-1 min-w-0">{s.question}</span>
-                    <span className="shrink-0 font-medium text-foreground inline-flex items-center gap-2">
-                      <UpDownDot side={s.takeSide} />
-                      <span className="text-xs text-muted-foreground">Prendre</span>
-                    </span>
-                    <span className="shrink-0 text-muted-foreground inline-flex items-center gap-2 text-xs">
-                      <span className="inline-flex items-center gap-1"><UpDownDot side="Up" title={false} /> {(s.priceUp * 100).toFixed(1)} %</span>
-                      <span className="text-border">/</span>
-                      <span className="inline-flex items-center gap-1"><UpDownDot side="Down" title={false} /> {(s.priceDown * 100).toFixed(1)} %</span>
-                    </span>
-                    {canPlace && (
-                      <button
-                        type="button"
-                        onClick={() => handlePlaceOrder(s)}
-                        className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all"
-                      >
-                        Placer ordre
-                      </button>
-                    )}
-                    {placingFor === key && <span className="text-xs text-muted-foreground animate-pulse">Envoi…</span>}
-                    {!s.tokenIdToBuy && <span className="text-xs text-amber-600">(token non dispo)</span>}
-                    {address && isPolygon && s.tokenIdToBuy && placingFor !== key && isInLastMinute(s) && (
-                      <span className="text-xs text-muted-foreground">Fin dans &lt; 1 min</span>
-                    )}
-                    <a
-                      href={s.marketUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 text-xs font-medium text-primary hover:underline"
-                    >
-                      Ouvrir →
-                    </a>
-                  </li>
-                );
-              })}
-              </ul>
-            )}
-            <button
-              type="button"
-              onClick={refreshSignals}
-              disabled={signalsLoading}
-              className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
-            >
-              Rafraîchir
-            </button>
           </div>
 
           <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
@@ -426,15 +325,20 @@ export function BitcoinUpDownStrategy() {
           </div>
 
           {resolvedHours.length > 0 && (() => {
+            const last24h = resolvedHours.filter(
+              (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
+            );
+            const total24 = last24h.length;
+            const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
+            const pctFilled24 = total24 > 0 ? ((withTrade24 / total24) * 100).toFixed(1) : '0';
             const withEntry = resolvedHours.filter((r) => r.botEntryTimestamp != null && r.endDate);
-            if (withEntry.length === 0) return null;
             const sessionDurationSec = 3600;
             const minutesList = withEntry.map((r) => {
               const sessionEndSec = new Date(r.endDate).getTime() / 1000;
               const sessionStartSec = sessionEndSec - sessionDurationSec;
               return (r.botEntryTimestamp - sessionStartSec) / 60;
             });
-            const avgMinutes = minutesList.reduce((a, b) => a + b, 0) / minutesList.length;
+            const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
             return (
               <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-2">
                 <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
@@ -442,8 +346,13 @@ export function BitcoinUpDownStrategy() {
                   Moyenne d&apos;entrée des trades
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Sur les <strong className="text-foreground">{withEntry.length}</strong> sessions affichées avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau horaire.
+                  Sur les <strong className="text-foreground">24 dernières heures</strong> : <strong className="text-primary">{pctFilled24} %</strong> des créneaux ont une position prise (<strong>{withTrade24}</strong> / {total24} créneaux). Le reste en données indisponibles.
                 </p>
+                {withEntry.length > 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Sur les <strong className="text-foreground">{withEntry.length}</strong> sessions affichées avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau horaire.
+                  </p>
+                )}
               </div>
             );
           })()}

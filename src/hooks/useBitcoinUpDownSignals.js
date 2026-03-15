@@ -106,8 +106,8 @@ export function useBitcoinUpDownSignals() {
     fetchSignals();
   }, [fetchSignals]);
 
-  // Polling toutes les 10 s pour quasi temps réel (éviter < 5 s pour limiter la charge API)
-  const POLL_INTERVAL_MS = 10 * 1000;
+  // Polling toutes les 5 s pour réduire la latence de détection du signal (compromis charge API)
+  const POLL_INTERVAL_MS = 5 * 1000;
   useEffect(() => {
     const interval = setInterval(fetchSignals, POLL_INTERVAL_MS);
     return () => clearInterval(interval);

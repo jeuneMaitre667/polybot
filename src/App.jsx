@@ -1,6 +1,6 @@
 import { CompoundInterestCalculator } from './components/CompoundInterestCalculator';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
-import { BotStatus } from './components/BotStatus';
+import { BotStatusBadge } from './components/BotStatus';
 import { TradeHistory } from './components/TradeHistory';
 
 export default function App() {
@@ -12,17 +12,17 @@ export default function App() {
             <span className="text-emerald-400">Polymarket</span>
             <span className="text-slate-300"> — Bot</span>
           </h1>
-          <nav className="flex gap-2">
+          <nav className="flex items-center gap-3">
             <span className="rounded-lg bg-emerald-500/20 px-3 py-2 text-sm font-medium text-emerald-400">
               Bot
             </span>
+            <BotStatusBadge />
           </nav>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <div className="space-y-8">
-          <BotStatus />
           <BitcoinUpDownStrategy />
           <TradeHistory />
           <CompoundInterestCalculator />
