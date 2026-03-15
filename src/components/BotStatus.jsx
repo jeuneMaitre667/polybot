@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '@/hooks/useBotStatus.js';
@@ -18,11 +18,21 @@ export function BotStatusBadge() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading, error, refresh } = useBotStatus(statusUrl);
   const [now, setNow] = useState(() => Date.now());
+  const wasOnlineRef = useRef(false);
+
   useEffect(() => {
     if (data?.status !== 'online') return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [data?.status]);
+
+  useEffect(() => {
+    const isOnline = data?.status === 'online';
+    if (wasOnlineRef.current && !isOnline && !loading && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      new Notification('Bot Polymarket hors ligne', { body: error || 'Le bot ne répond plus. Vérifier le serveur.' });
+    }
+    wasOnlineRef.current = !!isOnline;
+  }, [data?.status, loading, error]);
 
   if (!statusUrl) return null;
 
@@ -89,37 +99,94 @@ export function BotStatusBadge() {
   );
 }
 
-/** Carte : courbe du solde dans le temps (balanceHistory) + PnL si assez de points. */
+const PERIODS = [
+  { label: '24 h', ms: 24 * 60 * 60 * 1000 },
+  { label: '3 j', ms: 3 * 24 * 60 * 60 * 1000 },
+  { label: '7 j', ms: 7 * 24 * 60 * 60 * 1000 },
+];
+
+/** Carte : courbe du solde dans le temps (balanceHistory) + PnL + période + export CSV. */
 export function BotBalanceChart() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading } = useBotStatus(statusUrl);
+  const [periodIndex, setPeriodIndex] = useState(2); // 7j par défaut
+  const [now, setChartNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setChartNow(Date.now()), 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   if (!statusUrl) return null;
 
   const history = data?.balanceHistory ?? [];
-  const chartData = history.map((p) => ({
+  const fullChartData = history.map((p) => ({
     at: p.at,
+    atMs: p.at ? new Date(p.at).getTime() : 0,
     time: p.at ? new Date(p.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '',
     date: p.at ? new Date(p.at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '',
     balance: p.balance != null ? Number(p.balance) : 0,
   }));
+
+  const periodMs = PERIODS[periodIndex]?.ms ?? PERIODS[2].ms;
+  const cutoff = now - periodMs;
+  const chartData = fullChartData.filter((d) => d.atMs >= cutoff);
+
   const firstBalance = chartData.length > 0 ? chartData[0].balance : null;
   const lastBalance = data?.balanceUsd != null ? Number(data.balanceUsd) : (chartData.length > 0 ? chartData[chartData.length - 1].balance : null);
   const pnl = firstBalance != null && lastBalance != null && firstBalance > 0 ? lastBalance - firstBalance : null;
 
-  if (loading && chartData.length === 0) return null;
+  const exportCsv = () => {
+    if (fullChartData.length === 0) return;
+    const headers = 'date;heure;solde_usd\n';
+    const rows = fullChartData.map((d) => `${d.date};${d.time};${d.balance.toFixed(2)}`).join('\n');
+    const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `solde-bot-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (loading && fullChartData.length === 0) return null;
 
   return (
     <Card className="border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
       <CardHeader className="pb-2">
-        <CardTitle className="text-lg">Solde bot (évolution)</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Derniers points enregistrés par le bot. {pnl != null && <span>PnL sur la période : <strong className={pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $</strong></span>}
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-lg">Solde bot (évolution)</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Derniers points enregistrés par le bot. {pnl != null && <span>PnL sur la période : <strong className={pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $</strong></span>}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Période :</span>
+            {PERIODS.map((p, i) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setPeriodIndex(i)}
+                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${periodIndex === i ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+              >
+                {p.label}
+              </button>
+            ))}
+            {fullChartData.length > 0 && (
+              <button
+                type="button"
+                onClick={exportCsv}
+                className="rounded px-2 py-1 text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 transition-colors"
+              >
+                Export CSV
+              </button>
+            )}
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         {chartData.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Aucune donnée d’historique pour l’instant.</p>
+          <p className="text-sm text-muted-foreground">Aucune donnée sur cette période.</p>
         ) : (
           <div className="h-[220px] w-full">
             <ResponsiveContainer width="100%" height="100%">
