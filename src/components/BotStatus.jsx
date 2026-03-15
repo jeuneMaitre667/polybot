@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 const DEFAULT_STATUS_URL = import.meta.env.VITE_BOT_STATUS_URL || '';
 
@@ -65,6 +67,8 @@ export function BotStatusBadge() {
   const pollSec = data?.pollIntervalSec ?? 3;
   const balanceUsd = data?.balanceUsd;
   const lastOrder = data?.lastOrder;
+  const ordersLast24h = data?.ordersLast24h;
+  const winRate = data?.winRate;
 
   return (
     <div className="flex flex-col items-end gap-0.5">
@@ -95,10 +99,16 @@ export function BotStatusBadge() {
           Rafraîchir
         </button>
       </div>
-      {isOnline && !loading && (balanceUsd != null || lastOrder) && (
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+      {isOnline && !loading && (balanceUsd != null || lastOrder || ordersLast24h != null) && (
+        <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
           {balanceUsd != null && (
             <span>Solde : <span className="font-medium text-emerald-400/90">{Number(balanceUsd).toFixed(2)} $</span></span>
+          )}
+          {ordersLast24h != null && (
+            <span>24h : <span className="font-medium text-slate-400">{ordersLast24h} ordre{ordersLast24h !== 1 ? 's' : ''}</span></span>
+          )}
+          {winRate != null && (
+            <span>Win rate : <span className="font-medium text-slate-400">{(winRate * 100).toFixed(1)} %</span></span>
           )}
           {lastOrder && (
             <span title={lastOrder.at ? new Date(lastOrder.at).toLocaleString('fr-FR') : ''}>
@@ -110,5 +120,54 @@ export function BotStatusBadge() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Carte : courbe du solde dans le temps (balanceHistory) + PnL si assez de points. */
+export function BotBalanceChart() {
+  const statusUrl = DEFAULT_STATUS_URL;
+  const { data, loading } = useBotStatus(statusUrl);
+
+  if (!statusUrl) return null;
+
+  const history = data?.balanceHistory ?? [];
+  const chartData = history.map((p) => ({
+    at: p.at,
+    time: p.at ? new Date(p.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '',
+    date: p.at ? new Date(p.at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '',
+    balance: p.balance != null ? Number(p.balance) : 0,
+  }));
+  const firstBalance = chartData.length > 0 ? chartData[0].balance : null;
+  const lastBalance = data?.balanceUsd != null ? Number(data.balanceUsd) : (chartData.length > 0 ? chartData[chartData.length - 1].balance : null);
+  const pnl = firstBalance != null && lastBalance != null && firstBalance > 0 ? lastBalance - firstBalance : null;
+
+  if (loading && chartData.length === 0) return null;
+
+  return (
+    <Card className="border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg">Solde bot (évolution)</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Derniers points enregistrés par le bot. {pnl != null && <span>PnL sur la période : <strong className={pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $</strong></span>}
+        </p>
+      </CardHeader>
+      <CardContent>
+        {chartData.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Aucune donnée d’historique pour l’instant.</p>
+        ) : (
+          <div className="h-[220px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v, i) => chartData[i]?.time ?? v} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toFixed(0)} $`} />
+                <Tooltip content={({ payload }) => (payload?.[0] ? <span className="text-sm">{payload[0].value?.toFixed(2)} $</span> : null)} />
+                <Line type="monotone" dataKey="balance" stroke="rgb(52 211 153)" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

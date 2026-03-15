@@ -24,6 +24,17 @@ import axios from 'axios';
 const BOT_DIR = path.resolve(__dirname);
 const LAST_ORDER_FILE = path.join(BOT_DIR, 'last-order.json');
 const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
+const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
+const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
+const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
+const BALANCE_HISTORY_MAX = 500;
+
+/** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
+function logJson(level, message, meta = {}) {
+  try {
+    fs.appendFileSync(BOT_JSON_LOG_FILE, JSON.stringify({ level, message, ts: new Date().toISOString(), ...meta }) + '\n', 'utf8');
+  } catch (_) {}
+}
 
 function writeLastOrder(data) {
   try {
@@ -33,7 +44,29 @@ function writeLastOrder(data) {
 
 function writeBalance(balanceUsd) {
   try {
-    fs.writeFileSync(BALANCE_FILE, JSON.stringify({ balance: balanceUsd, at: new Date().toISOString() }), 'utf8');
+    const at = new Date().toISOString();
+    fs.writeFileSync(BALANCE_FILE, JSON.stringify({ balance: balanceUsd, at }), 'utf8');
+    appendBalanceHistory(balanceUsd != null ? balanceUsd : 0, at);
+  } catch (_) {}
+}
+
+function appendBalanceHistory(balanceUsd, at) {
+  try {
+    let arr = [];
+    try {
+      const raw = fs.readFileSync(BALANCE_HISTORY_FILE, 'utf8');
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch (_) {}
+    arr.push({ balance: balanceUsd, at });
+    if (arr.length > BALANCE_HISTORY_MAX) arr = arr.slice(-BALANCE_HISTORY_MAX);
+    fs.writeFileSync(BALANCE_HISTORY_FILE, JSON.stringify(arr), 'utf8');
+  } catch (_) {}
+}
+
+function appendOrderLog(obj) {
+  try {
+    fs.appendFileSync(ORDERS_LOG_FILE, JSON.stringify(obj) + '\n', 'utf8');
   } catch (_) {}
 }
 
@@ -326,9 +359,13 @@ async function run() {
     const result = await placeOrder(s, amountUsd, clobClient);
     const time = new Date().toISOString();
     if (result.ok) {
-      writeLastOrder({ at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID });
+      const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
+      writeLastOrder(orderData);
+      appendOrderLog(orderData);
+      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID });
       console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
     } else {
+      logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
     await new Promise((r) => setTimeout(r, 350));
@@ -358,6 +395,7 @@ async function main() {
     try {
       await run();
     } catch (err) {
+      logJson('error', 'Erreur boucle', { error: err.message });
       console.error(new Date().toISOString(), 'Erreur boucle:', err.message);
     }
     await new Promise((r) => setTimeout(r, pollMs));

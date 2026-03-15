@@ -71,6 +71,45 @@ function getBalanceFromFile() {
   return o && typeof o.balance === 'number' ? o.balance : null;
 }
 
+/** Lit balance-history.json (tableau { balance, at }[]) et retourne les N derniers points (7 jours max). */
+function getBalanceHistory(maxPoints = 500) {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'balance-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return arr.filter((p) => p && p.at && new Date(p.at).getTime() >= cutoff).slice(-maxPoints);
+  } catch {
+    return [];
+  }
+}
+
+/** Compte les ordres dans orders.log sur les 24 dernières heures. Win rate = null (non calculé côté serveur pour l’instant). */
+function getStats24h() {
+  const ordersPath = path.join(BOT_DIR, 'orders.log');
+  let ordersLast24h = 0;
+  let won = 0;
+  let totalWithResult = 0;
+  try {
+    const raw = fs.readFileSync(ordersPath, 'utf8');
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const lines = raw.trim().split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const o = JSON.parse(line);
+        const at = o.at ? new Date(o.at).getTime() : 0;
+        if (at >= cutoff) ordersLast24h++;
+        if (typeof o.won === 'boolean') {
+          totalWithResult++;
+          if (o.won) won++;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  const winRate = totalWithResult > 0 ? Math.round((won / totalWithResult) * 1000) / 1000 : null;
+  return { ordersLast24h, winRate };
+}
+
 /** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
 function getBotConfig() {
   const envPath = path.join(BOT_DIR, '.env');
@@ -108,6 +147,7 @@ const server = http.createServer((req, res) => {
 
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   const token = url.searchParams.get('token');
+  const debugRequested = url.searchParams.get('debug') === '1';
   if (SECRET && token !== SECRET) {
     json(res, { error: 'Unauthorized' }, 401);
     return;
@@ -121,20 +161,28 @@ const server = http.createServer((req, res) => {
     const pm2 = getPm2List();
     const lastOrder = getLastOrder();
     const balanceUsd = getBalanceFromFile();
+    const balanceHistory = getBalanceHistory();
     const config = getBotConfig();
-    const balancePath = path.join(BOT_DIR, 'balance.json');
-    const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
-    return json(res, {
+    const stats = getStats24h();
+    const payload = {
       status: pm2.status,
       uptime: pm2.uptime,
       pid: pm2.pid,
       balanceUsd,
       lastOrder,
+      balanceHistory,
       useMarketOrder: config.useMarketOrder,
       pollIntervalSec: config.pollIntervalSec,
-      _debug: { balanceFileExists: fs.existsSync(balancePath), lastOrderFileExists: fs.existsSync(lastOrderPath), botDir: BOT_DIR },
+      ordersLast24h: stats.ordersLast24h,
+      winRate: stats.winRate,
       at: new Date().toISOString(),
-    });
+    };
+    if (debugRequested) {
+      const balancePath = path.join(BOT_DIR, 'balance.json');
+      const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
+      payload._debug = { balanceFileExists: fs.existsSync(balancePath), lastOrderFileExists: fs.existsSync(lastOrderPath), botDir: BOT_DIR };
+    }
+    return json(res, payload);
   }
 
   json(res, { error: 'Not found' }, 404);
