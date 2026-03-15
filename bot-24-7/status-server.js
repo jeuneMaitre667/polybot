@@ -68,6 +68,29 @@ function getBalanceFromFile() {
   return o && typeof o.balance === 'number' ? o.balance : null;
 }
 
+/** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
+function getBotConfig() {
+  const envPath = path.join(BOT_DIR, '.env');
+  try {
+    const raw = fs.readFileSync(envPath, 'utf8');
+    let useMarketOrder = true;
+    let pollIntervalSec = 3;
+    for (const line of raw.split('\n')) {
+      const t = line.replace(/#.*/, '').trim();
+      if (t.startsWith('USE_MARKET_ORDER=')) {
+        useMarketOrder = t.slice('USE_MARKET_ORDER='.length).trim().toLowerCase() !== 'false';
+      }
+      if (t.startsWith('POLL_INTERVAL_SEC=')) {
+        const n = parseInt(t.slice('POLL_INTERVAL_SEC='.length).trim(), 10);
+        if (Number.isFinite(n)) pollIntervalSec = n;
+      }
+    }
+    return { useMarketOrder, pollIntervalSec };
+  } catch {
+    return { useMarketOrder: true, pollIntervalSec: 3 };
+  }
+}
+
 const server = http.createServer((req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') {
@@ -95,12 +118,15 @@ const server = http.createServer((req, res) => {
     const pm2 = getPm2List();
     const lastOrder = getLastOrder();
     const balanceUsd = getBalanceFromFile();
+    const config = getBotConfig();
     return json(res, {
       status: pm2.status,
       uptime: pm2.uptime,
       pid: pm2.pid,
       balanceUsd,
       lastOrder,
+      useMarketOrder: config.useMarketOrder,
+      pollIntervalSec: config.pollIntervalSec,
       at: new Date().toISOString(),
     });
   }

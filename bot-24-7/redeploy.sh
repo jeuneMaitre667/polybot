@@ -53,6 +53,12 @@ if [ -f "$BOT_DIR/.env.example" ] && [ ! -f "$BOT_DIR/.env" ]; then
   cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
   echo "   .env créé depuis .env.example — pense à configurer PRIVATE_KEY."
 fi
+# Appliquer la config recommandée (ordre au marché, poll 3s) sans écraser PRIVATE_KEY
+if [ -f "$BOT_DIR/.env" ]; then
+  grep -q '^USE_MARKET_ORDER=' "$BOT_DIR/.env" && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' "$BOT_DIR/.env" || echo "USE_MARKET_ORDER=true" >> "$BOT_DIR/.env"
+  grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=3/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=3" >> "$BOT_DIR/.env"
+  echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=3"
+fi
 
 echo ""
 echo "=== Installation des dépendances ==="
@@ -61,6 +67,7 @@ echo "=== Installation des dépendances ==="
 echo ""
 echo "=== Redémarrage du bot (PM2) ==="
 (cd "$BOT_DIR" && pm2 restart polymarket-bot 2>/dev/null || pm2 start index.js --name polymarket-bot)
+(cd "$BOT_DIR" && pm2 restart bot-status-server 2>/dev/null || true)
 pm2 save 2>/dev/null || true
 
 echo ""

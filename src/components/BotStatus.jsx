@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
 const DEFAULT_STATUS_URL = import.meta.env.VITE_BOT_STATUS_URL || '';
 
-function useBotStatus(url, refreshIntervalMs = 15000) {
+export function useBotStatus(url, refreshIntervalMs = 15000) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -42,110 +41,74 @@ function useBotStatus(url, refreshIntervalMs = 15000) {
   return { data, loading, error, refresh: fetchStatus };
 }
 
-export function BotStatus() {
+function uptimeStrFrom(uptimeMs) {
+  if (uptimeMs == null) return null;
+  const s = Math.floor(uptimeMs / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h) return `${h}h ${m % 60}min`;
+  if (m) return `${m} min`;
+  return `${s} s`;
+}
+
+/** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir */
+export function BotStatusBadge() {
   const statusUrl = DEFAULT_STATUS_URL;
   const { data, loading, error, refresh } = useBotStatus(statusUrl);
 
-  if (!statusUrl) {
-    return (
-      <Card className="border border-amber-500/30 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xl font-semibold tracking-tight">Statut du bot</CardTitle>
-          <p className="text-sm text-muted-foreground mt-1">
-            Définis <code className="rounded bg-muted px-1">VITE_BOT_STATUS_URL</code> (ex. http://TON_IP:3001) dans un fichier <code className="rounded bg-muted px-1">.env</code> à la racine du projet pour afficher le statut.
-          </p>
-        </CardHeader>
-      </Card>
-    );
-  }
+  if (!statusUrl) return null;
 
   const isOnline = data?.status === 'online';
   const uptimeMs = data?.uptime ? Date.now() - data.uptime : null;
-  const uptimeStr = uptimeMs != null
-    ? (() => {
-        const s = Math.floor(uptimeMs / 1000);
-        const m = Math.floor(s / 60);
-        const h = Math.floor(m / 60);
-        if (h) return `${h}h ${m % 60}min`;
-        if (m) return `${m} min`;
-        return `${s} s`;
-      })()
-    : null;
+  const uptimeStr = uptimeStrFrom(uptimeMs);
+  const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
+  const pollSec = data?.pollIntervalSec ?? 3;
+  const balanceUsd = data?.balanceUsd;
+  const lastOrder = data?.lastOrder;
 
   return (
-    <Card className="border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <CardTitle className="text-xl font-semibold tracking-tight">Statut du bot</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              Lightsail — dernier refresh toutes les 15 s.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex h-3 w-3 rounded-full ${
-                loading ? 'animate-pulse bg-muted' : isOnline ? 'bg-emerald-500' : 'bg-red-500'
-              }`}
-              title={isOnline ? 'En ligne' : 'Hors ligne'}
-            />
-            <span className="text-sm font-medium text-muted-foreground">
-              {loading ? '…' : isOnline ? 'En ligne' : error || 'Hors ligne'}
+    <div className="flex flex-col items-end gap-0.5">
+      <div className="flex items-center gap-2">
+        <span
+          className={`inline-flex h-2.5 w-2.5 rounded-full shrink-0 ${
+            loading ? 'animate-pulse bg-slate-500' : isOnline ? 'bg-emerald-500' : 'bg-red-500'
+          }`}
+          title={isOnline ? 'En ligne' : 'Hors ligne'}
+        />
+        <span className="text-sm font-medium text-slate-300">
+          {loading ? '…' : isOnline ? 'En ligne' : error || 'Hors ligne'}
+        </span>
+        {uptimeStr && isOnline && (
+          <span className="text-xs text-slate-500">(uptime {uptimeStr})</span>
+        )}
+        {isOnline && !loading && (
+          <span className="text-xs text-slate-500" title="Ordre au marché, poll toutes les 3 s">
+            {orderLabel} · {pollSec}s
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={loading}
+          className="rounded-lg border border-slate-600 bg-slate-800/50 px-2.5 py-1 text-xs font-medium text-slate-400 hover:bg-slate-700/50 hover:text-slate-300 disabled:opacity-50 transition-colors"
+        >
+          Rafraîchir
+        </button>
+      </div>
+      {isOnline && !loading && (balanceUsd != null || lastOrder) && (
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          {balanceUsd != null && (
+            <span>Solde : <span className="font-medium text-emerald-400/90">{Number(balanceUsd).toFixed(2)} $</span></span>
+          )}
+          {lastOrder && (
+            <span title={lastOrder.at ? new Date(lastOrder.at).toLocaleString('fr-FR') : ''}>
+              Dernier : <span className="font-medium text-slate-400">{lastOrder.takeSide}</span>
+              {lastOrder.amountUsd != null && ` ${Number(lastOrder.amountUsd).toFixed(2)} $`}
+              {lastOrder.at && ` · ${new Date(lastOrder.at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
             </span>
-            {uptimeStr && isOnline && (
-              <span className="text-xs text-muted-foreground">(uptime {uptimeStr})</span>
-            )}
-            <button
-              type="button"
-              onClick={refresh}
-              disabled={loading}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/50 disabled:opacity-50"
-            >
-              Rafraîchir
-            </button>
-          </div>
+          )}
         </div>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-3">
-        {error && !data && (
-          <p className="text-sm text-amber-600 dark:text-amber-400">
-            Impossible de joindre le serveur de statut. Vérifie que le port 3001 est ouvert sur Lightsail et que <code className="rounded bg-muted px-1">bot-status-server</code> tourne (pm2 list).
-          </p>
-        )}
-        {(data?.balanceUsd != null || data?.lastOrder) && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-            {data?.balanceUsd != null && (
-              <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
-                <span className="text-muted-foreground block text-xs font-medium">Solde USDC (bot)</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">{Number(data.balanceUsd).toFixed(2)} $</span>
-              </div>
-            )}
-            {data?.lastOrder && (
-              <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
-                <span className="text-muted-foreground block text-xs font-medium">Dernier ordre</span>
-                <span className="font-medium">{data.lastOrder.takeSide}</span>
-                <span className="text-muted-foreground"> — {Number(data.lastOrder.amountUsd).toFixed(2)} $</span>
-                {data.lastOrder.at && (
-                  <span className="block text-xs text-muted-foreground mt-0.5">
-                    {new Date(data.lastOrder.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}
-                  </span>
-                )}
-              </div>
-            )}
-            <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
-              <span className="text-muted-foreground block text-xs font-medium">Prochain créneau</span>
-              <span className="font-medium">
-                {(() => {
-                  const now = new Date();
-                  const next = new Date(now);
-                  next.setHours(next.getHours() + 1, 0, 0, 0);
-                  return next.toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' (UTC)';
-                })()}
-              </span>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }

@@ -26,7 +26,7 @@ npm start
 | `POLYGON_RPC_URL` | RPC Polygon | `https://polygon-rpc.com` |
 | `ORDER_SIZE_USD` | Montant par ordre en USDC | 10 |
 | `USE_MARKET_ORDER` | `true` = marché, `false` = limite | true |
-| `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 10 |
+| `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 3 |
 
 ## Lancer en arrière-plan (PM2)
 
@@ -40,6 +40,14 @@ pm2 startup   # à exécuter une fois (suit les instructions)
 ```
 
 Commandes utiles : `pm2 logs polymarket-bot`, `pm2 restart polymarket-bot`, `pm2 stop polymarket-bot`.
+
+**Mise à jour et redémarrage (Lightsail)** : après un `git push` du repo, sur l’instance en SSH lance une seule commande pour tout mettre à jour (code, .env recommandé, redémarrage bot + status-server) :
+
+```bash
+~/bot-24-7/update-and-restart.sh
+```
+
+(ou `~/bot-24-7/redeploy.sh`). Prérequis : `GIT_REPO_URL` défini dans `~/bot-24-7/.env`.
 
 **Démarrage au boot** : exécuter une fois `~/bot-24-7/pm2-startup.sh` puis la commande `sudo env PATH=... pm2 startup systemd ...` affichée par PM2 pour que le bot (et le serveur de statut si utilisé) redémarre après un reboot.
 
@@ -83,7 +91,7 @@ La doc indique : **Primary Servers** = `eu-west-2`, **Closest Non-Georestricted 
 | **Wallet / auth** | `Invalid api key`, `order signer address has to be the address of the API KEY` | La clé privée doit être celle du wallet qui place l’ordre. L’API key CLOB est dérivée de cette clé ; ne pas mélanger plusieurs wallets. |
 | **Adresse restreinte** | `address banned` ou `address in closed only mode` | Compte Polymarket restreint (close-only ou banni). Utiliser un autre wallet ou contacter [Polymarket Support](https://polymarket.com/support). |
 | **Solde insuffisant** | Échec au placement (USDC ou MATIC) | Wallet Polygon : assez de **USDC** pour la taille d’ordre + un peu de **MATIC** pour le gas. Vérifier les soldes avant de lancer. |
-| **Rate limit (429)** | `Too Many Requests` | Le CLOB limite les requêtes (ex. [Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)). Le bot fait un retry avec backoff ; garder `POLL_INTERVAL_SEC` ≥ 10 et éviter de lancer plusieurs bots sur le même compte. |
+| **Rate limit (429)** | `Too Many Requests` | Le CLOB limite les requêtes (ex. [Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)). Le bot fait un retry avec backoff ; en cas de 429 fréquents, augmenter `POLL_INTERVAL_SEC` (ex. 5) et éviter plusieurs bots sur le même compte. |
 | **Trading désactivé** | `Trading is currently disabled` ou `cancel-only` | Dépannage côté Polymarket ; réessayer plus tard. |
 | **RPC Polygon** | Timeouts, pas de connexion | Changer `POLYGON_RPC_URL` (ex. un autre RPC public ou Alchemy/Infura). |
 | **Crash / redémarrage** | Le processus s’arrête | Lancer avec **PM2** (`pm2 start index.js --name polymarket-bot` + `pm2 startup`) pour redémarrage auto. |
