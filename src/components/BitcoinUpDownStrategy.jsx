@@ -177,7 +177,7 @@ export function BitcoinUpDownStrategy() {
               Connexion wallet
             </h3>
             <p className="text-xs text-muted-foreground">
-              Connecte ton wallet (MetaMask, etc.) sur <strong>Polygon</strong> pour que le bot puisse placer des ordres sur Polymarket. Les ordres sont signés par ton wallet, les fonds restent chez toi.
+              Connecte ton wallet <strong>Phantom</strong> (ou MetaMask, etc.) sur <strong>Polygon</strong> pour que le bot puisse placer des ordres sur Polymarket. Les ordres sont signés par ton wallet, les fonds restent chez toi.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {!address ? (

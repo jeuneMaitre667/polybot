@@ -34,6 +34,8 @@ Pour **redéployer depuis Lightsail** (sans repasser par le PC), voir `bot-24-7/
 - `src/` — code du dashboard (React, composants, hooks, contexte wallet).
 - `bot-24-7/` — bot Node (signaux Gamma, CLOB, solde USDC via API, ordres limite/marché).
 
+**Vue détaillée** : voir [STRUCTURE.md](STRUCTURE.md) pour la liste classée et décrite de tous les fichiers du projet.
+
 ## Licence
 
 Usage personnel / projet perso.

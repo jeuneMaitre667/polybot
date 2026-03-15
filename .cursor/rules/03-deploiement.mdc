@@ -1,0 +1,12 @@
+---
+description: Déploiement et scripts Lightsail / PowerShell
+globs: "**/*.ps1,**/*.sh,.github/**/*"
+alwaysApply: false
+---
+
+# Déploiement
+
+- **Lightsail** : bot dans `~/bot-24-7`, repo cloné dans `~/polymarket-dashboard`. Redéploiement = `bash ~/bot-24-7/redeploy.sh` (git pull dans le repo puis rsync vers bot-24-7, npm install, pm2 restart).
+- **PowerShell** : scripts à la racine (deploy-bot.ps1, setup-lightsail-git.ps1, etc.). Utiliser `-KeyPath` et `-Ip` quand la clé ou l’IP ne sont pas aux emplacements par défaut.
+- **SSH depuis le PC** : clé `.pem` dans le projet (gitignored). Ne pas committer la clé ; pour les Actions GitHub, utiliser les secrets (LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST).
+- **Port 3001** : doit être ouvert dans le pare-feu Lightsail pour que le dashboard appelle `/api/bot-status`.
