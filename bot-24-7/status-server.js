@@ -1,5 +1,6 @@
 /**
  * Petit serveur HTTP sur Lightsail : expose le statut PM2 et les derniers logs du bot.
+ * Redéploiement : déclenché par push sur main (workflow Redeploy bot on Lightsail).
  * À lancer avec PM2 : pm2 start status-server.js --name bot-status-server
  * Ouvrir le port 3001 dans le pare-feu Lightsail (Réseau de l'instance).
  *
