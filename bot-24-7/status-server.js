@@ -9,8 +9,11 @@ import http from 'http';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const BOT_DIR = process.env.BOT_DIR || path.join(process.env.HOME || '/home/ubuntu', 'bot-24-7');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Même dossier que le bot (où se trouvent balance.json et last-order.json). */
+const BOT_DIR = process.env.BOT_DIR || path.resolve(__dirname);
 
 const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
 const SECRET = process.env.BOT_STATUS_SECRET || '';
@@ -119,6 +122,8 @@ const server = http.createServer((req, res) => {
     const lastOrder = getLastOrder();
     const balanceUsd = getBalanceFromFile();
     const config = getBotConfig();
+    const balancePath = path.join(BOT_DIR, 'balance.json');
+    const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
     return json(res, {
       status: pm2.status,
       uptime: pm2.uptime,
@@ -127,6 +132,7 @@ const server = http.createServer((req, res) => {
       lastOrder,
       useMarketOrder: config.useMarketOrder,
       pollIntervalSec: config.pollIntervalSec,
+      _debug: { balanceFileExists: fs.existsSync(balancePath), lastOrderFileExists: fs.existsSync(lastOrderPath), botDir: BOT_DIR },
       at: new Date().toISOString(),
     });
   }
