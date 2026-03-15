@@ -13,11 +13,15 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { ethers } from 'ethers';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import axios from 'axios';
 
-const BOT_DIR = path.resolve(process.cwd());
+/** Dossier du bot (où se trouve index.js), pour que balance.json et last-order.json soient toujours dans ~/bot-24-7 même si PM2 a été lancé depuis un autre répertoire. */
+const BOT_DIR = path.resolve(__dirname);
 const LAST_ORDER_FILE = path.join(BOT_DIR, 'last-order.json');
 const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
 
