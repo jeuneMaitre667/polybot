@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { useWallet } from '../context/WalletContext';
+import { useWallet } from '../context/useWallet';
 import { useTradeHistory } from '../hooks/useTradeHistory';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -103,12 +103,12 @@ export function TradeHistory() {
       const tb = b.timestamp != null ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000) : 0;
       return ta - tb;
     });
-    let cum = 0;
-    return sorted.map((t) => {
-      cum += tradeValue(t);
-      const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : Date.now();
-      return { date: format(new Date(ts), 'dd/MM HH:mm', { locale: fr }), cumul: Math.round(cum * 100) / 100, ts };
-    });
+    return sorted.reduce((acc, t) => {
+      const prevCum = acc.length ? acc[acc.length - 1].cumul : 0;
+      const cum = prevCum + tradeValue(t);
+      const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : 0;
+      return [...acc, { date: format(new Date(ts), 'dd/MM HH:mm', { locale: fr }), cumul: Math.round(cum * 100) / 100, ts }];
+    }, []);
   }, [filtered]);
 
   const csvColumns = [

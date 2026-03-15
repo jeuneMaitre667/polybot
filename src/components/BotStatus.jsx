@@ -1,47 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-
-const DEFAULT_STATUS_URL = import.meta.env.VITE_BOT_STATUS_URL || '';
-
-export function useBotStatus(url, refreshIntervalMs = 15000) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const fetchStatus = useCallback(async () => {
-    if (!url || !url.startsWith('http')) {
-      setData(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    setError(null);
-    try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/api/bot-status`, { method: 'GET' });
-      if (!res.ok) throw new Error(res.status === 401 ? 'Token invalide' : `HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json);
-    } catch (e) {
-      setError(e?.message || 'Hors ligne ou indisponible');
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [url]);
-
-  useEffect(() => {
-    fetchStatus();
-    if (!url || !url.startsWith('http')) {
-      setLoading(false);
-      return;
-    }
-    const t = setInterval(fetchStatus, refreshIntervalMs);
-    return () => clearInterval(t);
-  }, [url, refreshIntervalMs, fetchStatus]);
-
-  return { data, loading, error, refresh: fetchStatus };
-}
+import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '@/hooks/useBotStatus.js';
 
 function uptimeStrFrom(uptimeMs) {
   if (uptimeMs == null) return null;
@@ -55,13 +15,19 @@ function uptimeStrFrom(uptimeMs) {
 
 /** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir */
 export function BotStatusBadge() {
-  const statusUrl = DEFAULT_STATUS_URL;
+  const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading, error, refresh } = useBotStatus(statusUrl);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (data?.status !== 'online') return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [data?.status]);
 
   if (!statusUrl) return null;
 
   const isOnline = data?.status === 'online';
-  const uptimeMs = data?.uptime ? Date.now() - data.uptime : null;
+  const uptimeMs = data?.uptime ? now - data.uptime : null;
   const uptimeStr = uptimeStrFrom(uptimeMs);
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
@@ -125,7 +91,7 @@ export function BotStatusBadge() {
 
 /** Carte : courbe du solde dans le temps (balanceHistory) + PnL si assez de points. */
 export function BotBalanceChart() {
-  const statusUrl = DEFAULT_STATUS_URL;
+  const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading } = useBotStatus(statusUrl);
 
   if (!statusUrl) return null;

@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { ethers } from 'ethers';
+import { WalletContext } from './walletContext.js';
 
 const POLYGON_CHAIN_ID = 137;
 const POLYGON_PARAMS = {
@@ -16,8 +17,6 @@ function getEthereumProvider() {
   if (window.phantom?.ethereum?.isPhantom) return window.phantom.ethereum;
   return window.ethereum;
 }
-
-const WalletContext = createContext(null);
 
 export function WalletProvider({ children }) {
   const [address, setAddress] = useState(null);
@@ -145,10 +144,4 @@ export function WalletProvider({ children }) {
       {children}
     </WalletContext.Provider>
   );
-}
-
-export function useWallet() {
-  const ctx = useContext(WalletContext);
-  if (!ctx) throw new Error('useWallet must be used within WalletProvider');
-  return ctx;
 }

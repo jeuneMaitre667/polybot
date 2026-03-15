@@ -111,7 +111,7 @@ export function useBitcoinUpDownSignals() {
   useEffect(() => {
     const interval = setInterval(fetchSignals, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchSignals]);
+  }, [fetchSignals, POLL_INTERVAL_MS]);
 
   return { signals, loading, error, refresh: fetchSignals };
 }

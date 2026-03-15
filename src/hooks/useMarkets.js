@@ -110,7 +110,7 @@ export function useMarkets() {
         setLoading(false);
         return;
       }
-    } catch (_e) {
+    } catch {
       // Ignorer, on tente le fallback
     }
 

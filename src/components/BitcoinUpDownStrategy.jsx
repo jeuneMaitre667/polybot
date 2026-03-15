@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
-import { useWallet } from '../context/WalletContext';
+import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
 
 const inputClass =
@@ -49,18 +49,18 @@ function UpDownDot({ side, title = true }) {
 
 export function BitcoinUpDownStrategy() {
   const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon } = useWallet();
-  const { signals, loading: signalsLoading, error: signalsError, refresh: refreshSignals } = useBitcoinUpDownSignals();
+  const { signals } = useBitcoinUpDownSignals();
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
-  const [orderSizeUsd, setOrderSizeUsd] = useState(10);
-  const [useMarketOrder, setUseMarketOrder] = useState(true);
-  const [autoPlaceEnabled, setAutoPlaceEnabled] = useState(true);
-  const [placedOrderKeys, setPlacedOrderKeys] = useState(() => new Set());
+  const [orderSizeUsd] = useState(10);
+  const [useMarketOrder] = useState(true);
+  const [autoPlaceEnabled] = useState(true);
+  const [, setPlacedOrderKeys] = useState(() => new Set());
   const placedOrderKeysRef = useRef(new Set());
-  const [placingFor, setPlacingFor] = useState(null);
-  const [placeResult, setPlaceResult] = useState(null);
+  const [, setPlacingFor] = useState(null);
+  const [, setPlaceResult] = useState(null);
   const autoPlaceInProgress = useRef(false);
   const [initialBalance, setInitialBalance] = useState(100);
 
@@ -95,7 +95,7 @@ export function BitcoinUpDownStrategy() {
     });
   };
 
-  const handlePlaceOrder = async (signal) => {
+  const _handlePlaceOrder = async (signal) => {
     const key = getSignalKey(signal);
     setPlacingFor(key);
     setPlaceResult(null);
@@ -131,6 +131,7 @@ export function BitcoinUpDownStrategy() {
       }
       autoPlaceInProgress.current = false;
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isInLastMinute/placeOrderForSignal stables
   }, [autoPlaceEnabled, signer, address, isPolygon, signals, orderSizeUsd, useMarketOrder]);
 
   return (
@@ -166,7 +167,7 @@ export function BitcoinUpDownStrategy() {
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Choisir Up ou Down selon ta lecture (tendance, support/résistance, ou valeur des cotes).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Miser une fraction du solde (ex. 80–100 % si tu veux « tout réinvestir »).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Après résolution : réinvestir tout le solde (capital + gains) sur le créneau suivant.</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 96,8–97 % : on achète le <strong>favori</strong> (le côté à 96,8–97 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
+              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 96,8–97 % : on achète le <strong>favori</strong> (le côté à 96,8–97 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Utiliser le simulateur par heure ci-dessous pour projeter où tu peux arriver sur 24 h, 1 semaine, etc.</li>
             </ul>
           </div>
@@ -228,7 +229,7 @@ export function BitcoinUpDownStrategy() {
               Résultats des heures passées
             </h3>
             <p className="text-xs text-muted-foreground">
-              Créneaux Bitcoin Up or Down déjà résolus. Simulation « si le bot avait été actif » via l’historique des prix CLOB (96,8–97 %).
+              Créneaux Bitcoin Up or Down déjà résolus. Simulation « si le bot avait été actif » via l’historique des prix CLOB (96,8–97 %).
             </p>
             {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
             {resolvedLoading ? (
