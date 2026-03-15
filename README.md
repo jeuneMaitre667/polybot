@@ -24,8 +24,8 @@ npm start
 
 ### Déploiement du bot sur Lightsail
 
-1. Depuis ton PC : `.\deploy-bot.ps1` (envoie le dossier `bot-24-7` sur l’instance).
-2. En SSH : configurer `PRIVATE_KEY` dans `~/bot-24-7/.env`, puis `pm2 restart polymarket-bot`.
+1. Depuis ton PC : `.\deploy-et-setup-git.ps1 (tout-en-un) ou .\deploy-bot.ps1` (envoie le dossier `bot-24-7` sur l’instance).
+Config Git + redeploy depuis GitHub : `.\setup-lightsail-git.ps1`. En SSH : `PRIVATE_KEY` dans `~/bot-24-7/.env` puis `pm2 restart polymarket-bot`.
 
 Pour **redéployer depuis Lightsail** (sans repasser par le PC), voir `bot-24-7/REDEPLOY-LIGHTSAIL.md`.
 

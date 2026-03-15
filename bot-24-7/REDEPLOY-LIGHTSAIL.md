@@ -1,6 +1,20 @@
 # Redéploiement du bot depuis Lightsail
 
-Pour mettre à jour le bot **directement sur l’instance** (sans repasser par ton PC) :
+## Option A : Mise à jour automatique (recommandé)
+
+Dès que tu modifies le code du bot et fais **git push** sur `main` (ou `master`), une GitHub Action se connecte à Lightsail et lance `~/bot-24-7/redeploy.sh`. **Aucune action manuelle** sur le serveur.
+
+**Une seule fois** : ajoute les secrets du repo GitHub (Settings → Secrets and variables → Actions) :
+- **LIGHTSAIL_SSH_KEY** : contenu complet de ton fichier `.pem` Lightsail
+- **LIGHTSAIL_HOST** : IP de l’instance (ex. `34.242.214.109`)
+
+Détail : voir `.github/workflows/README-REDEPLOY-AUTO.md` à la racine du projet.
+
+---
+
+## Option B : Redéploiement manuel depuis le serveur
+
+Pour mettre à jour le bot **à la main** en SSH sur l’instance :
 
 ## 1. Une seule fois : pousser le repo sur GitHub
 

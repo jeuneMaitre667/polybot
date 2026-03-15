@@ -1,0 +1,31 @@
+# Dès qu’on push du code (surtout bot-24-7), mise à jour automatique du bot sur Lightsail.
+# Prérequis : ajouter les secrets dans le repo GitHub (Settings → Secrets and variables → Actions) :
+#   - LIGHTSAIL_SSH_KEY : contenu du fichier .pem (clé privée Lightsail)
+#   - LIGHTSAIL_HOST    : IP de l’instance (ex. 34.242.214.109)
+
+name: Redeploy bot on Lightsail
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'bot-24-7/**'
+      - '.github/workflows/redeploy-bot-lightsail.yml'
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy bot via SSH
+        env:
+          SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$SSH_HOST" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY ou LIGHTSAIL_HOST manquant. Configure les secrets du repo."
+            exit 0
+          fi
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+          ssh -i key.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST "~/bot-24-7/redeploy.sh"
+          rm -f key.pem
