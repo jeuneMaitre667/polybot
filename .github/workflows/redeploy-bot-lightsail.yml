@@ -27,5 +27,5 @@ jobs:
           fi
           echo "$SSH_KEY" > key.pem
           chmod 600 key.pem
-          ssh -i key.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST "~/bot-24-7/redeploy.sh"
+          ssh -i key.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh"
           rm -f key.pem
