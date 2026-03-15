@@ -85,8 +85,6 @@ const privateKey = isPlaceholder ? '' : privateKeyRaw;
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
 const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
 const polygonRpcFallbacks = (process.env.POLYGON_RPC_FALLBACK || 'https://polygon-rpc.com,https://rpc.ankr.com/polygon').split(',').map((u) => u.trim()).filter(Boolean);
-/** Réseau Polygon explicite (chainId seul pour max compatibilité ethers). */
-const polygonNetwork = { chainId: CHAIN_ID };
 /** Montant minimum pour placer un ordre (USDC). En dessous, on skip. Défaut 1. */
 const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
@@ -100,7 +98,8 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
-let provider = new ethers.JsonRpcProvider(polygonRpc, polygonNetwork);
+// ethers v6 : 2e argument = chainId (number), pas un objet { chainId }
+let provider = new ethers.JsonRpcProvider(polygonRpc, CHAIN_ID);
 const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
