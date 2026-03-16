@@ -112,7 +112,17 @@ Pour recevoir une alerte (Discord ou Telegram) quand le bot s’arrête :
 
 ---
 
-## 7. Backtest PnL (local)
+## 7. Gains (claim / redeem) après un trade gagnant
+
+Sur Polymarket, **les gains ne sont pas crédités en USDC automatiquement** : une fois le marché résolu, les tokens gagnants doivent être **redeem** (échangés contre USDC via le contrat CTF). Tant que ce n’est pas fait, le solde USDC affiché n’inclut pas ces gains et le bot pourrait trader le créneau suivant avec un solde trop bas.
+
+**Comportement du bot** : à chaque cycle (avant de placer des ordres), le bot tente d’appeler `redeemPositions` sur le contrat CTF pour tous les `conditionId` pour lesquels il a déjà placé un ordre (lus depuis `orders.log` et `last-order.json`). Si les positions sont bien sur ton wallet (EOA), les gains sont alors crédités en USDC. Tu peux désactiver cette étape avec `REDEEM_ENABLED=false` dans `.env`.
+
+**Si le solde ne remonte pas après un gain** : Polymarket utilise parfois un **wallet proxy** (Safe) pour détenir les positions. Dans ce cas, le redeem depuis l’EOA ne fait rien (0 token à redeem). Il faut alors **claim depuis le site Polymarket** : connecte le même wallet sur [polymarket.com](https://polymarket.com), va sur le marché résolu et utilise l’option pour réclamer les gains. Une fois les tokens redeem, le solde USDC sera à jour et le bot pourra réinvestir au prochain créneau.
+
+---
+
+## 8. Backtest PnL (local)
 
 Pour estimer le PnL théorique à partir des fichiers générés par le bot (sans toucher au serveur) :
 
@@ -122,3 +132,5 @@ node backtest-pnl.js
 ```
 
 Option : `node backtest-pnl.js --dir /chemin/vers/bot-24-7` pour cibler un autre dossier.
+
+(Voir section 7 pour les gains / redeem.)

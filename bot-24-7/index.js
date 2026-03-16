@@ -6,6 +6,7 @@
  * 2. Boucle : récupérer les signaux Gamma (prix 96,8–97 %)
  * 3. Pour chaque signal : si pas dans la dernière minute avant fin → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
+ * 5. Au début de chaque cycle : tenter de redeem les tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains
  *
  * Usage : npm install && PRIVATE_KEY=0x... npm start
  * Config : .env (voir .env.example)
@@ -101,6 +102,8 @@ const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
 const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
+/** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
+const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
@@ -113,7 +116,12 @@ const wallet = walletConfigured
 const GEOBLOCK_URL = 'https://polymarket.com/api/geoblock';
 /** USDC sur Polygon (USDC.e bridged, 6 decimals). */
 const USDC_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+/** CTF (Conditional Tokens) sur Polygon — redeem des tokens gagnants en USDC. */
+const CTF_POLYGON = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 const ERC20_ABI = ['function balanceOf(address owner) view returns (uint256)'];
+const CTF_ABI = [
+  'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
+];
 const ORDER_RETRY_ATTEMPTS = 3;
 const ORDER_RETRY_BASE_MS = 1000;
 let consecutiveOrderErrors = 0;
@@ -190,6 +198,64 @@ async function getUsdcBalanceRpc() {
 }
 
 /** Pas de trade si l’événement se termine dans moins d’une minute. */
+/** Normalise un conditionId en bytes32 (0x + 64 hex). Retourne null si invalide. */
+function conditionIdToBytes32(cid) {
+  if (!cid || typeof cid !== 'string') return null;
+  const s = cid.trim().replace(/^0x/i, '');
+  if (s.length !== 64 || !/^[0-9a-fA-F]+$/.test(s)) return null;
+  return '0x' + s.toLowerCase();
+}
+
+/** Récupère les conditionIds uniques pour lesquels le bot a placé un ordre (orders.log + last-order.json). */
+function getTradedConditionIds() {
+  const ids = new Set();
+  try {
+    const raw = fs.readFileSync(ORDERS_LOG_FILE, 'utf8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const obj = JSON.parse(trimmed);
+        const cid = obj?.conditionId ?? obj?.condition_id;
+        if (cid) ids.add(String(cid));
+      } catch (_) {}
+    }
+  } catch (_) {}
+  try {
+    const raw = fs.readFileSync(LAST_ORDER_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    const cid = obj?.conditionId ?? obj?.condition_id;
+    if (cid) ids.add(String(cid));
+  } catch (_) {}
+  return [...ids];
+}
+
+/** Tente de redeem les positions (tokens gagnants → USDC) pour les conditionIds tradés. Marchés doivent être résolus. Si positions sur proxy Polymarket, ce redeem ne fera rien (claim depuis le site). */
+async function tryRedeemResolvedPositions() {
+  if (!walletConfigured || !wallet || !redeemEnabled) return;
+  const ctf = new ethers.Contract(CTF_POLYGON, CTF_ABI, wallet);
+  const parentCollectionId = ethers.ZeroHash;
+  const indexSets = [1, 2];
+  const tradedIds = getTradedConditionIds();
+  for (const cid of tradedIds) {
+    const conditionIdBytes32 = conditionIdToBytes32(cid);
+    if (!conditionIdBytes32) continue;
+    try {
+      const tx = await ctf.redeemPositions(USDC_POLYGON, parentCollectionId, conditionIdBytes32, indexSets);
+      const receipt = await tx.wait();
+      if (receipt?.status === 1) {
+        logJson('info', 'Redeem positions OK', { conditionId: cid.slice(0, 18) + '…', hash: receipt.hash });
+        console.log(`[${new Date().toISOString()}] Redeem OK — conditionId ${cid.slice(0, 14)}… — tx ${receipt.hash}`);
+      }
+    } catch (err) {
+      if (!/no positions to redeem|revert|insufficient/i.test(String(err.message))) {
+        logJson('warn', 'Redeem échoué (non bloquant)', { conditionId: cid.slice(0, 18) + '…', error: err.message });
+      }
+    }
+  }
+}
+
+/** Pas de trade si l'événement se termine dans moins d'une minute. */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
@@ -362,6 +428,9 @@ const placedKeys = new Set();
 async function run() {
   const signals = await fetchSignals();
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
+
+  // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
+  await tryRedeemResolvedPositions();
 
   // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
   let clobClient = null;

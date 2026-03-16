@@ -1,6 +1,6 @@
 # Bot Polymarket 24/7 — Bitcoin Up or Down
 
-Script Node.js pour faire tourner le bot en continu sur un VPS : surveillance des signaux 96,8–97 %, règle « pas de trade dans la dernière minute », placement d’ordres sur le CLOB Polymarket.
+Script Node.js pour faire tourner le bot en continu sur un VPS : surveillance des signaux 96,8–97 %, règle « pas de trade dans la dernière minute », placement d’ordres sur le CLOB Polymarket. **Gains** : après un trade gagnant, Polymarket ne crédite pas les USDC automatiquement ; le bot tente à chaque cycle de **redeem** les tokens gagnants (marchés résolus) pour que le solde inclue les gains au prochain trade. Si tes positions sont sur un proxy Polymarket, il faudra claim depuis le site (voir RUNBOOK section 7).
 
 ## Prérequis
 
@@ -27,6 +27,7 @@ npm start
 | `ORDER_SIZE_USD` | Montant par ordre en USDC | 10 |
 | `USE_MARKET_ORDER` | `true` = marché, `false` = limite | true |
 | `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 3 |
+| `REDEEM_ENABLED` | Tenter de redeem les tokens gagnants en USDC à chaque cycle (marchés résolus) | true |
 
 ## Lancer en arrière-plan (PM2)
 
