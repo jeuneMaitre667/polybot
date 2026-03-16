@@ -85,7 +85,9 @@ export function BitcoinUpDownStrategy() {
       const next = !v;
       try {
         localStorage.setItem(STORAGE_KEY_LIQUIDITY_SUGGESTION, String(next));
-      } catch (_) {}
+      } catch {
+        // localStorage indisponible (navigation privée, etc.)
+      }
       return next;
     });
   };
