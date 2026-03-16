@@ -46,23 +46,27 @@ export function BotStatusBadge() {
   const ordersLast24h = data?.ordersLast24h;
   const winRate = data?.winRate;
 
+  const hasStats = isOnline && !loading && (balanceUsd != null || lastOrder || ordersLast24h != null || winRate != null);
+
   return (
-    <div className="flex flex-col items-end gap-0.5">
-      <div className="flex items-center gap-2">
-        <span
-          className={`inline-flex h-2.5 w-2.5 rounded-full shrink-0 ${
-            loading ? 'animate-pulse bg-slate-500' : isOnline ? 'bg-emerald-500' : 'bg-red-500'
-          }`}
-          title={isOnline ? 'En ligne' : 'Hors ligne'}
-        />
-        <span className="text-sm font-medium text-slate-300">
-          {loading ? '…' : isOnline ? 'En ligne' : error || 'Hors ligne'}
-        </span>
-        {uptimeStr && isOnline && (
-          <span className="text-xs text-slate-500">(uptime {uptimeStr})</span>
-        )}
+    <div className="w-full max-w-sm rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner sm:ml-auto">
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-offset-2 ring-offset-slate-900 ${
+              loading ? 'animate-pulse bg-slate-500 ring-slate-600' : isOnline ? 'bg-emerald-500 ring-emerald-500/30' : 'bg-red-500 ring-red-500/30'
+            }`}
+            title={isOnline ? 'En ligne' : 'Hors ligne'}
+          />
+          <span className="text-sm font-medium text-slate-200">
+            {loading ? '…' : isOnline ? 'En ligne' : error || 'Hors ligne'}
+          </span>
+          {uptimeStr && isOnline && (
+            <span className="text-xs text-slate-500">({uptimeStr})</span>
+          )}
+        </div>
         {isOnline && !loading && (
-          <span className="text-xs text-slate-500" title="Ordre au marché, poll toutes les 3 s">
+          <span className="text-[11px] text-slate-500 font-medium tabular-nums" title="Ordre au marché, poll toutes les 3 s">
             {orderLabel} · {pollSec}s
           </span>
         )}
@@ -70,27 +74,33 @@ export function BotStatusBadge() {
           type="button"
           onClick={refresh}
           disabled={loading}
-          className="rounded-lg border border-slate-600 bg-slate-800/50 px-2.5 py-1 text-xs font-medium text-slate-400 hover:bg-slate-700/50 hover:text-slate-300 disabled:opacity-50 transition-colors"
+          className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors"
         >
           Rafraîchir
         </button>
       </div>
-      {isOnline && !loading && (balanceUsd != null || lastOrder || ordersLast24h != null) && (
-        <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+      {hasStats && (
+        <div className="mt-2.5 flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-slate-700/50 pt-2.5 text-xs">
           {balanceUsd != null && (
-            <span>Solde : <span className="font-medium text-emerald-400/90">{Number(balanceUsd).toFixed(2)} $</span></span>
+            <span className="text-slate-400">
+              Solde <span className="font-semibold tabular-nums text-emerald-400">{Number(balanceUsd).toFixed(2)} $</span>
+            </span>
           )}
           {ordersLast24h != null && (
-            <span>24h : <span className="font-medium text-slate-400">{ordersLast24h} ordre{ordersLast24h !== 1 ? 's' : ''}</span></span>
+            <span className="text-slate-400">
+              24h <span className="font-semibold tabular-nums text-slate-300">{ordersLast24h} ordre{ordersLast24h !== 1 ? 's' : ''}</span>
+            </span>
           )}
           {winRate != null && (
-            <span>Win rate : <span className="font-medium text-slate-400">{(winRate * 100).toFixed(1)} %</span></span>
+            <span className="text-slate-400">
+              Win <span className="font-semibold tabular-nums text-slate-300">{(winRate * 100).toFixed(1)} %</span>
+            </span>
           )}
           {lastOrder && (
-            <span title={lastOrder.at ? new Date(lastOrder.at).toLocaleString('fr-FR') : ''}>
-              Dernier : <span className="font-medium text-slate-400">{lastOrder.takeSide}</span>
-              {lastOrder.amountUsd != null && ` ${Number(lastOrder.amountUsd).toFixed(2)} $`}
-              {lastOrder.at && ` · ${new Date(lastOrder.at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
+            <span className="text-slate-500" title={lastOrder.at ? new Date(lastOrder.at).toLocaleString('fr-FR') : ''}>
+              Dernier <span className="text-slate-400">{lastOrder.takeSide}</span>
+              {lastOrder.amountUsd != null && <span className="tabular-nums"> {Number(lastOrder.amountUsd).toFixed(2)} $</span>}
+              {lastOrder.at && <span className="text-slate-500"> · {new Date(lastOrder.at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
             </span>
           )}
         </div>

@@ -7,21 +7,23 @@ import { BotOverview } from './components/BotOverview';
 export default function App() {
   return (
     <div className="min-h-screen text-slate-200">
-      <header className="border-b border-slate-800/60 bg-slate-950/60 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
-              <span className="text-emerald-400">Polymarket</span>
-              <span className="text-slate-300"> — Bot 24/7</span>
-            </h1>
-            <p className="mt-1 text-xs text-slate-400">
-              Stratégie Bitcoin Up or Down automatisée, reliée à ton wallet.
+      <header className="border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
+                <span className="text-emerald-400">Polymarket</span>
+                <span className="text-slate-400 font-medium">Bot 24/7</span>
+              </h1>
+              <span className="rounded-md bg-slate-800/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-400 border border-slate-700/60">
+                Temps réel
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Bitcoin Up or Down — automatisé, relié à ton wallet
             </p>
           </div>
-          <nav className="flex items-center gap-3">
-            <span className="rounded-full bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-300 border border-emerald-500/30 shadow-sm">
-              Dashboard temps réel
-            </span>
+          <nav className="shrink-0">
             <BotStatusBadge />
           </nav>
         </div>
