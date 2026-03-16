@@ -24,9 +24,11 @@ export function BotOverview() {
     firstBalance != null && lastBalance != null && firstBalance > 0 ? ((lastBalance - firstBalance) / firstBalance) * 100 : null;
 
   const isOnline = data?.status === 'online';
+  const liquidityStats = data?.liquidityStats ?? null;
+  const hasLiquidityStats = liquidityStats?.count > 0;
 
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Card className="border border-border/60 bg-card/90 shadow-card">
         <CardHeader className="pb-1 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
@@ -80,6 +82,29 @@ export function BotOverview() {
               </span>
             ) : (
               '—'
+            )}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border border-border/60 bg-card/90 shadow-card">
+        <CardHeader className="pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+            Mise max (moy. 3 j)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-1">
+          <p className="text-2xl font-semibold text-slate-50">
+            {hasLiquidityStats ? `~${Math.round(liquidityStats.avg)} $` : '—'}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {hasLiquidityStats ? (
+              <>
+                Min {Math.round(liquidityStats.min)} $ · Max {Math.round(liquidityStats.max)} $
+                <span className="block mt-0.5">{liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''} (bot)</span>
+              </>
+            ) : (
+              'Relevés liquidité 97 % collectés par le bot'
             )}
           </p>
         </CardContent>

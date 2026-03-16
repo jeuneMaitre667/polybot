@@ -4,6 +4,7 @@ import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
+import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
 
@@ -54,6 +55,8 @@ export function BitcoinUpDownStrategy() {
   const { signals } = useBitcoinUpDownSignals();
   const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
+  const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
+  const liquidityStats = botStatusData?.liquidityStats ?? null;
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
   const resolvedWindowHours = 72 + extraDays * 24;
@@ -281,18 +284,29 @@ export function BitcoinUpDownStrategy() {
               ) : liquidityError ? (
                 <span className="text-sm text-amber-600 dark:text-amber-400">{liquidityError}</span>
               ) : liquidityAtTargetUsd != null && liquidityAtTargetUsd > 0 ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">
-                    ~{liquidityAtTargetUsd.toFixed(0)} $
-                  </span>
-                  <span className="text-sm text-muted-foreground">(taille max conseillée pour ce créneau)</span>
-                  <button
-                    type="button"
-                    onClick={refreshLiquidity}
-                    className="rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50"
-                  >
-                    Rafraîchir
-                  </button>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">
+                      ~{liquidityAtTargetUsd.toFixed(0)} $
+                    </span>
+                    <span className="text-sm text-muted-foreground">(taille max conseillée pour ce créneau)</span>
+                    <button
+                      type="button"
+                      onClick={refreshLiquidity}
+                      className="rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+                    >
+                      Rafraîchir
+                    </button>
+                  </div>
+                  {liquidityStats?.count > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Moyenne sur les 3 derniers jours (relevés bot) : <strong className="text-foreground">~{Math.round(liquidityStats.avg)} $</strong>
+                      {liquidityStats.min != null && liquidityStats.max != null && (
+                        <span> (min {Math.round(liquidityStats.min)} $, max {Math.round(liquidityStats.max)} $)</span>
+                      )}
+                      <span> — {liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''}</span>
+                    </p>
+                  )}
                 </div>
               ) : currentSignalTokenId ? (
                 <span className="text-sm text-muted-foreground">Aucune liquidité à ≤97 % pour l’instant.</span>

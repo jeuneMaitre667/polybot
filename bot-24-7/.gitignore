@@ -6,3 +6,4 @@ balance.json
 balance-history.json
 orders.log
 bot.log
+liquidity-history.json

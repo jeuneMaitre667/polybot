@@ -111,6 +111,30 @@ function getStats24h() {
   return { ordersLast24h, winRate };
 }
 
+/** Lit liquidity-history.json (relevés du bot) et retourne { avg, min, max, count } sur les 3 derniers jours. */
+function getLiquidityStats() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'liquidity-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return { avg: null, min: null, max: null, count: 0 };
+    const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const values = arr
+      .filter((e) => e.at && new Date(e.at).getTime() >= cutoff)
+      .map((e) => Number(e.liquidityUsd))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (values.length === 0) return { avg: null, min: null, max: null, count: 0 };
+    const sum = values.reduce((a, b) => a + b, 0);
+    return {
+      avg: Math.round((sum / values.length) * 100) / 100,
+      min: Math.round(Math.min(...values) * 100) / 100,
+      max: Math.round(Math.max(...values) * 100) / 100,
+      count: values.length,
+    };
+  } catch {
+    return { avg: null, min: null, max: null, count: 0 };
+  }
+}
+
 /** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
 function getBotConfig() {
   const envPath = path.join(BOT_DIR, '.env');
@@ -165,6 +189,7 @@ const server = http.createServer((req, res) => {
     const balanceHistory = getBalanceHistory();
     const config = getBotConfig();
     const stats = getStats24h();
+    const liquidityStats = getLiquidityStats();
     const payload = {
       status: pm2.status,
       uptime: pm2.uptime,
@@ -176,6 +201,7 @@ const server = http.createServer((req, res) => {
       pollIntervalSec: config.pollIntervalSec,
       ordersLast24h: stats.ordersLast24h,
       winRate: stats.winRate,
+      liquidityStats,
       at: new Date().toISOString(),
     };
     if (debugRequested) {

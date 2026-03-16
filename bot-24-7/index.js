@@ -28,7 +28,9 @@ const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
 const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
 const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
+const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
 const BALANCE_HISTORY_MAX = 500;
+const LIQUIDITY_HISTORY_DAYS = 3;
 
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
@@ -256,6 +258,28 @@ async function tryRedeemResolvedPositions() {
         logJson('warn', 'Redeem échoué (non bloquant)', { conditionId: cid.slice(0, 18) + '…', error: err.message });
       }
     }
+  }
+}
+
+/** Enregistre un relevé de liquidité (pour moyenne sur 3 jours, exposée par le status-server). */
+function appendLiquidityHistory(liquidityUsd) {
+  if (liquidityUsd == null || liquidityUsd <= 0) return;
+  try {
+    let arr = [];
+    try {
+      const raw = fs.readFileSync(LIQUIDITY_HISTORY_FILE, 'utf8');
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch {
+      // fichier absent ou invalide
+    }
+    const now = Date.now();
+    arr.push({ at: new Date(now).toISOString(), liquidityUsd: Number(liquidityUsd) });
+    const cutoff = now - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    fs.writeFileSync(LIQUIDITY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
+  } catch {
+    // ignore
   }
 }
 
@@ -508,10 +532,13 @@ async function run() {
     let allowBelowMin = false;
     if (useLiquidityCap) {
       const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-      if (liquidity != null && liquidity > 0 && amountUsd > liquidity) {
-        amountUsd = liquidity;
-        allowBelowMin = amountUsd < orderSizeMinUsd;
-        console.log(`Mise plafonnée à la liquidité 97 %: ${amountUsd.toFixed(2)} $${allowBelowMin ? ' (sous min, ordre quand même pour continuer)' : ''}`);
+      if (liquidity != null && liquidity > 0) {
+        appendLiquidityHistory(liquidity);
+        if (amountUsd > liquidity) {
+          amountUsd = liquidity;
+          allowBelowMin = amountUsd < orderSizeMinUsd;
+          console.log(`Mise plafonnée à la liquidité 97 %: ${amountUsd.toFixed(2)} $${allowBelowMin ? ' (sous min, ordre quand même pour continuer)' : ''}`);
+        }
       }
     }
 

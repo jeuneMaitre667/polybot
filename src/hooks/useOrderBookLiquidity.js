@@ -8,7 +8,7 @@ const MAX_PRICE_TARGET = 0.97;
 
 /**
  * Récupère le carnet d'ordres pour un token et calcule la liquidité (en USD) disponible
- * à notre prix cible (≤ 97 %). Permet d'estimer la taille max de trade pour limiter le slippage.
+ * à notre prix cible (≤ 97 %). La moyenne sur 3 jours est collectée par le bot et exposée via l'API status.
  * @param {string | null} tokenId - token_id du côté à acheter (Up ou Down)
  * @returns {{ liquidityUsd: number | null, loading: boolean, error: string | null, refresh: () => void }}
  */
