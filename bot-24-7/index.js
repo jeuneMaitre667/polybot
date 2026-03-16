@@ -74,7 +74,9 @@ function appendOrderLog(obj) {
 // ——— Config ———
 const GAMMA_EVENTS_URL = 'https://gamma-api.polymarket.com/events';
 const CLOB_HOST = 'https://clob.polymarket.com';
+const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CHAIN_ID = 137;
+const MAX_PRICE_LIQUIDITY = 0.97;
 const MIN_P = 0.968;
 const MAX_P = 0.97;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
@@ -104,6 +106,8 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
+/** Plafonner la mise à la liquidité disponible à ≤97 % (évite de dégrader le prix). USE_LIQUIDITY_CAP=false pour désactiver. */
+const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
@@ -255,6 +259,25 @@ async function tryRedeemResolvedPositions() {
   }
 }
 
+/** Récupère la liquidité (USD) disponible à ≤97 % pour un token (carnet d'ordres). Retourne null en cas d'erreur. */
+async function getLiquidityAtTargetUsd(tokenId) {
+  if (!tokenId) return null;
+  try {
+    const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
+    const asks = data?.asks ?? [];
+    if (!Array.isArray(asks)) return null;
+    let totalUsd = 0;
+    for (const level of asks) {
+      const p = parseFloat(level?.price ?? level?.[0] ?? 0);
+      const s = parseFloat(level?.size ?? level?.[1] ?? 0);
+      if (p <= MAX_PRICE_LIQUIDITY && s > 0) totalUsd += p * s;
+    }
+    return totalUsd > 0 ? totalUsd : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Pas de trade si l'événement se termine dans moins d'une minute. */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
@@ -343,13 +366,19 @@ async function getTickSizeForToken(client, tokenId) {
   }
 }
 
-/** Place un ordre sur le CLOB (marché ou limite), avec retry sur 429 / erreur réseau et kill switch en cas d'erreurs répétées. amountUsd = taille du trade. clientOrNull = client CLOB déjà créé (évite de recréer les creds). */
-async function placeOrder(signal, amountUsd, clientOrNull = null) {
+/** Seuil en dessous duquel on ne place jamais (évite les ordres dust). */
+const ABSOLUTE_MIN_USD = 0.5;
+
+/** Place un ordre sur le CLOB (marché ou limite), avec retry sur 429 / erreur réseau et kill switch en cas d'erreurs répétées. amountUsd = taille du trade. clientOrNull = client CLOB déjà créé. options.allowBelowMin = true pour accepter une taille < ORDER_SIZE_MIN_USD (ex. plafond liquidité). */
+async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) {
   if (!walletConfigured || !wallet) {
     return { ok: false, error: 'Wallet non configuré. Ajoute PRIVATE_KEY dans .env puis redémarre.' };
   }
   const size = Number(amountUsd) || orderSizeUsd;
-  if (size < orderSizeMinUsd) {
+  if (size < ABSOLUTE_MIN_USD) {
+    return { ok: false, error: `Taille trop faible (${size.toFixed(2)} < ${ABSOLUTE_MIN_USD} USDC min).` };
+  }
+  if (!options.allowBelowMin && size < orderSizeMinUsd) {
     return { ok: false, error: `Solde insuffisant (${size.toFixed(2)} < ${orderSizeMinUsd} USDC min).` };
   }
   const { tokenIdToBuy, takeSide, priceUp, priceDown } = signal;
@@ -476,8 +505,18 @@ async function run() {
       if (amountUsd < orderSizeMinUsd) break;
     }
 
+    let allowBelowMin = false;
+    if (useLiquidityCap) {
+      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+      if (liquidity != null && liquidity > 0 && amountUsd > liquidity) {
+        amountUsd = liquidity;
+        allowBelowMin = amountUsd < orderSizeMinUsd;
+        console.log(`Mise plafonnée à la liquidité 97 %: ${amountUsd.toFixed(2)} $${allowBelowMin ? ' (sous min, ordre quand même pour continuer)' : ''}`);
+      }
+    }
+
     placedKeys.add(key);
-    const result = await placeOrder(s, amountUsd, clobClient);
+    const result = await placeOrder(s, amountUsd, clobClient, { allowBelowMin });
     const time = new Date().toISOString();
     if (result.ok) {
       const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };

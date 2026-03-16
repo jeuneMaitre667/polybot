@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
+import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
 
@@ -20,6 +21,7 @@ function formatMoney(value) {
 }
 
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
+const STORAGE_KEY_LIQUIDITY_SUGGESTION = 'polymarket-dashboard.showLiquiditySuggestion';
 
 /** Slug Polymarket du créneau Bitcoin Up or Down - Hourly pour l'heure actuelle (ET). */
 function getCurrentBitcoinUpDownEventSlug() {
@@ -50,6 +52,8 @@ function UpDownDot({ side, title = true }) {
 export function BitcoinUpDownStrategy() {
   const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon } = useWallet();
   const { signals } = useBitcoinUpDownSignals();
+  const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
+  const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
   const resolvedWindowHours = 72 + extraDays * 24;
@@ -64,6 +68,27 @@ export function BitcoinUpDownStrategy() {
   const [, setPlaceResult] = useState(null);
   const autoPlaceInProgress = useRef(false);
   const [initialBalance, setInitialBalance] = useState(100);
+  const [showLiquiditySuggestion, setShowLiquiditySuggestion] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_LIQUIDITY_SUGGESTION);
+      if (stored === 'false') return false;
+      if (stored === 'true') return true;
+      return true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleShowLiquiditySuggestion = () => {
+    setShowLiquiditySuggestion((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(STORAGE_KEY_LIQUIDITY_SUGGESTION, String(next));
+      } catch (_) {}
+      return next;
+    });
+  };
 
   const backtestResult = useMemo(() => {
     const withSimul = resolvedHours.filter((r) => r.botWon !== null);
@@ -129,18 +154,28 @@ export function BitcoinUpDownStrategy() {
     return Date.now() >= endMs - ONE_MINUTE_MS;
   };
 
-  const placeOrderForSignal = async (signal) => {
+  const placeOrderForSignal = async (signal, options = {}) => {
     if (!signer || !signal.tokenIdToBuy) return { error: 'Pas de signer ou token.' };
     if (isInLastMinute(signal)) {
       return { error: "Trop tard : l'événement se termine dans moins d'une minute." };
+    }
+    let sizeUsd = Number(orderSizeUsd) || 10;
+    if (options.capUsd != null && options.capUsd > 0 && sizeUsd > options.capUsd) {
+      sizeUsd = options.capUsd;
     }
     const price = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
     return placePolymarketOrder(signer, {
       tokenIdToBuy: signal.tokenIdToBuy,
       price,
-      sizeUsd: Number(orderSizeUsd) || 10,
+      sizeUsd,
       useMarketOrder,
     });
+  };
+
+  const getCapUsdForSignal = (signal) => {
+    if (!showLiquiditySuggestion || liquidityAtTargetUsd == null || liquidityAtTargetUsd <= 0) return null;
+    if (signals?.[0] && getSignalKey(signal) === getSignalKey(signals[0])) return liquidityAtTargetUsd;
+    return null;
   };
 
   const _handlePlaceOrder = async (signal) => {
@@ -152,7 +187,7 @@ export function BitcoinUpDownStrategy() {
       setPlacingFor(null);
       return;
     }
-    const result = await placeOrderForSignal(signal);
+    const result = await placeOrderForSignal(signal, { capUsd: getCapUsdForSignal(signal) });
     setPlaceResult({ key, ...result });
     setPlacingFor(null);
   };
@@ -172,7 +207,7 @@ export function BitcoinUpDownStrategy() {
         placedOrderKeysRef.current.add(key);
         setPlacedOrderKeys((prev) => new Set([...prev, key]));
         setPlacingFor(key);
-        const result = await placeOrderForSignal(signal);
+        const result = await placeOrderForSignal(signal, { capUsd: getCapUsdForSignal(signal) });
         setPlaceResult({ key, ...result });
         setPlacingFor(null);
         await new Promise((r) => setTimeout(r, 350));
@@ -218,7 +253,50 @@ export function BitcoinUpDownStrategy() {
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 96,8–97 % : on achète le <strong>favori</strong> (le côté à 96,8–97 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Utiliser le simulateur par heure ci-dessous pour projeter où tu peux arriver sur 24 h, 1 semaine, etc.</li>
             </ul>
+            <div className="mt-3 pt-3 border-t border-border/40 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Afficher la taille max suggérée (liquidité à 97 %) :</span>
+              <button
+                type="button"
+                onClick={toggleShowLiquiditySuggestion}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${showLiquiditySuggestion ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+              >
+                {showLiquiditySuggestion ? 'Activé' : 'Désactivé'}
+              </button>
+            </div>
           </div>
+
+          {showLiquiditySuggestion && (currentSignalTokenId || liquidityAtTargetUsd != null) && (
+            <div className="rounded-xl border border-border/50 bg-muted/10 p-4">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-2">
+                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+                Taille max suggérée (sans dégrader les gains)
+              </h3>
+              <p className="text-xs text-muted-foreground mb-2">
+                Liquidité disponible à 96,8–97 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour limiter le slippage.
+              </p>
+              {liquidityLoading ? (
+                <span className="text-sm text-muted-foreground">Chargement du carnet…</span>
+              ) : liquidityError ? (
+                <span className="text-sm text-amber-600 dark:text-amber-400">{liquidityError}</span>
+              ) : liquidityAtTargetUsd != null && liquidityAtTargetUsd > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">
+                    ~{liquidityAtTargetUsd.toFixed(0)} $
+                  </span>
+                  <span className="text-sm text-muted-foreground">(taille max conseillée pour ce créneau)</span>
+                  <button
+                    type="button"
+                    onClick={refreshLiquidity}
+                    className="rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+                  >
+                    Rafraîchir
+                  </button>
+                </div>
+              ) : currentSignalTokenId ? (
+                <span className="text-sm text-muted-foreground">Aucune liquidité à ≤97 % pour l’instant.</span>
+              ) : null}
+            </div>
+          )}
 
           <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
