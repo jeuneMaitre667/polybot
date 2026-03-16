@@ -116,6 +116,8 @@ const USDC_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const ERC20_ABI = ['function balanceOf(address owner) view returns (uint256)'];
 const ORDER_RETRY_ATTEMPTS = 3;
 const ORDER_RETRY_BASE_MS = 1000;
+let consecutiveOrderErrors = 0;
+let killSwitchActive = false;
 
 function getSignalKey(signal) {
   return signal.market?.conditionId ?? signal.eventSlug ?? '';
@@ -263,7 +265,19 @@ async function checkGeoblock() {
   }
 }
 
-/** Place un ordre sur le CLOB (marché ou limite), avec retry sur 429 / erreur réseau. amountUsd = taille du trade. clientOrNull = client CLOB déjà créé (évite de recréer les creds). */
+/** Récupère et normalise le tick size pour un token donné. */
+async function getTickSizeForToken(client, tokenId) {
+  try {
+    const tickSize = await client.getTickSize(tokenId);
+    const str = typeof tickSize === 'string' ? tickSize : tickSize?.minimum_tick_size ?? '0.01';
+    const step = Number(str);
+    return Number.isFinite(step) && step > 0 ? { str, step } : { str: '0.01', step: 0.01 };
+  } catch {
+    return { str: '0.01', step: 0.01 };
+  }
+}
+
+/** Place un ordre sur le CLOB (marché ou limite), avec retry sur 429 / erreur réseau et kill switch en cas d'erreurs répétées. amountUsd = taille du trade. clientOrNull = client CLOB déjà créé (évite de recréer les creds). */
 async function placeOrder(signal, amountUsd, clientOrNull = null) {
   if (!walletConfigured || !wallet) {
     return { ok: false, error: 'Wallet non configuré. Ajoute PRIVATE_KEY dans .env puis redémarre.' };
@@ -283,15 +297,34 @@ async function placeOrder(signal, amountUsd, clientOrNull = null) {
         const creds = await clientWithoutCreds.createOrDeriveApiKey();
         client = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds);
       }
-      const options = { tickSize: '0.01', negRisk: false };
+      const options = { negRisk: false };
+
+      // Pour les ordres limites : normaliser le tick size et arrondir le prix. Annuler d'abord les ordres existants pour ce marché.
+      let roundedPrice = Number(price);
+      if (!useMarketOrder) {
+        if (signal.market?.conditionId) {
+          try {
+            await client.cancelMarketOrders(signal.market.conditionId);
+          } catch (e) {
+            console.warn('cancelMarketOrders échoué (non bloquant):', e.message);
+          }
+        }
+        const { str: tickSizeStr, step } = await getTickSizeForToken(client, tokenIdToBuy);
+        options.tickSize = tickSizeStr;
+        if (Number.isFinite(roundedPrice) && step > 0) {
+          roundedPrice = Math.round(roundedPrice / step) * step;
+        }
+      }
 
       if (useMarketOrder) {
         const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY };
         const result = await client.createAndPostMarketOrder(userMarketOrder, options, OrderType.FOK);
+        consecutiveOrderErrors = 0;
         return { ok: true, orderID: result?.orderID ?? result?.id };
       }
-      const userOrder = { tokenID: tokenIdToBuy, price: Number(price), size, side: Side.BUY };
+      const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
       const result = await client.createAndPostOrder(userOrder, options, OrderType.GTC);
+      consecutiveOrderErrors = 0;
       return { ok: true, orderID: result?.orderID ?? result?.id };
     } catch (err) {
       lastError = err.message;
@@ -306,6 +339,20 @@ async function placeOrder(signal, amountUsd, clientOrNull = null) {
       }
     }
   }
+  consecutiveOrderErrors += 1;
+  if (consecutiveOrderErrors >= 5 && !killSwitchActive) {
+    killSwitchActive = true;
+    logJson('error', 'Kill switch activé: trop d’erreurs CLOB consécutives, annulation de tous les ordres.', {
+      consecutiveOrderErrors,
+      lastError,
+    });
+    try {
+      const client = clientOrNull || new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+      await client.cancelAll();
+    } catch (e) {
+      console.warn('cancelAll échoué (kill switch):', e.message);
+    }
+  }
   return { ok: false, error: lastError };
 }
 
@@ -314,7 +361,7 @@ const placedKeys = new Set();
 
 async function run() {
   const signals = await fetchSignals();
-  if (!walletConfigured || !autoPlaceEnabled) return;
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
 
   // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
   let clobClient = null;
