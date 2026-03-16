@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
@@ -51,6 +51,7 @@ export function BitcoinUpDownStrategy() {
   const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon } = useWallet();
   const { signals } = useBitcoinUpDownSignals();
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
+  const [includeFees, setIncludeFees] = useState(true);
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
@@ -63,6 +64,53 @@ export function BitcoinUpDownStrategy() {
   const [, setPlaceResult] = useState(null);
   const autoPlaceInProgress = useRef(false);
   const [initialBalance, setInitialBalance] = useState(100);
+
+  const backtestResult = useMemo(() => {
+    const withSimul = resolvedHours.filter((r) => r.botWon !== null);
+    const sortedSimul = [...withSimul].sort(
+      (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    );
+    const estimateCryptoTakerFeeUsd = (stakeUsd, p) => {
+      if (!includeFees) return 0;
+      if (stakeUsd <= 0 || p == null) return 0;
+      const x = p * (1 - p);
+      const feeRate = 0.25;
+      const exponent = 2;
+      return stakeUsd * feeRate * Math.pow(x, exponent);
+    };
+    let capital = initialBalance > 0 ? initialBalance : 0;
+    let peak = capital;
+    let maxDrawdown = 0;
+    let feesPaid = 0;
+    const netPnlMap = new Map();
+    for (const r of sortedSimul) {
+      if (capital <= 0) break;
+      const stake = capital;
+      const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
+      const feeUsd = estimateCryptoTakerFeeUsd(stake, p);
+      feesPaid += feeUsd;
+      let delta = 0;
+      if (p != null && r.botWon === true) {
+        const odds = p > 0 ? 1 / p - 1 : 0;
+        delta = stake * odds - feeUsd;
+      } else if (r.botWon === false) {
+        delta = -stake - feeUsd;
+      }
+      capital += delta;
+      netPnlMap.set(`${r.eventSlug}-${r.endDate ?? ''}`, delta);
+      if (capital > peak) peak = capital;
+      const dd = peak > 0 ? (peak - capital) / peak : 0;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+    return {
+      netPnlMap,
+      capital,
+      feesPaid,
+      maxDrawdown,
+      withSimul,
+      won: withSimul.filter((r) => r.botWon === true).length,
+    };
+  }, [resolvedHours, initialBalance, includeFees]);
 
   const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
 
@@ -247,67 +295,56 @@ export function BitcoinUpDownStrategy() {
                       <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
                       <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
                       <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
+                      <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {resolvedHours.map((r, i) => (
-                      <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
-                        <td className="py-3 px-3 font-medium">
-                          {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
-                        </td>
-                        <td className="py-3 px-3 text-muted-foreground">
-                          {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {r.botEntryTimestamp != null
-                            ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                            : '—'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {r.botOrderType ?? '—'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
-                          {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
-                          {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
-                        </td>
-                      </tr>
-                    ))}
+                    {resolvedHours.map((r, i) => {
+                      const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
+                      const netPnl = r.botWon !== null ? backtestResult.netPnlMap.get(rowKey) : undefined;
+                      return (
+                        <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
+                          <td className="py-3 px-3 font-medium">
+                            {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
+                          </td>
+                          <td className="py-3 px-3 text-muted-foreground">
+                            {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
+                          </td>
+                          <td className="py-3 px-3">
+                            {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                          </td>
+                          <td className="py-3 px-3">
+                            {r.botEntryTimestamp != null
+                              ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                              : '—'}
+                          </td>
+                          <td className="py-3 px-3">
+                            {r.botOrderType ?? '—'}
+                          </td>
+                          <td className="py-3 px-3">
+                            {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
+                            {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
+                            {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
+                          </td>
+                          <td className="py-3 px-3 text-right font-medium tabular-nums">
+                            {netPnl !== undefined
+                              ? (
+                                  <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                    {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
+                                  </span>
+                                )
+                              : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
             {resolvedHours.length > 0 && (() => {
-              const withSimul = resolvedHours.filter((r) => r.botWon !== null);
-              const won = withSimul.filter((r) => r.botWon === true).length;
-
-              // Backtest capital en réinvestissant 100 % du solde à chaque créneau avec signal,
-              // pour mimer USE_BALANCE_AS_SIZE=true côté bot.
-              const sortedSimul = [...withSimul].sort(
-                (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
-              );
-              let capital = initialBalance > 0 ? initialBalance : 0;
-              let peak = capital;
-              let maxDrawdown = 0;
-              for (const r of sortedSimul) {
-                if (capital <= 0) break;
-                const stake = capital;
-                const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
-                let delta = 0;
-                if (p != null && r.botWon === true) {
-                  const odds = p > 0 ? 1 / p - 1 : 0;
-                  delta = stake * odds;
-                } else if (r.botWon === false) {
-                  delta = -stake;
-                }
-                capital += delta;
-                if (capital > peak) peak = capital;
-                const dd = peak > 0 ? (peak - capital) / peak : 0;
-                if (dd > maxDrawdown) maxDrawdown = dd;
-              }
+              const { capital, feesPaid, maxDrawdown, withSimul, won } = backtestResult;
+              const totalNetPnl = initialBalance > 0 ? capital - initialBalance : null;
 
               if (withSimul.length > 0) {
                 return (
@@ -328,9 +365,29 @@ export function BitcoinUpDownStrategy() {
                             )
                           </span>
                         )}
+                        {totalNetPnl != null && (
+                          <> · PnL net total <strong className={totalNetPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalNetPnl >= 0 ? '+' : ''}{formatMoney(totalNetPnl)}</strong></>
+                        )}
                         {maxDrawdown > 0 && <> · drawdown max env. {(maxDrawdown * 100).toFixed(1)} %</>}
+                        {includeFees && feesPaid > 0 && <> · frais estimés {formatMoney(feesPaid)}</>}
                       </p>
                     )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-muted-foreground">Backtest :</span>
+                      <button
+                        type="button"
+                        onClick={() => setIncludeFees((v) => !v)}
+                        className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                          includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                        }`}
+                        title="Modèle simplifié de taker fees (crypto) basé sur la doc Polymarket"
+                      >
+                        {includeFees ? 'Frais ON' : 'Frais OFF'}
+                      </button>
+                      <span className="text-[11px] text-muted-foreground">
+                        (estimation, le SDK gère les frais réels)
+                      </span>
+                    </div>
                   </div>
                 );
               }
