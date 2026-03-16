@@ -111,27 +111,31 @@ function getStats24h() {
   return { ordersLast24h, winRate };
 }
 
-/** Lit liquidity-history.json (relevés du bot) et retourne { avg, min, max, count } sur les 3 derniers jours. */
+/** Lit liquidity-history.json (relevés du bot) et retourne { avg, min, max, count, lastAt } sur les 3 derniers jours. lastAt = date ISO du dernier relevé (pour vérifier si le bot a récupéré des données en 1 h). */
 function getLiquidityStats() {
   try {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'liquidity-history.json'), 'utf8');
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return { avg: null, min: null, max: null, count: 0 };
+    if (!Array.isArray(arr) || arr.length === 0) return { avg: null, min: null, max: null, count: 0, lastAt: null };
     const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
-    const values = arr
-      .filter((e) => e.at && new Date(e.at).getTime() >= cutoff)
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const values = filtered
       .map((e) => Number(e.liquidityUsd))
       .filter((n) => Number.isFinite(n) && n > 0);
-    if (values.length === 0) return { avg: null, min: null, max: null, count: 0 };
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    if (values.length === 0) return { avg: null, min: null, max: null, count: 0, lastAt };
     const sum = values.reduce((a, b) => a + b, 0);
     return {
       avg: Math.round((sum / values.length) * 100) / 100,
       min: Math.round(Math.min(...values) * 100) / 100,
       max: Math.round(Math.max(...values) * 100) / 100,
       count: values.length,
+      lastAt,
     };
   } catch {
-    return { avg: null, min: null, max: null, count: 0 };
+    return { avg: null, min: null, max: null, count: 0, lastAt: null };
   }
 }
 

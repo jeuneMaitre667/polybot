@@ -477,9 +477,26 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 
 // ——— Boucle principale ———
 const placedKeys = new Set();
+/** Dernier enregistrement de liquidité (hors trade) pour limiter à 1 relevé par minute. */
+let lastLiquidityRecordTime = 0;
+const LIQUIDITY_RECORD_INTERVAL_MS = 60 * 1000; // 1 min
 
 async function run() {
   const signals = await fetchSignals();
+
+  // Relevé de liquidité même sans trade : 1 fois par minute max pour le marché actif (données max pour le dashboard).
+  if (signals.length > 0 && signals[0].tokenIdToBuy && Date.now() - lastLiquidityRecordTime >= LIQUIDITY_RECORD_INTERVAL_MS) {
+    try {
+      const liquidity = await getLiquidityAtTargetUsd(signals[0].tokenIdToBuy);
+      if (liquidity != null && liquidity > 0) {
+        appendLiquidityHistory(liquidity);
+        lastLiquidityRecordTime = Date.now();
+      }
+    } catch (_) {
+      // ignore (ne pas faire échouer le cycle)
+    }
+  }
+
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
 
   // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
@@ -534,6 +551,7 @@ async function run() {
       const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
       if (liquidity != null && liquidity > 0) {
         appendLiquidityHistory(liquidity);
+        lastLiquidityRecordTime = Date.now(); // aligner le throttle avec le relevé lié au trade
         if (amountUsd > liquidity) {
           amountUsd = liquidity;
           allowBelowMin = amountUsd < orderSizeMinUsd;

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
+import { useBitcoinUpDownResolved15m } from '../hooks/useBitcoinUpDownResolved15m';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
@@ -62,6 +63,8 @@ export function BitcoinUpDownStrategy() {
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
+  const { resolved: resolved15m, loading: resolved15mLoading, error: resolved15mError, refresh: refreshResolved15m } = useBitcoinUpDownResolved15m(resolvedWindowHours);
+  const [resultMode, setResultMode] = useState('hourly'); // 'hourly' | '15m'
   const [orderSizeUsd] = useState(10);
   const [useMarketOrder] = useState(true);
   const [autoPlaceEnabled] = useState(true);
@@ -141,6 +144,51 @@ export function BitcoinUpDownStrategy() {
       won: withSimul.filter((r) => r.botWon === true).length,
     };
   }, [resolvedHours, initialBalance, includeFees]);
+
+  const backtestResult15m = useMemo(() => {
+    const withSimul = resolved15m.filter((r) => r.botWon !== null);
+    const sortedSimul = [...withSimul].sort(
+      (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    );
+    const estimateCryptoTakerFeeUsd = (stakeUsd, p) => {
+      if (!includeFees) return 0;
+      if (stakeUsd <= 0 || p == null) return 0;
+      const x = p * (1 - p);
+      return stakeUsd * 0.25 * Math.pow(x, 2);
+    };
+    let capital = initialBalance > 0 ? initialBalance : 0;
+    let peak = capital;
+    let maxDrawdown = 0;
+    let feesPaid = 0;
+    const netPnlMap = new Map();
+    for (const r of sortedSimul) {
+      if (capital <= 0) break;
+      const stake = capital;
+      const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
+      const feeUsd = estimateCryptoTakerFeeUsd(stake, p);
+      feesPaid += feeUsd;
+      let delta = 0;
+      if (p != null && r.botWon === true) {
+        const odds = p > 0 ? 1 / p - 1 : 0;
+        delta = stake * odds - feeUsd;
+      } else if (r.botWon === false) {
+        delta = -stake - feeUsd;
+      }
+      capital += delta;
+      netPnlMap.set(`${r.eventSlug}-${r.endDate ?? ''}`, delta);
+      if (capital > peak) peak = capital;
+      const dd = peak > 0 ? (peak - capital) / peak : 0;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+    return {
+      netPnlMap,
+      capital,
+      feesPaid,
+      maxDrawdown,
+      withSimul,
+      won: withSimul.filter((r) => r.botWon === true).length,
+    };
+  }, [resolved15m, initialBalance, includeFees]);
 
   const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
 
@@ -366,161 +414,288 @@ export function BitcoinUpDownStrategy() {
           </div>
 
           <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-              Résultats des heures passées
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Créneaux Bitcoin Up or Down déjà résolus. Simulation « si le bot avait été actif » via l’historique des prix CLOB (96,8–97 %).
-            </p>
-            {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
-            {resolvedLoading ? (
-              <p className="text-sm text-muted-foreground">Chargement…</p>
-            ) : resolvedHours.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours.</p>
-            ) : (
-              <div className="overflow-x-auto rounded-lg border border-border/50">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/30">
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
-                      <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
-                      <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {resolvedHours.map((r, i) => {
-                      const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
-                      const netPnl = r.botWon !== null ? backtestResult.netPnlMap.get(rowKey) : undefined;
-                      return (
-                        <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
-                          <td className="py-3 px-3 font-medium">
-                            {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
-                          </td>
-                          <td className="py-3 px-3 text-muted-foreground">
-                            {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
-                          </td>
-                          <td className="py-3 px-3">
-                            {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
-                          </td>
-                          <td className="py-3 px-3">
-                            {r.botEntryTimestamp != null
-                              ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                              : '—'}
-                          </td>
-                          <td className="py-3 px-3">
-                            {r.botOrderType ?? '—'}
-                          </td>
-                          <td className="py-3 px-3">
-                            {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
-                            {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
-                            {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
-                          </td>
-                          <td className="py-3 px-3 text-right font-medium tabular-nums">
-                            {netPnl !== undefined
-                              ? (
-                                  <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                                    {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
-                                  </span>
-                                )
-                              : '—'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {resolvedHours.length > 0 && (() => {
-              const { capital, feesPaid, maxDrawdown, withSimul, won } = backtestResult;
-              const totalNetPnl = initialBalance > 0 ? capital - initialBalance : null;
-
-              if (withSimul.length > 0) {
-                return (
-                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                    <p>
-                      Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 96,8–97 %.
-                    </p>
-                    {initialBalance > 0 && (
-                      <p>
-                        Backtest avec solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final{' '}
-                        <strong>{formatMoney(capital)}</strong>{' '}
-                        {capital > 0 && initialBalance > 0 && (
-                          <span>
-                            (
-                            <span className={capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
-                              {(((capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
-                            </span>
-                            )
-                          </span>
-                        )}
-                        {totalNetPnl != null && (
-                          <> · PnL net total <strong className={totalNetPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalNetPnl >= 0 ? '+' : ''}{formatMoney(totalNetPnl)}</strong></>
-                        )}
-                        {maxDrawdown > 0 && <> · drawdown max env. {(maxDrawdown * 100).toFixed(1)} %</>}
-                        {includeFees && feesPaid > 0 && <> · frais estimés {formatMoney(feesPaid)}</>}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] text-muted-foreground">Backtest :</span>
-                      <button
-                        type="button"
-                        onClick={() => setIncludeFees((v) => !v)}
-                        className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
-                          includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                        }`}
-                        title="Modèle simplifié de taker fees (crypto) basé sur la doc Polymarket"
-                      >
-                        {includeFees ? 'Frais ON' : 'Frais OFF'}
-                      </button>
-                      <span className="text-[11px] text-muted-foreground">
-                        (estimation, le SDK gère les frais réels)
-                      </span>
-                    </div>
-                  </div>
-                );
-              }
-              return (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Bot / Simul. : historique des prix CLOB indisponible pour ces créneaux (marchés résolus). Réessayer plus tard.
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+                  Résultats passés
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Créneaux Bitcoin Up or Down déjà résolus. Simulation 96,8–97 % via l’historique CLOB.
                 </p>
-              );
-            })()}
-            <div className="flex flex-wrap items-center gap-2 mt-3">
-              <span className="text-xs text-muted-foreground mr-1">Affichage : {resolvedDaysCount} derniers jours</span>
-              <button
-                type="button"
-                onClick={refreshResolved}
-                disabled={resolvedLoading}
-                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                Rafraîchir
-              </button>
-              <button
-                type="button"
-                onClick={() => setExtraDays((d) => Math.min(4, d + 1))}
-                disabled={resolvedLoading || extraDays >= 4}
-                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                Un jour de plus
-              </button>
-              <button
-                type="button"
-                onClick={() => setExtraDays((d) => Math.max(0, d - 1))}
-                disabled={resolvedLoading || extraDays <= 0}
-                className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                Un jour de moins
-              </button>
+              </div>
+              <div className="flex rounded-lg border border-border/60 p-0.5 bg-muted/30">
+                <button
+                  type="button"
+                  onClick={() => setResultMode('hourly')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${resultMode === 'hourly' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  Horaires
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultMode('15m')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${resultMode === '15m' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  15 min
+                </button>
+              </div>
             </div>
+
+            {resultMode === 'hourly' && (
+              <>
+                {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
+                {resolvedLoading ? (
+                  <p className="text-sm text-muted-foreground">Chargement…</p>
+                ) : resolvedHours.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-border/50">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/30">
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
+                          <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resolvedHours.map((r, i) => {
+                          const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
+                          const netPnl = r.botWon !== null ? backtestResult.netPnlMap.get(rowKey) : undefined;
+                          return (
+                            <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
+                              <td className="py-3 px-3 font-medium">
+                                {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
+                              </td>
+                              <td className="py-3 px-3 text-muted-foreground">
+                                {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
+                              </td>
+                              <td className="py-3 px-3">
+                                {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                              </td>
+                              <td className="py-3 px-3">
+                                {r.botEntryTimestamp != null
+                                  ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                  : '—'}
+                              </td>
+                              <td className="py-3 px-3">
+                                {r.botOrderType ?? '—'}
+                              </td>
+                              <td className="py-3 px-3">
+                                {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
+                                {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
+                                {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-medium tabular-nums">
+                                {netPnl !== undefined
+                                  ? (
+                                      <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                        {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
+                                      </span>
+                                    )
+                                  : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {resolvedHours.length > 0 && (() => {
+                  const { capital, feesPaid, maxDrawdown, withSimul, won } = backtestResult;
+                  const totalNetPnl = initialBalance > 0 ? capital - initialBalance : null;
+                  if (withSimul.length > 0) {
+                    return (
+                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        <p>
+                          Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 96,8–97 %.
+                        </p>
+                        {initialBalance > 0 && (
+                          <p>
+                            Backtest avec solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final{' '}
+                            <strong>{formatMoney(capital)}</strong>{' '}
+                            {capital > 0 && initialBalance > 0 && (
+                              <span>
+                                (<span className={capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
+                                  {(((capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
+                                </span>)
+                              </span>
+                            )}
+                            {totalNetPnl != null && (
+                              <> · PnL net total <strong className={totalNetPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalNetPnl >= 0 ? '+' : ''}{formatMoney(totalNetPnl)}</strong></>
+                            )}
+                            {maxDrawdown > 0 && <> · drawdown max env. {(maxDrawdown * 100).toFixed(1)} %</>}
+                            {includeFees && feesPaid > 0 && <> · frais estimés {formatMoney(feesPaid)}</>}
+                          </p>
+                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-muted-foreground">Backtest :</span>
+                          <button
+                            type="button"
+                            onClick={() => setIncludeFees((v) => !v)}
+                            className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                            title="Modèle simplifié de taker fees (crypto) basé sur la doc Polymarket"
+                          >
+                            {includeFees ? 'Frais ON' : 'Frais OFF'}
+                          </button>
+                          <label className="flex items-center gap-1.5 text-[11px]">
+                            <span>Solde départ</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="10"
+                              value={initialBalance}
+                              onChange={(e) => setInitialBalance(Number(e.target.value) || 0)}
+                              className="w-20 rounded border border-border bg-background/50 px-2 py-1 text-xs"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Bot / Simul. : historique des prix CLOB indisponible pour ces créneaux. Réessayer plus tard.
+                    </p>
+                  );
+                })()}
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <span className="text-xs text-muted-foreground mr-1">Affichage : {resolvedDaysCount} derniers jours</span>
+                  <button type="button" onClick={refreshResolved} disabled={resolvedLoading} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                    Rafraîchir
+                  </button>
+                  <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolvedLoading || extraDays >= 4} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                    Un jour de plus
+                  </button>
+                  <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolvedLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                    Un jour de moins
+                  </button>
+                </div>
+              </>
+            )}
+
+            {resultMode === '15m' && (
+              <>
+                {resolved15mError && <p className="text-sm text-red-500 dark:text-red-400">{resolved15mError}</p>}
+                {resolved15mLoading ? (
+                  <p className="text-sm text-muted-foreground">Chargement…</p>
+                ) : resolved15m.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours.</p>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto rounded-lg border border-border/50 max-h-[400px] overflow-y-auto">
+                      <table className="w-full text-sm border-collapse">
+                        <thead className="sticky top-0 bg-muted/30 z-10">
+                          <tr className="border-b border-border">
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Créneau</th>
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix</th>
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
+                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
+                            <th className="text-right py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {resolved15m.map((r, i) => {
+                            const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
+                            const netPnl = r.botWon !== null ? backtestResult15m.netPnlMap.get(rowKey) : undefined;
+                            return (
+                              <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
+                                <td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{r.hourLabel}</td>
+                                <td className="py-2 px-2 font-medium">
+                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner ?? '—'}
+                                </td>
+                                <td className="py-2 px-2 text-muted-foreground">
+                                  {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : '—'}
+                                </td>
+                                <td className="py-2 px-2">
+                                  {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                                </td>
+                                <td className="py-2 px-2">
+                                  {r.botEntryTimestamp != null
+                                    ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                    : '—'}
+                                </td>
+                                <td className="py-2 px-2">
+                                  {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
+                                  {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
+                                  {r.botWon == null && <span className="text-muted-foreground">—</span>}
+                                </td>
+                                <td className="py-2 px-2 text-right font-medium tabular-nums">
+                                  {netPnl !== undefined ? (
+                                    <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                      {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
+                                    </span>
+                                  ) : '—'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {backtestResult15m.withSimul.length > 0 && (
+                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        <p>
+                          Simulation : <strong>{backtestResult15m.won}</strong> gagnés / <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 96,8–97 %.
+                        </p>
+                        {initialBalance > 0 && (
+                          <p>
+                            Backtest solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final <strong>{formatMoney(backtestResult15m.capital)}</strong>
+                            {backtestResult15m.capital > 0 && (
+                              <span>
+                                {' '}(<span className={backtestResult15m.capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
+                                  {(((backtestResult15m.capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
+                                </span>)
+                              </span>
+                            )}
+                            {backtestResult15m.capital > 0 && (
+                              <> · PnL net total <strong className={(backtestResult15m.capital - initialBalance) >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
+                                {(backtestResult15m.capital - initialBalance) >= 0 ? '+' : ''}{formatMoney(backtestResult15m.capital - initialBalance)}
+                              </strong></>
+                            )}
+                            {backtestResult15m.maxDrawdown > 0 && <> · drawdown max env. {(backtestResult15m.maxDrawdown * 100).toFixed(1)} %</>}
+                            {includeFees && backtestResult15m.feesPaid > 0 && <> · frais estimés {formatMoney(backtestResult15m.feesPaid)}</>}
+                          </p>
+                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-muted-foreground">Backtest :</span>
+                          <button type="button" onClick={() => setIncludeFees((v) => !v)} className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
+                            {includeFees ? 'Frais ON' : 'Frais OFF'}
+                          </button>
+                          <label className="flex items-center gap-1.5 text-[11px]">
+                            <span>Solde départ</span>
+                            <input type="number" min="0" step="10" value={initialBalance} onChange={(e) => setInitialBalance(Number(e.target.value) || 0)} className="w-20 rounded border border-border bg-background/50 px-2 py-1 text-xs" />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      <span className="text-xs text-muted-foreground mr-1">Affichage : {resolvedDaysCount} derniers jours</span>
+                      <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                        Rafraîchir
+                      </button>
+                      <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolved15mLoading || extraDays >= 4} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                        Un jour de plus
+                      </button>
+                      <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolved15mLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                        Un jour de moins
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </div>
 
-          {resolvedHours.length > 0 && (() => {
+          {resultMode === 'hourly' && resolvedHours.length > 0 && (() => {
             const last24h = resolvedHours.filter(
               (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
             );
@@ -547,6 +722,39 @@ export function BitcoinUpDownStrategy() {
                 {withEntry.length > 0 && (
                   <p className="text-sm text-muted-foreground">
                     Sur les <strong className="text-foreground">{withEntry.length}</strong> sessions affichées avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau horaire.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
+          {resultMode === '15m' && resolved15m.length > 0 && (() => {
+            const last24h = resolved15m.filter(
+              (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
+            );
+            const total24 = last24h.length;
+            const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
+            const pctFilled24 = total24 > 0 ? ((withTrade24 / total24) * 100).toFixed(1) : '0';
+            const withEntry = resolved15m.filter((r) => r.botEntryTimestamp != null && r.endDate);
+            const sessionDurationSec = 15 * 60;
+            const minutesList = withEntry.map((r) => {
+              const sessionEndSec = new Date(r.endDate).getTime() / 1000;
+              const sessionStartSec = sessionEndSec - sessionDurationSec;
+              return (r.botEntryTimestamp - sessionStartSec) / 60;
+            });
+            const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
+            return (
+              <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-2">
+                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+                  Moyenne d&apos;entrée des trades
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  Sur les <strong className="text-foreground">24 dernières heures</strong> : <strong className="text-primary">{pctFilled24} %</strong> des créneaux 15 min ont une position prise (<strong>{withTrade24}</strong> / {total24} créneaux). Le reste en données indisponibles.
+                </p>
+                {withEntry.length > 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Sur les <strong className="text-foreground">{withEntry.length}</strong> créneaux affichés avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau de 15 min.
                   </p>
                 )}
               </div>

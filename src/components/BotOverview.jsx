@@ -27,6 +27,21 @@ export function BotOverview() {
   const liquidityStats = data?.liquidityStats ?? null;
   const hasLiquidityStats = liquidityStats?.count > 0;
 
+  /** Affiche "il y a X min" ou "il y a X h" ou la date si > 24 h. */
+  function formatLastLiquidityAt(lastAtIso) {
+    if (!lastAtIso) return null;
+    const then = new Date(lastAtIso).getTime();
+    const now = Date.now();
+    const diffMs = now - then;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffH = Math.floor(diffMin / 60);
+    if (diffMin < 1) return 'à l\'instant';
+    if (diffMin < 60) return `il y a ${diffMin} min`;
+    if (diffH < 24) return `il y a ${diffH} h`;
+    return new Date(lastAtIso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  const lastLiquidityLabel = hasLiquidityStats && liquidityStats?.lastAt ? formatLastLiquidityAt(liquidityStats.lastAt) : null;
+
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Card className="border border-border/60 bg-card/90 shadow-card">
@@ -102,6 +117,11 @@ export function BotOverview() {
               <>
                 Min {Math.round(liquidityStats.min)} $ · Max {Math.round(liquidityStats.max)} $
                 <span className="block mt-0.5">{liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''} (bot)</span>
+                {lastLiquidityLabel && (
+                  <span className="block mt-0.5" title={liquidityStats.lastAt}>
+                    Dernier relevé : {lastLiquidityLabel}
+                  </span>
+                )}
               </>
             ) : (
               'Relevés liquidité 97 % collectés par le bot'
