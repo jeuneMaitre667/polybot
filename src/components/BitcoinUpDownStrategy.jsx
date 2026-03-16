@@ -283,11 +283,55 @@ export function BitcoinUpDownStrategy() {
             {resolvedHours.length > 0 && (() => {
               const withSimul = resolvedHours.filter((r) => r.botWon !== null);
               const won = withSimul.filter((r) => r.botWon === true).length;
+
+              // Backtest capital en réinvestissant 100 % du solde à chaque créneau avec signal,
+              // pour mimer USE_BALANCE_AS_SIZE=true côté bot.
+              const sortedSimul = [...withSimul].sort(
+                (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+              );
+              let capital = initialBalance > 0 ? initialBalance : 0;
+              let peak = capital;
+              let maxDrawdown = 0;
+              for (const r of sortedSimul) {
+                if (capital <= 0) break;
+                const stake = capital;
+                const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
+                let delta = 0;
+                if (p != null && r.botWon === true) {
+                  const odds = p > 0 ? 1 / p - 1 : 0;
+                  delta = stake * odds;
+                } else if (r.botWon === false) {
+                  delta = -stake;
+                }
+                capital += delta;
+                if (capital > peak) peak = capital;
+                const dd = peak > 0 ? (peak - capital) / peak : 0;
+                if (dd > maxDrawdown) maxDrawdown = dd;
+              }
+
               if (withSimul.length > 0) {
                 return (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 96,8–97 %.
-                  </p>
+                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <p>
+                      Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 96,8–97 %.
+                    </p>
+                    {initialBalance > 0 && (
+                      <p>
+                        Backtest avec solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final{' '}
+                        <strong>{formatMoney(capital)}</strong>{' '}
+                        {capital > 0 && initialBalance > 0 && (
+                          <span>
+                            (
+                            <span className={capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
+                              {(((capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
+                            </span>
+                            )
+                          </span>
+                        )}
+                        {maxDrawdown > 0 && <> · drawdown max env. {(maxDrawdown * 100).toFixed(1)} %</>}
+                      </p>
+                    )}
+                  </div>
                 );
               }
               return (

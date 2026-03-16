@@ -81,7 +81,13 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 const privateKeyRaw = process.env.PRIVATE_KEY?.trim();
 const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_here' || /^0x?REMPLACE/i.test(privateKeyRaw);
-const privateKey = isPlaceholder ? '' : privateKeyRaw;
+// Détecter si l'utilisateur a mis l'adresse (0x + 40 hex) au lieu de la clé privée (0x + 64 hex)
+const hexPart = (privateKeyRaw || '').replace(/^0x/i, '');
+const looksLikeAddress = hexPart.length === 40 && /^[0-9a-fA-F]+$/.test(hexPart);
+const privateKey = isPlaceholder || looksLikeAddress ? '' : privateKeyRaw;
+if (privateKeyRaw && looksLikeAddress) {
+  console.error('ERREUR: PRIVATE_KEY ressemble à une ADRESSE (0x + 40 caractères). Il faut la CLÉ PRIVÉE (0x + 64 caractères hex). Récupère-la depuis Phantom/MetaMask : Paramètres → Sécurité → Exporter clé privée. Puis dans ~/bot-24-7/.env mets PRIVATE_KEY=0x...');
+}
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
 const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
 const polygonRpcFallbacks = (process.env.POLYGON_RPC_FALLBACK || 'https://polygon-rpc.com,https://rpc.ankr.com/polygon').split(',').map((u) => u.trim()).filter(Boolean);
