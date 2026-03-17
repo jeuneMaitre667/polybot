@@ -82,7 +82,12 @@ const MAX_PRICE_LIQUIDITY = 0.97;
 const MIN_P = 0.968;
 const MAX_P = 0.97;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
+const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const ONE_MINUTE_MS = 60 * 1000;
+const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000; // 4 min pour le marché 15m
+
+/** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
+const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
 
 const privateKeyRaw = process.env.PRIVATE_KEY?.trim();
 const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_here' || /^0x?REMPLACE/i.test(privateKeyRaw);
@@ -302,7 +307,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
   }
 }
 
-/** Pas de trade si l'événement se termine dans moins d'une minute. */
+/** Pas de trade si l'événement se termine dans moins de X ms (1 min horaire, 4 min 15m). */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
@@ -313,21 +318,31 @@ function isInLastMinute(signal) {
     endMs = new Date(raw).getTime();
   }
   if (Number.isNaN(endMs)) return false;
-  return Date.now() >= endMs - ONE_MINUTE_MS;
+  const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : ONE_MINUTE_MS;
+  return Date.now() >= endMs - thresholdMs;
 }
 
 /** Récupère les signaux 96,8–97 % depuis l’API Gamma. */
 async function fetchSignals() {
-  const { data } = await axios.get(GAMMA_EVENTS_URL, {
-    params: { active: true, closed: false, limit: 150 },
-    timeout: 15000,
-  });
-  const events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  let events = [];
+  try {
+    const { data } = await axios.get(GAMMA_EVENTS_URL, {
+      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+      timeout: 15000,
+    });
+    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 400) {
+      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    } else throw err;
+  }
   const results = [];
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
     const eventSlug = (ev.slug ?? '').toLowerCase();
-    if (!eventSlug.includes(BITCOIN_UP_DOWN_SLUG)) continue;
+    if (!eventSlug.includes(slugMatch)) continue;
     const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
       const prices = parsePrices(m);
@@ -579,6 +594,7 @@ async function run() {
 
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
+  console.log(`Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '4 min avant fin' : '1 min avant fin'}`);
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
