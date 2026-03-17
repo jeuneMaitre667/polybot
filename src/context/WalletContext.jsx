@@ -25,6 +25,10 @@ export function WalletProvider({ children }) {
   const [status, setStatus] = useState('disconnected'); // disconnected | connecting | connected | error
   const [errorMessage, setErrorMessage] = useState(null);
 
+  const [address2, setAddress2] = useState(null);
+  const [status2, setStatus2] = useState('disconnected');
+  const [errorMessage2, setErrorMessage2] = useState(null);
+
   const connect = useCallback(async () => {
     setErrorMessage(null);
     const ethereum = getEthereumProvider();
@@ -110,12 +114,55 @@ export function WalletProvider({ children }) {
     setErrorMessage(null);
   }, []);
 
+  const connect2 = useCallback(async () => {
+    setErrorMessage2(null);
+    const ethereum = getEthereumProvider();
+    if (!ethereum) {
+      setStatus2('error');
+      setErrorMessage2('Aucun wallet détecté. Installez Phantom, MetaMask ou un wallet compatible (EVM/Polygon).');
+      return { error: 'Aucun wallet détecté.' };
+    }
+    setStatus2('connecting');
+    try {
+      const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+      if (!accounts?.length) {
+        setStatus2('error');
+        setErrorMessage2('Aucun compte sélectionné. Autorisez l\'accès dans le wallet.');
+        return { error: 'Aucun compte.' };
+      }
+      setAddress2(accounts[0]);
+      setStatus2('connected');
+      setErrorMessage2(null);
+      return { error: null };
+    } catch (err) {
+      setStatus2('error');
+      setAddress2(null);
+      const code = err?.code ?? err?.error?.code;
+      const rawMsg = err?.message ?? err?.error?.message ?? err?.data?.message ?? '';
+      let msg = rawMsg || 'Connexion refusée.';
+      if (code === 4001) msg = 'Connexion refusée dans le wallet.';
+      else if (code === -32603 || String(msg).includes('Unexpected error') || code === 4900) {
+        msg = 'Erreur Phantom. Essayez : fermer toute fenêtre Phantom ouverte, rafraîchir la page, ou désactiver temporairement une autre extension wallet.';
+      } else if (code === 4100) msg = 'Non autorisé. Déverrouillez Phantom et réessayez.';
+      setErrorMessage2(msg);
+      return { error: msg };
+    }
+  }, []);
+
+  const disconnect2 = useCallback(() => {
+    setAddress2(null);
+    setStatus2('disconnected');
+    setErrorMessage2(null);
+  }, []);
+
   useEffect(() => {
     const ethereum = getEthereumProvider();
     if (!ethereum?.on) return;
     const onAccountsChanged = (accounts) => {
-      if (!accounts?.length) disconnect();
-      else setAddress(accounts[0]);
+      if (!accounts?.length) {
+        disconnect();
+        disconnect2();
+      } else setAddress(accounts[0]);
     };
     const onChainChanged = () => window.location.reload();
     ethereum.on('accountsChanged', onAccountsChanged);
@@ -124,7 +171,7 @@ export function WalletProvider({ children }) {
       ethereum.removeListener?.('accountsChanged', onAccountsChanged);
       ethereum.removeListener?.('chainChanged', onChainChanged);
     };
-  }, [disconnect]);
+  }, [disconnect, disconnect2]);
 
   const value = {
     address,
@@ -136,6 +183,11 @@ export function WalletProvider({ children }) {
     connect,
     disconnect,
     switchToPolygon,
+    address2,
+    status2,
+    errorMessage2,
+    connect2,
+    disconnect2,
     POLYGON_CHAIN_ID,
   };
 

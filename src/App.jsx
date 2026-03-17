@@ -1,6 +1,7 @@
 import { CompoundInterestCalculator } from './components/CompoundInterestCalculator';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
-import { BotStatusBadge, BotBalanceChart } from './components/BotStatus';
+import { BotStatusBadge } from './components/BotStatus';
+import { DEFAULT_BOT_STATUS_URL_15M } from './hooks/useBotStatus.js';
 import { TradeHistory } from './components/TradeHistory';
 import { BotOverview } from './components/BotOverview';
 
@@ -19,12 +20,10 @@ export default function App() {
                 Temps réel
               </span>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Bitcoin Up or Down — automatisé, relié à ton wallet
-            </p>
           </div>
-          <nav className="shrink-0">
+          <nav className="shrink-0 flex flex-wrap items-stretch gap-3 justify-end">
             <BotStatusBadge />
+            {DEFAULT_BOT_STATUS_URL_15M && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="Bot 15m" />}
           </nav>
         </div>
       </header>
@@ -35,7 +34,6 @@ export default function App() {
 
           <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)] items-start">
             <div className="space-y-8">
-              <BotBalanceChart />
               <BitcoinUpDownStrategy />
             </div>
             <div className="space-y-8">

@@ -113,7 +113,7 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
-/** Plafonner la mise à la liquidité disponible à ≤97 % (évite de dégrader le prix). USE_LIQUIDITY_CAP=false pour désactiver. */
+/** Plafonner la mise à la liquidité disponible à ≤97 % = mise max pour ne pas dégrader les profits (prix d'entrée). USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
 const walletConfigured = !!privateKey;
 
@@ -492,24 +492,38 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 
 // ——— Boucle principale ———
 const placedKeys = new Set();
-/** Dernier enregistrement de liquidité (hors trade) pour limiter à 1 relevé par minute. */
+/** Fenêtres pour lesquelles on a déjà enregistré un relevé de liquidité (une fois par créneau = montant max par fenêtre pour le dashboard). */
+const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
+/** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
-const LIQUIDITY_RECORD_INTERVAL_MS = 60 * 1000; // 1 min
 
 async function run() {
   const signals = await fetchSignals();
 
-  // Relevé de liquidité même sans trade : 1 fois par minute max pour le marché actif (données max pour le dashboard).
-  if (signals.length > 0 && signals[0].tokenIdToBuy && Date.now() - lastLiquidityRecordTime >= LIQUIDITY_RECORD_INTERVAL_MS) {
+  // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
+  const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+  for (const [key, endMs] of recordedLiquidityWindows) {
+    if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
+  }
+  for (const s of signals) {
+    if (!s.tokenIdToBuy) continue;
+    const key = getSignalKey(s);
+    if (recordedLiquidityWindows.has(key)) continue;
+    let endMs = Date.now();
+    if (s.endDate) {
+      const raw = s.endDate;
+      endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
+    }
     try {
-      const liquidity = await getLiquidityAtTargetUsd(signals[0].tokenIdToBuy);
+      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
       if (liquidity != null && liquidity > 0) {
         appendLiquidityHistory(liquidity);
-        lastLiquidityRecordTime = Date.now();
+        recordedLiquidityWindows.set(key, endMs);
       }
     } catch (_) {
-      // ignore (ne pas faire échouer le cycle)
+      // ne pas faire échouer le cycle
     }
+    await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
   }
 
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
@@ -562,16 +576,18 @@ async function run() {
     }
 
     let allowBelowMin = false;
-    if (useLiquidityCap) {
-      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-      if (liquidity != null && liquidity > 0) {
+    const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+    if (liquidity != null && liquidity > 0) {
+      if (!recordedLiquidityWindows.has(key)) {
         appendLiquidityHistory(liquidity);
-        lastLiquidityRecordTime = Date.now(); // aligner le throttle avec le relevé lié au trade
-        if (amountUsd > liquidity) {
-          amountUsd = liquidity;
-          allowBelowMin = amountUsd < orderSizeMinUsd;
-          console.log(`Mise plafonnée à la liquidité 97 %: ${amountUsd.toFixed(2)} $${allowBelowMin ? ' (sous min, ordre quand même pour continuer)' : ''}`);
-        }
+        const endMs = s.endDate ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime()) : Date.now();
+        recordedLiquidityWindows.set(key, endMs);
+      }
+      lastLiquidityRecordTime = Date.now();
+      if (useLiquidityCap && amountUsd > liquidity) {
+        amountUsd = liquidity;
+        allowBelowMin = amountUsd < orderSizeMinUsd;
+        console.log(`Mise max (liquidité 97 %) : ${amountUsd.toFixed(2)} $ — ordre plafonné pour ne pas dégrader les profits${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
       }
     }
 
@@ -583,7 +599,8 @@ async function run() {
       writeLastOrder(orderData);
       appendOrderLog(orderData);
       logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID });
-      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
+      const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max 97 % : ${liquidity.toFixed(0)} $` : '';
+      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
     } else {
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
@@ -598,6 +615,7 @@ async function main() {
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
+    if (useLiquidityCap) console.log('Mise max : plafonnée à la liquidité 97 % pour ne pas dégrader les profits (USE_LIQUIDITY_CAP=true).');
   } else {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
   }

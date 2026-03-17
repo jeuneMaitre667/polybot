@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '@/hooks/useBotStatus.js';
+import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '@/hooks/useBotStatus.js';
 
 function uptimeStrFrom(uptimeMs) {
   if (uptimeMs == null) return null;
@@ -13,9 +13,9 @@ function uptimeStrFrom(uptimeMs) {
   return `${s} s`;
 }
 
-/** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir */
-export function BotStatusBadge() {
-  const statusUrl = DEFAULT_BOT_STATUS_URL;
+/** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir. Optionnel : statusUrl + label (ex. "15m"). */
+export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
+  const statusUrl = statusUrlProp ?? DEFAULT_BOT_STATUS_URL;
   const { data, loading, error, refresh } = useBotStatus(statusUrl);
   const [now, setNow] = useState(() => Date.now());
   const wasOnlineRef = useRef(false);
@@ -46,10 +46,9 @@ export function BotStatusBadge() {
   const ordersLast24h = data?.ordersLast24h;
   const winRate = data?.winRate;
 
-  const hasStats = isOnline && !loading && (balanceUsd != null || lastOrder || ordersLast24h != null || winRate != null);
-
   return (
     <div className="w-full max-w-sm rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner sm:ml-auto">
+      {label && <div className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1.5">{label}</div>}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
         <div className="flex items-center gap-2">
           <span
@@ -79,32 +78,6 @@ export function BotStatusBadge() {
           Rafraîchir
         </button>
       </div>
-      {hasStats && (
-        <div className="mt-2.5 flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-slate-700/50 pt-2.5 text-xs">
-          {balanceUsd != null && (
-            <span className="text-slate-400">
-              Solde <span className="font-semibold tabular-nums text-emerald-400">{Number(balanceUsd).toFixed(2)} $</span>
-            </span>
-          )}
-          {ordersLast24h != null && (
-            <span className="text-slate-400">
-              24h <span className="font-semibold tabular-nums text-slate-300">{ordersLast24h} ordre{ordersLast24h !== 1 ? 's' : ''}</span>
-            </span>
-          )}
-          {winRate != null && (
-            <span className="text-slate-400">
-              Win <span className="font-semibold tabular-nums text-slate-300">{(winRate * 100).toFixed(1)} %</span>
-            </span>
-          )}
-          {lastOrder && (
-            <span className="text-slate-500" title={lastOrder.at ? new Date(lastOrder.at).toLocaleString('fr-FR') : ''}>
-              Dernier <span className="text-slate-400">{lastOrder.takeSide}</span>
-              {lastOrder.amountUsd != null && <span className="tabular-nums"> {Number(lastOrder.amountUsd).toFixed(2)} $</span>}
-              {lastOrder.at && <span className="text-slate-500"> · {new Date(lastOrder.at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
-            </span>
-          )}
-        </div>
-      )}
     </div>
   );
 }

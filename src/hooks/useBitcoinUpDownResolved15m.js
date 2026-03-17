@@ -51,15 +51,15 @@ const DEFAULT_WINDOW_HOURS = 72;
 const SLOTS_PER_HOUR = 4;
 const MAX_15M_SLUG_FETCH = 168 * SLOTS_PER_HOUR; // 672 = 7 jours max (pour « un jour de plus »)
 
-/** Génère les slugs btc-updown-15m-{timestamp} pour les N derniers créneaux de 15 min (timestamp = fin du créneau en s UTC). */
+/** Polymarket utilise le début du créneau en secondes UTC. Génère les slugs btc-updown-15m-{timestamp} pour les N derniers créneaux. */
 function getRecent15mSlugs(slotCount) {
   const nowSec = Math.floor(Date.now() / 1000);
   const slotSec = 15 * 60;
-  const lastEnd = Math.floor(nowSec / slotSec) * slotSec;
+  const currentSlotStart = Math.floor(nowSec / slotSec) * slotSec;
   const slugs = [];
   const n = Math.min(slotCount, MAX_15M_SLUG_FETCH);
   for (let i = 1; i <= n; i++) {
-    slugs.push(`${BITCOIN_UP_DOWN_15M_SLUG}-${lastEnd - i * slotSec}`);
+    slugs.push(`${BITCOIN_UP_DOWN_15M_SLUG}-${currentSlotStart - i * slotSec}`);
   }
   return slugs;
 }

@@ -28,7 +28,7 @@ npm start
 | `USE_MARKET_ORDER` | `true` = marché, `false` = limite | true |
 | `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 3 |
 | `REDEEM_ENABLED` | Tenter de redeem les tokens gagnants en USDC à chaque cycle (marchés résolus) | true |
-| `USE_LIQUIDITY_CAP` | Plafonner la mise à la liquidité à ≤97 % (évite de dégrader le prix) | true |
+| `USE_LIQUIDITY_CAP` | **Mise max** : plafonner la mise à la liquidité disponible à 97 % pour ne pas dégrader les profits (prix d'entrée dégradé si on dépasse) | true |
 
 ## Lancer en arrière-plan (PM2)
 

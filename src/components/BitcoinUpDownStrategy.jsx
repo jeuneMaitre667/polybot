@@ -38,6 +38,13 @@ function getCurrentBitcoinUpDownEventSlug() {
   return `${BITCOIN_UP_DOWN_SLUG}-${month}-${day}-${year}-${hour}${ampm}-et`;
 }
 
+/** Slug Polymarket du créneau 15 min actuel (btc-updown-15m-{timestamp} fin de créneau en s UTC). */
+function getCurrent15mEventSlug() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const slotEnd = Math.ceil(nowSec / 900) * 900;
+  return `btc-updown-15m-${slotEnd}`;
+}
+
 /** Point vert (Up) ou rouge (Down) comme sur Polymarket. */
 function UpDownDot({ side, title = true }) {
   if (side !== 'Up' && side !== 'Down') return null;
@@ -52,7 +59,7 @@ function UpDownDot({ side, title = true }) {
 }
 
 export function BitcoinUpDownStrategy() {
-  const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon } = useWallet();
+  const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon, address2, status2, errorMessage2, connect2, disconnect2 } = useWallet();
   const { signals } = useBitcoinUpDownSignals();
   const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
@@ -280,15 +287,26 @@ export function BitcoinUpDownStrategy() {
               <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 Signal 96,8–97 % sur les créneaux horaires Bitcoin Up or Down (Polymarket). Un pari par créneau, ordre limite, réinvestissement du solde — objectif environ 3 % par heure.
               </p>
-              <a
-                href={`https://polymarket.com/event/${getCurrentBitcoinUpDownEventSlug()}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
-              >
-                Voir le créneau horaire actuel sur Polymarket
-                <span className="text-muted-foreground">→</span>
-              </a>
+              <div className="flex flex-wrap items-center gap-3 mt-3">
+                <a
+                  href={`https://polymarket.com/event/${getCurrentBitcoinUpDownEventSlug()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
+                >
+                  Créneau horaire actuel
+                  <span className="text-muted-foreground">→</span>
+                </a>
+                <a
+                  href={`https://polymarket.com/event/${getCurrent15mEventSlug()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
+                >
+                  Créneau 15 min actuel
+                  <span className="text-muted-foreground">→</span>
+                </a>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -362,54 +380,97 @@ export function BitcoinUpDownStrategy() {
             </div>
           )}
 
-          <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-              Connexion wallet
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Connecte ton wallet <strong>Phantom</strong> (ou MetaMask, etc.) sur <strong>Polygon</strong> pour que le bot puisse placer des ordres sur Polymarket. Les ordres sont signés par ton wallet, les fonds restent chez toi.
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {!address ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.preventDefault(); connect(); }}
-                    disabled={status === 'connecting'}
-                    className="rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
-                  >
-                    {status === 'connecting' ? 'Connexion…' : 'Connecter le wallet'}
-                  </button>
-                  {errorMessage && (
-                    <p className="w-full text-sm text-rose-500 dark:text-rose-400 mt-2" role="alert">
-                      {errorMessage}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <>
-                  <span className="text-sm text-muted-foreground">
-                    {address.slice(0, 6)}…{address.slice(-4)}
-                  </span>
-                  {!isPolygon && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+                Connexion wallet 1
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Connecte ton wallet <strong>Phantom</strong> (ou MetaMask, etc.) sur <strong>Polygon</strong> pour placer des ordres. Les fonds restent chez toi.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {!address ? (
+                  <>
                     <button
                       type="button"
-                      onClick={() => switchToPolygon()}
-                      className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+                      onClick={(e) => { e.preventDefault(); connect(); }}
+                      disabled={status === 'connecting'}
+                      className="rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
                     >
-                      Passer sur Polygon
+                      {status === 'connecting' ? 'Connexion…' : 'Connecter le wallet'}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={disconnect}
-                    className="rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
-                  >
-                    Déconnecter
-                  </button>
-                </>
-              )}
+                    {errorMessage && (
+                      <p className="w-full text-sm text-rose-500 dark:text-rose-400 mt-2" role="alert">
+                        {errorMessage}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-sm text-muted-foreground">
+                      {address.slice(0, 6)}…{address.slice(-4)}
+                    </span>
+                    {!isPolygon && (
+                      <button
+                        type="button"
+                        onClick={() => switchToPolygon()}
+                        className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+                      >
+                        Passer sur Polygon
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={disconnect}
+                      className="rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                    >
+                      Déconnecter
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+                Connexion wallet 2
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Connecte un second wallet (change de compte dans Phantom puis clique ici). Utile pour gérer deux comptes.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {!address2 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); connect2(); }}
+                      disabled={status2 === 'connecting'}
+                      className="rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
+                    >
+                      {status2 === 'connecting' ? 'Connexion…' : 'Connecter le wallet'}
+                    </button>
+                    {errorMessage2 && (
+                      <p className="w-full text-sm text-rose-500 dark:text-rose-400 mt-2" role="alert">
+                        {errorMessage2}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-sm text-muted-foreground">
+                      {address2.slice(0, 6)}…{address2.slice(-4)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={disconnect2}
+                      className="rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                    >
+                      Déconnecter
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
@@ -444,11 +505,31 @@ export function BitcoinUpDownStrategy() {
 
             {resultMode === 'hourly' && (
               <>
+                {/* Fenêtre de données Horaires : toujours visible au-dessus du tableau */}
+                <div className="rounded-xl border border-border/50 bg-muted/10 p-4 space-y-2 mb-4">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Fenêtre de données (Horaires)
+                  </h4>
+                  <p className="text-sm text-muted-foreground">
+                    Période : <strong className="text-foreground">{resolvedDaysCount} derniers jours</strong>
+                    {' '}({Math.ceil(resolvedWindowHours)} créneaux horaires).
+                    {resolvedLoading && ' Chargement en cours…'}
+                    {!resolvedLoading && resolvedHours.length === 0 && !resolvedError && (
+                      <span className="block mt-1 text-amber-600 dark:text-amber-400">Aucun créneau résolu récupéré pour cette période.</span>
+                    )}
+                    {resolvedError && (
+                      <span className="block mt-1 text-red-500 dark:text-red-400">{resolvedError}</span>
+                    )}
+                    {!resolvedLoading && resolvedHours.length > 0 && (
+                      <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
+                    )}
+                  </p>
+                </div>
                 {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
                 {resolvedLoading ? (
                   <p className="text-sm text-muted-foreground">Chargement…</p>
                 ) : resolvedHours.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours.</p>
+                  <p className="text-sm text-muted-foreground">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
                 ) : (
                   <div className="overflow-x-auto rounded-lg border border-border/50">
                     <table className="w-full text-sm border-collapse">
@@ -582,24 +663,44 @@ export function BitcoinUpDownStrategy() {
 
             {resultMode === '15m' && (
               <>
+                {/* Fenêtre de données 15m : toujours visible pour indiquer la période et le statut */}
+                <div className="rounded-xl border border-border/50 bg-muted/10 p-4 space-y-2 mb-4">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Fenêtre de données (15 min)
+                  </h4>
+                  <p className="text-sm text-muted-foreground">
+                    Période : <strong className="text-foreground">{resolvedDaysCount} derniers jours</strong>
+                    {' '}({Math.min(672, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
+                    {resolved15mLoading && ' Chargement en cours…'}
+                    {!resolved15mLoading && resolved15m.length === 0 && !resolved15mError && (
+                      <span className="block mt-1 text-amber-600 dark:text-amber-400">Aucun créneau résolu récupéré pour cette période.</span>
+                    )}
+                    {resolved15mError && (
+                      <span className="block mt-1 text-red-500 dark:text-red-400">{resolved15mError}</span>
+                    )}
+                    {!resolved15mLoading && resolved15m.length > 0 && (
+                      <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolved15m.length} créneau{resolved15m.length !== 1 ? 'x' : ''} chargé{resolved15m.length !== 1 ? 's' : ''} (résolus).</span>
+                    )}
+                  </p>
+                </div>
                 {resolved15mError && <p className="text-sm text-red-500 dark:text-red-400">{resolved15mError}</p>}
                 {resolved15mLoading ? (
                   <p className="text-sm text-muted-foreground">Chargement…</p>
                 ) : resolved15m.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours.</p>
+                  <p className="text-sm text-muted-foreground">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
                 ) : (
                   <>
                     <div className="overflow-x-auto rounded-lg border border-border/50 max-h-[400px] overflow-y-auto">
                       <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0 bg-muted/30 z-10">
                           <tr className="border-b border-border">
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Créneau</th>
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix</th>
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
-                            <th className="text-left py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
-                            <th className="text-right py-2 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
+                            <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -607,28 +708,30 @@ export function BitcoinUpDownStrategy() {
                             const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
                             const netPnl = r.botWon !== null ? backtestResult15m.netPnlMap.get(rowKey) : undefined;
                             return (
-                              <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
-                                <td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{r.hourLabel}</td>
-                                <td className="py-2 px-2 font-medium">
-                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner ?? '—'}
+                              <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
+                                <td className="py-3 px-3 font-medium">
+                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
                                 </td>
-                                <td className="py-2 px-2 text-muted-foreground">
-                                  {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : '—'}
+                                <td className="py-3 px-3 text-muted-foreground">
+                                  {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
                                 </td>
-                                <td className="py-2 px-2">
+                                <td className="py-3 px-3">
                                   {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
                                 </td>
-                                <td className="py-2 px-2">
+                                <td className="py-3 px-3">
                                   {r.botEntryTimestamp != null
                                     ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                                     : '—'}
                                 </td>
-                                <td className="py-2 px-2">
+                                <td className="py-3 px-3">
+                                  {r.botOrderType ?? '—'}
+                                </td>
+                                <td className="py-3 px-3">
                                   {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
                                   {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
-                                  {r.botWon == null && <span className="text-muted-foreground">—</span>}
+                                  {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
                                 </td>
-                                <td className="py-2 px-2 text-right font-medium tabular-nums">
+                                <td className="py-3 px-3 text-right font-medium tabular-nums">
                                   {netPnl !== undefined ? (
                                     <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
                                       {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
