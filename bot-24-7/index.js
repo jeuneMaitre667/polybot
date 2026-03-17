@@ -283,8 +283,9 @@ function appendLiquidityHistory(liquidityUsd) {
     const cutoff = now - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
     arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
     fs.writeFileSync(LIQUIDITY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
-  } catch {
-    // ignore
+    console.log(`Liquidité enregistrée: ${Number(liquidityUsd).toFixed(0)} USD (${arr.length} relevés sur 3 j)`);
+  } catch (e) {
+    console.error('Erreur enregistrement liquidité:', e?.message ?? e);
   }
 }
 
@@ -589,6 +590,8 @@ async function run() {
         allowBelowMin = amountUsd < orderSizeMinUsd;
         console.log(`Mise max (liquidité 97 %) : ${amountUsd.toFixed(2)} $ — ordre plafonné pour ne pas dégrader les profits${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
       }
+    } else if (liquidity === null || liquidity === 0) {
+      console.warn('Liquidité non enregistrée: book CLOB sans offre ≤97 % pour ce créneau (ou erreur API)');
     }
 
     placedKeys.add(key);

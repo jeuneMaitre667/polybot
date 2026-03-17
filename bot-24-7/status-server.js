@@ -211,7 +211,13 @@ const server = http.createServer((req, res) => {
     if (debugRequested) {
       const balancePath = path.join(BOT_DIR, 'balance.json');
       const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
-      payload._debug = { balanceFileExists: fs.existsSync(balancePath), lastOrderFileExists: fs.existsSync(lastOrderPath), botDir: BOT_DIR };
+      const liquidityPath = path.join(BOT_DIR, 'liquidity-history.json');
+      payload._debug = {
+        balanceFileExists: fs.existsSync(balancePath),
+        lastOrderFileExists: fs.existsSync(lastOrderPath),
+        liquidityHistoryFileExists: fs.existsSync(liquidityPath),
+        botDir: BOT_DIR,
+      };
     }
     return json(res, payload);
   }
