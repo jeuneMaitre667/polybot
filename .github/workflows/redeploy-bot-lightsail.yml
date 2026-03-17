@@ -11,6 +11,7 @@ on:
     paths:
       - 'bot-24-7/**'
       - '.github/workflows/redeploy-bot-lightsail.yml'
+  workflow_dispatch: # Lancer à la main : Actions → Redeploy bot on Lightsail → Run workflow
 
 jobs:
   redeploy:
