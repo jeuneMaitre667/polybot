@@ -201,12 +201,13 @@ function toSeconds(t) {
   return Number.isFinite(n) ? (n < 1e12 ? n : Math.floor(n / 1000)) : null;
 }
 
-const ONE_MINUTE_SEC = 60;
+// Règle bot horaire : pas d'entrée dans les 5 dernières minutes avant la fin de l'événement.
+const NO_TRADE_LAST_SEC_HOURLY = 5 * 60;
 
 /**
  * À partir de l'historique du token Up (prix p = proba Up), détermine si le bot aurait pris Up ou Down
  * (règle : côté à 96,8–97 %) et si ça aurait gagné. Retourne aussi l'heure et le type d'ordre (Limit).
- * Règle : pas d'entrée dans la dernière minute avant la fin de l'événement (aligné avec le bot live).
+ * Règle : pas d'entrée dans les 5 dernières minutes avant la fin de l'événement (aligné avec le bot live).
  */
 function computeBotSimulation(history, winner, endDateStr) {
   const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
@@ -225,7 +226,7 @@ function computeBotSimulation(history, winner, endDateStr) {
     const pDown = 1 - pUp;
     const ts = toSeconds(pt?.t ?? pt?.timestamp);
     if (ts == null) continue;
-    if (endTsSec != null && ts >= endTsSec - ONE_MINUTE_SEC) continue;
+    if (endTsSec != null && ts >= endTsSec - NO_TRADE_LAST_SEC_HOURLY) continue;
     if (pUp >= MIN_P && pUp <= MAX_P) return { botWouldTake: 'Up', botWon: winner === 'Up', botEntryPrice: pUp, botEntryTimestamp: ts, botOrderType: 'Limit' };
     if (pDown >= MIN_P && pDown <= MAX_P) return { botWouldTake: 'Down', botWon: winner === 'Down', botEntryPrice: pDown, botEntryTimestamp: ts, botOrderType: 'Limit' };
   }
