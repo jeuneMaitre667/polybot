@@ -78,7 +78,8 @@ const GAMMA_EVENTS_URL = 'https://gamma-api.polymarket.com/events';
 const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CHAIN_ID = 137;
-const MAX_PRICE_LIQUIDITY = 0.97;
+// Plage de prix pour mesurer la liquidité "mise max" (légèrement plus large que le filtre de signaux pour avoir plus de relevés).
+const MAX_PRICE_LIQUIDITY = 0.972;
 const MIN_P = 0.968;
 const MAX_P = 0.97;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
@@ -300,7 +301,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
     for (const level of asks) {
       const p = parseFloat(level?.price ?? level?.[0] ?? 0);
       const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-      if (p <= MAX_PRICE_LIQUIDITY && s > 0) totalUsd += p * s;
+      if (p >= MIN_P && p <= MAX_PRICE_LIQUIDITY && s > 0) totalUsd += p * s;
     }
     return totalUsd > 0 ? totalUsd : null;
   } catch (_) {
@@ -520,9 +521,11 @@ async function run() {
       if (liquidity != null && liquidity > 0) {
         appendLiquidityHistory(liquidity);
         recordedLiquidityWindows.set(key, endMs);
+      } else {
+        console.warn('Liquidité par fenêtre non enregistrée: aucune offre entre 0.968 et 0.972 pour ce créneau (ou erreur API CLOB).');
       }
-    } catch (_) {
-      // ne pas faire échouer le cycle
+    } catch (err) {
+      console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
     }
     await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
   }
