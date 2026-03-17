@@ -618,6 +618,12 @@ async function tryPlaceOrderForSignal(signal) {
   const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
   let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
   const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+  // Enregistrer la mise max pour cette fenêtre dès qu'on a la liquidité (signal valide), même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
+  if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
+    appendLiquidityHistory(liquidity);
+    const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
+    recordedLiquidityWindows.set(key, endMs);
+  }
   let allowBelowMin = false;
   if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
     amountUsd = liquidity;
