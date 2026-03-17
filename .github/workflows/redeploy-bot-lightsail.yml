@@ -1,7 +1,7 @@
-# Dès qu’on push du code (surtout bot-24-7), mise à jour automatique du bot sur Lightsail.
-# Prérequis : ajouter les secrets dans le repo GitHub (Settings → Secrets and variables → Actions) :
-#   - LIGHTSAIL_SSH_KEY : contenu du fichier .pem (clé privée Lightsail)
-#   - LIGHTSAIL_HOST    : IP de l’instance (ex. 34.242.214.109)
+# Dès qu’on push du code (surtout bot-24-7), mise à jour automatique des bots sur Lightsail.
+# Prérequis : secrets dans le repo (Settings → Secrets and variables → Actions) :
+#   Bot horaire : LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST
+#   Bot 15m (optionnel) : LIGHTSAIL_SSH_KEY_15M (ou même clé que horaire), LIGHTSAIL_HOST_15M
 
 name: Redeploy bot on Lightsail
 
@@ -16,7 +16,7 @@ jobs:
   redeploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy bot via SSH
+      - name: Deploy bot horaire via SSH
         env:
           SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
@@ -29,3 +29,21 @@ jobs:
           chmod 600 key.pem
           ssh -i key.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key.pem
+
+      - name: Deploy bot 15m via SSH
+        env:
+          SSH_KEY_15M: ${{ secrets.LIGHTSAIL_SSH_KEY_15M }}
+          SSH_HOST_15M: ${{ secrets.LIGHTSAIL_HOST_15M }}
+        run: |
+          if [ -z "$SSH_HOST_15M" ]; then
+            echo "LIGHTSAIL_HOST_15M non configuré — skip déploiement bot 15m."
+            exit 0
+          fi
+          if [ -z "$SSH_KEY_15M" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY_15M manquant — skip déploiement bot 15m."
+            exit 0
+          fi
+          echo "$SSH_KEY_15M" > key15m.pem
+          chmod 600 key15m.pem
+          ssh -i key15m.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST_15M "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          rm -f key15m.pem
