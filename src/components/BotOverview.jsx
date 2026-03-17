@@ -20,8 +20,8 @@ function computePnl(balanceHistory, currentBalance) {
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const statusUrl15m = DEFAULT_BOT_STATUS_URL_15M;
-  const { data, loading, error } = useBotStatus(statusUrl);
-  const { data: data15m, loading: loading15m, error: error15m } = useBotStatus(statusUrl15m);
+  const { data, loading } = useBotStatus(statusUrl);
+  const { data: data15m, loading: loading15m } = useBotStatus(statusUrl15m);
   const [miseMaxMode, setMiseMaxMode] = useState('1h');
   const [nowTs, setNowTs] = useState(null);
   useEffect(() => {

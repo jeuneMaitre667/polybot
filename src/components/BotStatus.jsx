@@ -41,10 +41,6 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   const uptimeStr = uptimeStrFrom(uptimeMs);
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
-  const balanceUsd = data?.balanceUsd;
-  const lastOrder = data?.lastOrder;
-  const ordersLast24h = data?.ordersLast24h;
-  const winRate = data?.winRate;
 
   return (
     <div className="w-full max-w-sm rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner sm:ml-auto">
