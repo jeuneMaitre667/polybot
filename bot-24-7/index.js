@@ -114,7 +114,7 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
-/** Plafonner la mise à la liquidité disponible à ≤97 % = mise max pour ne pas dégrader les profits (prix d'entrée). USE_LIQUIDITY_CAP=false pour désactiver. */
+/** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
 const walletConfigured = !!privateKey;
 
@@ -602,10 +602,10 @@ async function run() {
       if (useLiquidityCap && amountUsd > liquidity) {
         amountUsd = liquidity;
         allowBelowMin = amountUsd < orderSizeMinUsd;
-        console.log(`Mise max (liquidité 97 %) : ${amountUsd.toFixed(2)} $ — ordre plafonné pour ne pas dégrader les profits${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
+        console.log(`Mise plafonnée à ${amountUsd.toFixed(2)} $ (mise max au prix du marché) pour garder avg price = prix du marché${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
       }
     } else if (liquidity === null || liquidity === 0) {
-      console.warn('Liquidité non enregistrée: book CLOB sans offre ≤97 % pour ce créneau (ou erreur API)');
+      console.warn('Mise max au prix du marché non disponible pour ce créneau (book CLOB ou erreur API)');
     }
 
     placedKeys.add(key);
@@ -616,7 +616,7 @@ async function run() {
       writeLastOrder(orderData);
       appendOrderLog(orderData);
       logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID });
-      const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max 97 % : ${liquidity.toFixed(0)} $` : '';
+      const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max au prix du marché : ${liquidity.toFixed(0)} $` : '';
       console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
     } else {
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
@@ -632,7 +632,7 @@ async function main() {
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
-    if (useLiquidityCap) console.log('Mise max : plafonnée à la liquidité 97 % pour ne pas dégrader les profits (USE_LIQUIDITY_CAP=true).');
+    if (useLiquidityCap) console.log('Règle : si solde > mise max au prix du marché, ordre plafonné à la mise max pour conserver avg price = prix du marché (USE_LIQUIDITY_CAP=true).');
   } else {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
   }
