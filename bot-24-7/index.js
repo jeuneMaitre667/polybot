@@ -628,7 +628,7 @@ async function run() {
 
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
-  console.log(`Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '4 min avant fin' : '1 min avant fin'}`);
+  console.log(`Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '4 min avant fin' : '5 min avant fin'}`);
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
