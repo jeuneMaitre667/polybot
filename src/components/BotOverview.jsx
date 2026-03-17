@@ -249,14 +249,16 @@ export function BotOverview() {
           <p className="mt-2 text-xs text-muted-foreground">
             {hasActiveLiquidity ? (
               <>
-                Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
+                Montant max au prix du marché (sans dégrader le prix moyen). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
                 <span className="block mt-0.5 opacity-80">
                   {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
                   {lastActiveLabel && ` · ${lastActiveLabel}`}
                 </span>
               </>
             ) : (
-              miseMaxMode === '15m' ? 'Relevés liquidité 97 % (marché 15m)' : 'Relevés liquidité 97 % (bot)'
+              miseMaxMode === '15m'
+                ? 'Montant max à miser au prix du marché (15m) sans dégrader le prix moyen.'
+                : 'Montant max à miser au prix du marché (horaire) sans dégrader le prix moyen.'
             )}
           </p>
         </CardContent>

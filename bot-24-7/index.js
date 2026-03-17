@@ -290,18 +290,29 @@ function appendLiquidityHistory(liquidityUsd) {
   }
 }
 
-/** Récupère la liquidité (USD) disponible à ≤97 % pour un token (carnet d'ordres). Retourne null en cas d'erreur. */
+/**
+ * Récupère la mise max au prix du marché : montant max (USD) qu'on peut miser tout en restant
+ * au meilleur ask (prix affiché), sans dégrader le prix moyen (évite "Avg. Price 100¢" quand le marché est à 97¢).
+ * On ne somme que la profondeur au niveau du meilleur ask (dans la plage 96,8–97 %).
+ */
 async function getLiquidityAtTargetUsd(tokenId) {
   if (!tokenId) return null;
   try {
     const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
     const asks = data?.asks ?? [];
-    if (!Array.isArray(asks)) return null;
-    let totalUsd = 0;
-    for (const level of asks) {
+    if (!Array.isArray(asks) || asks.length === 0) return null;
+    const levels = asks.map((level) => {
       const p = parseFloat(level?.price ?? level?.[0] ?? 0);
       const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-      if (p >= MIN_P && p <= MAX_PRICE_LIQUIDITY && s > 0) totalUsd += p * s;
+      return { p, s };
+    }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
+    if (levels.length === 0) return null;
+    levels.sort((a, b) => a.p - b.p);
+    const bestPrice = levels[0].p;
+    let totalUsd = 0;
+    for (const { p, s } of levels) {
+      if (Math.abs(p - bestPrice) > 1e-6) break;
+      totalUsd += p * s;
     }
     return totalUsd > 0 ? totalUsd : null;
   } catch (_) {
@@ -522,7 +533,7 @@ async function run() {
         appendLiquidityHistory(liquidity);
         recordedLiquidityWindows.set(key, endMs);
       } else {
-        console.warn('Liquidité par fenêtre non enregistrée: aucune offre entre 0.968 et 0.972 pour ce créneau (ou erreur API CLOB).');
+        console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.968–0.972) pour ce créneau (ou erreur API CLOB).');
       }
     } catch (err) {
       console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
