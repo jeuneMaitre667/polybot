@@ -83,7 +83,7 @@ const MIN_P = 0.968;
 const MAX_P = 0.97;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
-const ONE_MINUTE_MS = 60 * 1000;
+const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
 const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000; // 4 min pour le marché 15m
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
@@ -319,7 +319,7 @@ function isInLastMinute(signal) {
     endMs = new Date(raw).getTime();
   }
   if (Number.isNaN(endMs)) return false;
-  const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : ONE_MINUTE_MS;
+  const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : NO_TRADE_LAST_MS_HOURLY;
   return Date.now() >= endMs - thresholdMs;
 }
 
