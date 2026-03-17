@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
 export const DEFAULT_BOT_STATUS_URL = import.meta.env.VITE_BOT_STATUS_URL || '';
+/** URL du serveur de statut du bot 15m (optionnel). Ex. http://IP_BOT15M:3001 */
+export const DEFAULT_BOT_STATUS_URL_15M = import.meta.env.VITE_BOT_STATUS_URL_15M || '';
 
 export function useBotStatus(url, refreshIntervalMs = 15000) {
   const [data, setData] = useState(null);

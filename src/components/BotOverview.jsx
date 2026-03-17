@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { DEFAULT_BOT_STATUS_URL, useBotStatus } from '@/hooks/useBotStatus.js';
+import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -10,7 +10,9 @@ function formatUsd(value) {
 
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
+  const statusUrl15m = DEFAULT_BOT_STATUS_URL_15M;
   const { data, loading, error } = useBotStatus(statusUrl);
+  const { data: data15m, loading: loading15m, error: error15m } = useBotStatus(statusUrl15m);
   // Horodatage "maintenant" en state pour éviter Date.now() pendant le render (règle pureté React).
   const [nowTs, setNowTs] = useState(null);
   useEffect(() => {
@@ -53,6 +55,11 @@ export function BotOverview() {
     return new Date(lastAtIso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
   const lastLiquidityLabel = hasLiquidityStats && liquidityStats?.lastAt ? formatLastLiquidityAt(liquidityStats.lastAt, nowTs) : null;
+
+  const liquidityStats15m = data15m?.liquidityStats ?? null;
+  const hasLiquidityStats15m = liquidityStats15m?.count > 0;
+  const lastLiquidityLabel15m = hasLiquidityStats15m && liquidityStats15m?.lastAt ? formatLastLiquidityAt(liquidityStats15m.lastAt, nowTs) : null;
+  const show15mCard = !!statusUrl15m;
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -141,6 +148,39 @@ export function BotOverview() {
           </p>
         </CardContent>
       </Card>
+
+      {show15mCard && (
+        <Card className="border border-border/60 bg-card/90 shadow-card sm:col-span-2 lg:col-span-1">
+          <CardHeader className="pb-1 flex flex-row items-center justify-between gap-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+              Mise max 15m (moy. 3 j)
+            </CardTitle>
+            <Badge variant={data15m?.status === 'online' ? 'secondary' : 'destructive'} className="text-[10px] px-2 py-0.5">
+              {loading15m ? '…' : data15m?.status === 'online' ? '15m en ligne' : error15m || '15m hors ligne'}
+            </Badge>
+          </CardHeader>
+          <CardContent className="pt-1">
+            <p className="text-2xl font-semibold text-slate-50">
+              {hasLiquidityStats15m ? `~${Math.round(liquidityStats15m.avg)} $` : '—'}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {hasLiquidityStats15m ? (
+                <>
+                  Min {Math.round(liquidityStats15m.min)} $ · Max {Math.round(liquidityStats15m.max)} $
+                  <span className="block mt-0.5">{liquidityStats15m.count} relevé{liquidityStats15m.count !== 1 ? 's' : ''} (bot 15m)</span>
+                  {lastLiquidityLabel15m && (
+                    <span className="block mt-0.5" title={liquidityStats15m.lastAt}>
+                      Dernier relevé : {lastLiquidityLabel15m}
+                    </span>
+                  )}
+                </>
+              ) : (
+                'Relevés liquidité 97 % (marché 15m)'
+              )}
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
