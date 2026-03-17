@@ -20,7 +20,7 @@ Pour mettre à jour le bot **à la main** en SSH sur l’instance :
 
 - Crée un repo sur GitHub (ex. `polymarket-dashboard`).
 - Pousse ton code :  
-  `git remote add origin https://github.com/TON_USER/polymarket-dashboard.git`  
+  `git remote add origin https://github.com/jeuneMaitre667/polybot.git`  
   puis `git push -u origin main` (ou `master`).
 
 ## 2. Une seule fois sur Lightsail : configurer l’URL du repo
@@ -34,7 +34,7 @@ nano ~/bot-24-7/.env
 Ajoute une ligne (remplace par ton URL réelle) :
 
 ```
-GIT_REPO_URL=https://github.com/TON_USER/polymarket-dashboard.git
+GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git
 ```
 
 Enregistre (Ctrl+O, Entrée) et quitte (Ctrl+X).

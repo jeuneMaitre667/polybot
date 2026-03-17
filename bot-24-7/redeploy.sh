@@ -20,7 +20,7 @@ if [ -z "$GIT_REPO_URL" ]; then
   echo ""
   echo "⚠️  GIT_REPO_URL non défini."
   echo "   Ajoute dans $ENV_FILE une ligne, par exemple :"
-  echo "   GIT_REPO_URL=https://github.com/TON_USER/polymarket-dashboard.git"
+  echo "   GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git"
   echo ""
   echo "   Puis relance : ~/bot-24-7/redeploy.sh"
   exit 1

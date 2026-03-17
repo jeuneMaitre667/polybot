@@ -46,5 +46,5 @@ jobs:
           fi
           echo "$SSH_KEY_15M" > key15m.pem
           chmod 600 key15m.pem
-          ssh -i key15m.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST_15M "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          ssh -i key15m.pem -o StrictHostKeyChecking=accept-new ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key15m.pem

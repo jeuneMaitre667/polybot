@@ -30,9 +30,9 @@ Sous Windows (PowerShell), tu peux utiliser les mêmes commandes. Si on te deman
 
 Une fois le code sur GitHub, tu peux utiliser le script de redéploiement sur Lightsail :
 
-1. Sur l’instance : ajoute dans `~/bot-24-7/.env` la ligne :
+1. Sur l’instance : ajoute dans `~/bot-24-7/.env` la ligne (ou laisse le workflow le faire au premier déploiement) :
    ```
-   GIT_REPO_URL=https://github.com/TON_USERNAME/polymarket-dashboard.git
+   GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git
    ```
 2. Puis exécute : `~/bot-24-7/redeploy.sh` (après avoir fait `chmod +x ~/bot-24-7/redeploy.sh` une fois).
 
