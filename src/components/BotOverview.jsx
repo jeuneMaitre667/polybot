@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DEFAULT_BOT_STATUS_URL, useBotStatus } from '@/hooks/useBotStatus.js';
@@ -10,6 +11,17 @@ function formatUsd(value) {
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading, error } = useBotStatus(statusUrl);
+  // Horodatage "maintenant" en state pour éviter Date.now() pendant le render (règle pureté React).
+  const [nowTs, setNowTs] = useState(null);
+  useEffect(() => {
+    const update = () => setNowTs(Date.now());
+    const id = setInterval(update, 60000);
+    const t = setTimeout(update, 0); // premier tick en async pour respecter react-hooks/set-state-in-effect
+    return () => {
+      clearInterval(id);
+      clearTimeout(t);
+    };
+  }, []);
 
   if (!statusUrl) return null;
 
@@ -27,12 +39,12 @@ export function BotOverview() {
   const liquidityStats = data?.liquidityStats ?? null;
   const hasLiquidityStats = liquidityStats?.count > 0;
 
-  /** Affiche "il y a X min" ou "il y a X h" ou la date si > 24 h. */
-  function formatLastLiquidityAt(lastAtIso) {
+  /** Affiche "il y a X min" ou "il y a X h" ou la date si > 24 h. nowTs = timestamp actuel (évite impureté en render). */
+  function formatLastLiquidityAt(lastAtIso, nowTsVal) {
     if (!lastAtIso) return null;
+    if (nowTsVal == null) return new Date(lastAtIso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
     const then = new Date(lastAtIso).getTime();
-    const now = Date.now();
-    const diffMs = now - then;
+    const diffMs = nowTsVal - then;
     const diffMin = Math.floor(diffMs / 60000);
     const diffH = Math.floor(diffMin / 60);
     if (diffMin < 1) return 'à l\'instant';
@@ -40,7 +52,7 @@ export function BotOverview() {
     if (diffH < 24) return `il y a ${diffH} h`;
     return new Date(lastAtIso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
-  const lastLiquidityLabel = hasLiquidityStats && liquidityStats?.lastAt ? formatLastLiquidityAt(liquidityStats.lastAt) : null;
+  const lastLiquidityLabel = hasLiquidityStats && liquidityStats?.lastAt ? formatLastLiquidityAt(liquidityStats.lastAt, nowTs) : null;
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
