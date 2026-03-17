@@ -8,6 +8,22 @@ vi.mock('./components/BotStatus', () => ({
   BotStatusBadge: () => <div data-testid="bot-status-badge">BotStatusBadge</div>,
 }));
 
+vi.mock('./components/BotOverview', () => ({
+  BotOverview: () => <div data-testid="bot-overview">BotOverview</div>,
+}));
+
+vi.mock('./components/BitcoinUpDownStrategy', () => ({
+  BitcoinUpDownStrategy: () => <div data-testid="bitcoin-strategy">BitcoinUpDownStrategy</div>,
+}));
+
+vi.mock('./components/TradeHistory', () => ({
+  TradeHistory: () => <div data-testid="trade-history">TradeHistory</div>,
+}));
+
+vi.mock('./components/CompoundInterestCalculator', () => ({
+  CompoundInterestCalculator: () => <div data-testid="compound-calculator">CompoundInterestCalculator</div>,
+}));
+
 function TestWrapper({ children }) {
   return <WalletProvider>{children}</WalletProvider>;
 }
@@ -26,6 +42,7 @@ describe('App', () => {
   it('renders main sections', () => {
     render(<App />, { wrapper: TestWrapper });
     expect(screen.getByRole('main')).toBeInTheDocument();
-    expect(screen.getByText(/Solde bot/)).toBeInTheDocument();
+    expect(screen.getByTestId('bot-overview')).toBeInTheDocument();
+    expect(screen.getByTestId('bitcoin-strategy')).toBeInTheDocument();
   });
 });
