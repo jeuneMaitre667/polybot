@@ -19,7 +19,14 @@ import { ethers } from 'ethers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
+import WebSocket from 'ws';
 import axios from 'axios';
+
+const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+const WS_RECONNECT_MS = 5000;
+const WS_REFRESH_SUBSCRIPTIONS_MS = 30 * 1000;
+const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion alive
+const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 300; // évite rafales d'ordres sur même token
 
 /** Dossier du bot (où se trouve index.js), pour que balance.json et last-order.json soient toujours dans ~/bot-24-7 même si PM2 a été lancé depuis un autre répertoire. */
 const BOT_DIR = path.resolve(__dirname);
@@ -29,6 +36,7 @@ const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
 const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
 const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
+const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
 
@@ -42,6 +50,20 @@ function logJson(level, message, meta = {}) {
 function writeLastOrder(data) {
   try {
     fs.writeFileSync(LAST_ORDER_FILE, JSON.stringify(data), 'utf8');
+  } catch (_) {}
+}
+
+/** Met à jour health.json (lu par status-server pour /api/bot-status). Fusionne updates avec l'état existant. */
+function writeHealth(updates) {
+  try {
+    let state = { wsConnected: false, lastOrderAt: null, lastOrderSource: null, geoblockOk: null, killSwitchActive: false, at: null };
+    try {
+      const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
+      const prev = JSON.parse(raw);
+      if (prev && typeof prev === 'object') state = { ...state, ...prev };
+    } catch (_) {}
+    state = { ...state, ...updates, at: new Date().toISOString() };
+    fs.writeFileSync(HEALTH_FILE, JSON.stringify(state), 'utf8');
   } catch (_) {}
 }
 
@@ -77,11 +99,12 @@ function appendOrderLog(obj) {
 const GAMMA_EVENTS_URL = 'https://gamma-api.polymarket.com/events';
 const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
+const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Plage de prix pour mesurer la liquidité "mise max" (légèrement plus large que le filtre de signaux pour avoir plus de relevés).
-const MAX_PRICE_LIQUIDITY = 0.972;
-const MIN_P = 0.968;
-const MAX_P = 0.97;
+// Fenêtre de prix pour signaux et mise max : 97 % – 97,5 % (plus de signaux qu’à 96,8–97 %).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.97;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.975;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.975;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
@@ -109,13 +132,15 @@ const useBalanceAsSize = process.env.USE_BALANCE_AS_SIZE !== 'false';
 const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
 /** Ordre au marché par défaut (exécution immédiate, latence min). USE_MARKET_ORDER=false pour ordre limite. */
 const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
-const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 3;
+const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
+/** Réagir en temps réel aux changements de prix via WebSocket CLOB (best_bid_ask). USE_WEBSOCKET=false pour ne faire que du polling. */
+const useWebSocket = process.env.USE_WEBSOCKET !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
@@ -124,6 +149,9 @@ let provider = new ethers.JsonRpcProvider(polygonRpc, CHAIN_ID);
 const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
+
+/** Type de wallet CLOB (doc Polymarket) : 0 = EOA (clé privée standalone), 1 = POLY_PROXY (Magic), 2 = GNOSIS_SAFE (MetaMask/Privy). On utilise une EOA. */
+const CLOB_SIGNATURE_TYPE_EOA = 0;
 
 const GEOBLOCK_URL = 'https://polymarket.com/api/geoblock';
 /** USDC sur Polygon (USDC.e bridged, 6 decimals). */
@@ -320,7 +348,19 @@ async function getLiquidityAtTargetUsd(tokenId) {
   }
 }
 
-/** Pas de trade si l'événement se termine dans moins de X ms (1 min horaire, 4 min 15m). */
+/** Récupère le meilleur ask actuel pour un token (validation avant placement WS). */
+async function getBestAsk(tokenId) {
+  if (!tokenId) return null;
+  try {
+    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'BUY' }, timeout: 3000 });
+    const p = parseFloat(data?.price);
+    return Number.isFinite(p) ? p : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Pas de trade si l'événement se termine dans moins de X ms (5 min horaire, 4 min 15m). */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
@@ -391,6 +431,49 @@ async function fetchSignals() {
 }
 
 /** Vérifie si l’IP est autorisée à trader (geoblock). */
+/** Récupère les token IDs des marchés actifs (Up + Down) pour s'abonner au WebSocket CLOB. Retourne { tokenIds, tokenToSignal }. */
+async function getActiveMarketTokensForWs() {
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  let events = [];
+  try {
+    const { data } = await axios.get(GAMMA_EVENTS_URL, {
+      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+      timeout: 15000,
+    });
+    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 400) {
+      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    } else throw err;
+  }
+  const tokenIds = [];
+  const tokenToSignal = new Map();
+  for (const ev of events) {
+    if (!ev?.markets?.length) continue;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+    if (!eventSlug.includes(slugMatch)) continue;
+    const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+    for (const m of ev.markets) {
+      const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
+      const ids = m.clobTokenIds ?? m.clob_token_ids;
+      const tokens = m.tokens;
+      const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
+      const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
+      if (tokenIdUp) {
+        tokenIds.push(tokenIdUp);
+        tokenToSignal.set(tokenIdUp, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Up', endDate, tokenIdToBuy: tokenIdUp, priceUp: 0.97, priceDown: 0.03 });
+      }
+      if (tokenIdDown) {
+        tokenIds.push(tokenIdDown);
+        tokenToSignal.set(tokenIdDown, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Down', endDate, tokenIdToBuy: tokenIdDown, priceUp: 0.03, priceDown: 0.97 });
+      }
+    }
+  }
+  return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
+}
+
+/** Vérifie si l'IP est autorisée à trader (geoblock). */
 async function checkGeoblock() {
   try {
     const { data } = await axios.get(GEOBLOCK_URL, { timeout: 10000 });
@@ -442,7 +525,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       if (!client) {
         const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
         const creds = await clientWithoutCreds.createOrDeriveApiKey();
-        client = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds);
+        client = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
       }
       const options = { negRisk: false };
 
@@ -475,8 +558,11 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       return { ok: true, orderID: result?.orderID ?? result?.id };
     } catch (err) {
       lastError = err.message;
-      const is429 = String(err.message || err.response?.status).includes('429') || err.response?.status === 429;
-      const isRetryable = is429 || /timeout|network|ECONNRESET/i.test(String(err.message));
+      const status = err.response?.status;
+      const is429 = status === 429 || String(err.message || status).includes('429');
+      const is425 = status === 425; // Matching engine restart (mardi 7h ET, ~90s) — doc Polymarket
+      const isRetryable = is429 || is425 || /timeout|network|ECONNRESET/i.test(String(err.message));
+      if (is425) console.warn('CLOB: moteur de matching en redémarrage (425), retry…');
       if (isRetryable && attempt < ORDER_RETRY_ATTEMPTS - 1) {
         const delay = ORDER_RETRY_BASE_MS * Math.pow(2, attempt);
         console.warn(`Tentative ${attempt + 1}/${ORDER_RETRY_ATTEMPTS} échouée, retry dans ${delay}ms…`);
@@ -489,6 +575,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   consecutiveOrderErrors += 1;
   if (consecutiveOrderErrors >= 5 && !killSwitchActive) {
     killSwitchActive = true;
+    writeHealth({ killSwitchActive: true });
     logJson('error', 'Kill switch activé: trop d’erreurs CLOB consécutives, annulation de tous les ordres.', {
       consecutiveOrderErrors,
       lastError,
@@ -503,12 +590,149 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   return { ok: false, error: lastError };
 }
 
+/** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Valide le prix côté REST avant de placer, calcule la taille (solde / plafond liquidité), place l'ordre et enregistre. */
+async function tryPlaceOrderForSignal(signal) {
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
+  const key = getSignalKey(signal);
+  if (placedKeys.has(key)) return;
+  if (isInLastMinute(signal)) return;
+  const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
+  if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
+    logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
+    return;
+  }
+  const signalWithPrice = {
+    ...signal,
+    priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
+    priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
+  };
+  let clobClient = null;
+  try {
+    const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+    const creds = await clientWithoutCreds.createOrDeriveApiKey();
+    clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+  } catch (err) {
+    console.warn('WebSocket tryPlace: CLOB client:', err.message);
+    return;
+  }
+  const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
+  let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
+  const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+  let allowBelowMin = false;
+  if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
+    amountUsd = liquidity;
+    allowBelowMin = amountUsd < orderSizeMinUsd;
+  }
+  if (amountUsd < orderSizeMinUsd && !allowBelowMin) return;
+  placedKeys.add(key);
+  const result = await placeOrder(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
+  const time = new Date().toISOString();
+  if (result.ok) {
+    writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
+    const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
+    writeLastOrder(orderData);
+    appendOrderLog(orderData);
+    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID });
+    const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max: ${liquidity.toFixed(0)} $` : '';
+    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID}`);
+  } else {
+    placedKeys.delete(key);
+    logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
+    console.error(`[${time}] [WS] Erreur ${signalWithPrice.takeSide}: ${result.error}`);
+  }
+}
+
 // ——— Boucle principale ———
 const placedKeys = new Set();
 /** Fenêtres pour lesquelles on a déjà enregistré un relevé de liquidité (une fois par créneau = montant max par fenêtre pour le dashboard). */
 const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
+
+// ——— WebSocket CLOB (temps réel) ———
+const wsState = { tokenToSignal: new Map(), tokenIds: [] };
+const wsDebounceTimers = new Map(); // assetId -> { timeoutId, signal }
+let wsRefreshTimer = null;
+let wsPingTimer = null;
+let wsReconnectTimer = null;
+let clobWs = null;
+
+function sendWsSubscribe(ws, tokenIds) {
+  if (!tokenIds?.length || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify({
+      type: 'market',
+      assets_ids: tokenIds,
+      custom_feature_enabled: true,
+    }));
+  } catch (err) {
+    console.warn('WS send subscribe:', err.message);
+  }
+}
+
+async function refreshWsSubscriptions(ws) {
+  try {
+    const { tokenIds, tokenToSignal } = await getActiveMarketTokensForWs();
+    wsState.tokenIds = tokenIds;
+    wsState.tokenToSignal = tokenToSignal;
+    sendWsSubscribe(ws, tokenIds);
+  } catch (err) {
+    console.warn('WS refresh subscriptions:', err.message);
+  }
+}
+
+function startClobWs() {
+  if (!useWebSocket || !walletConfigured) return;
+  try {
+    clobWs = new WebSocket(CLOB_WS_URL);
+  } catch (err) {
+    console.warn('WebSocket create:', err.message);
+    wsReconnectTimer = setTimeout(startClobWs, WS_RECONNECT_MS);
+    return;
+  }
+  clobWs.on('open', async () => {
+    writeHealth({ wsConnected: true });
+    console.log('WebSocket CLOB connecté — abonnement best_bid_ask (temps réel).');
+    await refreshWsSubscriptions(clobWs);
+    wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
+    wsPingTimer = setInterval(() => { if (clobWs?.readyState === WebSocket.OPEN) clobWs.ping(); }, WS_PING_INTERVAL_MS);
+  });
+  clobWs.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw.toString());
+      if (data?.event_type !== 'best_bid_ask') return;
+      const assetId = String(data.asset_id ?? '');
+      const bestAsk = parseFloat(data.best_ask);
+      if (!assetId || !Number.isFinite(bestAsk) || bestAsk < MIN_P || bestAsk > MAX_P) return;
+      const sig = wsState.tokenToSignal.get(assetId);
+      if (!sig) return;
+      const signal = {
+        ...sig,
+        priceUp: sig.takeSide === 'Up' ? bestAsk : 1 - bestAsk,
+        priceDown: sig.takeSide === 'Down' ? bestAsk : 1 - bestAsk,
+      };
+      let entry = wsDebounceTimers.get(assetId);
+      if (entry) clearTimeout(entry.timeoutId);
+      const timeoutId = setTimeout(() => {
+        wsDebounceTimers.delete(assetId);
+        tryPlaceOrderForSignal(signal);
+      }, WS_DEBOUNCE_MS);
+      wsDebounceTimers.set(assetId, { timeoutId, signal });
+    } catch (_) {}
+  });
+  clobWs.on('close', () => {
+    writeHealth({ wsConnected: false });
+    if (wsRefreshTimer) clearInterval(wsRefreshTimer);
+    if (wsPingTimer) clearInterval(wsPingTimer);
+    wsRefreshTimer = null;
+    wsPingTimer = null;
+    clobWs = null;
+    wsReconnectTimer = setTimeout(startClobWs, WS_RECONNECT_MS);
+  });
+  clobWs.on('error', (err) => {
+    console.warn('WebSocket CLOB erreur:', err.message);
+  });
+}
 
 async function run() {
   const signals = await fetchSignals();
@@ -533,7 +757,7 @@ async function run() {
         appendLiquidityHistory(liquidity);
         recordedLiquidityWindows.set(key, endMs);
       } else {
-        console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.968–0.972) pour ce créneau (ou erreur API CLOB).');
+        console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
       }
     } catch (err) {
       console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
@@ -551,7 +775,7 @@ async function run() {
   try {
     const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
     const creds = await clientWithoutCreds.createOrDeriveApiKey();
-    clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds);
+    clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
   } catch (err) {
     console.warn('CLOB client (solde/ordres):', err.message);
   }
@@ -612,6 +836,7 @@ async function run() {
     const result = await placeOrder(s, amountUsd, clobClient, { allowBelowMin });
     const time = new Date().toISOString();
     if (result.ok) {
+      writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
       const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
@@ -632,6 +857,7 @@ async function main() {
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
+    if (useWebSocket) console.log('WebSocket CLOB activé (best_bid_ask) — réaction en temps réel aux changements de prix.');
     if (useLiquidityCap) console.log('Règle : si solde > mise max au prix du marché, ordre plafonné à la mise max pour conserver avg price = prix du marché (USE_LIQUIDITY_CAP=true).');
   } else {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
@@ -641,10 +867,13 @@ async function main() {
   }
 
   const allowed = await checkGeoblock();
+  writeHealth({ geoblockOk: !!allowed });
   if (!allowed) {
     process.exit(1);
   }
   console.log('—');
+
+  if (useWebSocket) startClobWs();
 
   const pollMs = pollIntervalSec * 1000;
   for (;;) {

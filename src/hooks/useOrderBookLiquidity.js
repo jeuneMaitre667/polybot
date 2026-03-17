@@ -3,12 +3,13 @@ import axios from 'axios';
 
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 
-/** Prix max qu'on accepte pour le signal (97 %). Au-delà, on considère que ça dégrade les gains. */
-const MAX_PRICE_TARGET = 0.97;
+/** Fenêtre de prix pour la liquidité affichée : 97 % – 97,5 % (aligné avec le bot). */
+const MIN_PRICE_TARGET = 0.97;
+const MAX_PRICE_TARGET = 0.975;
 
 /**
  * Récupère le carnet d'ordres pour un token et calcule la liquidité (en USD) disponible
- * à notre prix cible (≤ 97 %). La moyenne sur 3 jours est collectée par le bot et exposée via l'API status.
+ * dans la bande 97 % – 97,5 %. La moyenne sur 3 jours est collectée par le bot et exposée via l'API status.
  * @param {string | null} tokenId - token_id du côté à acheter (Up ou Down)
  * @returns {{ liquidityUsd: number | null, loading: boolean, error: string | null, refresh: () => void }}
  */
@@ -39,7 +40,7 @@ export function useOrderBookLiquidity(tokenId) {
       for (const level of asks) {
         const p = parseFloat(level?.price ?? level?.[0] ?? 0);
         const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-        if (p <= MAX_PRICE_TARGET && s > 0) {
+        if (p >= MIN_PRICE_TARGET && p <= MAX_PRICE_TARGET && s > 0) {
           totalUsd += p * s;
         }
       }

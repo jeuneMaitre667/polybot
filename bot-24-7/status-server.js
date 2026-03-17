@@ -111,6 +111,20 @@ function getStats24h() {
   return { ordersLast24h, winRate };
 }
 
+/** Lit health.json (écrit par le bot : WS, dernier ordre, geoblock, kill switch). */
+function getHealth() {
+  const o = readJsonFile(path.join(BOT_DIR, 'health.json'));
+  if (!o || typeof o !== 'object') return null;
+  return {
+    wsConnected: !!o.wsConnected,
+    lastOrderAt: o.lastOrderAt ?? null,
+    lastOrderSource: o.lastOrderSource ?? null,
+    geoblockOk: o.geoblockOk,
+    killSwitchActive: !!o.killSwitchActive,
+    at: o.at ?? null,
+  };
+}
+
 /** Lit liquidity-history.json (relevés du bot) et retourne { avg, min, max, count, lastAt } sur les 3 derniers jours. lastAt = date ISO du dernier relevé (pour vérifier si le bot a récupéré des données en 1 h). */
 function getLiquidityStats() {
   try {
@@ -145,7 +159,7 @@ function getBotConfig() {
   try {
     const raw = fs.readFileSync(envPath, 'utf8');
     let useMarketOrder = true;
-    let pollIntervalSec = 3;
+    let pollIntervalSec = 1;
     for (const line of raw.split('\n')) {
       const t = line.replace(/#.*/, '').trim();
       if (t.startsWith('USE_MARKET_ORDER=')) {
@@ -158,7 +172,7 @@ function getBotConfig() {
     }
     return { useMarketOrder, pollIntervalSec };
   } catch {
-    return { useMarketOrder: true, pollIntervalSec: 3 };
+    return { useMarketOrder: true, pollIntervalSec: 1 };
   }
 }
 
@@ -216,6 +230,7 @@ const server = http.createServer((req, res) => {
         balanceFileExists: fs.existsSync(balancePath),
         lastOrderFileExists: fs.existsSync(lastOrderPath),
         liquidityHistoryFileExists: fs.existsSync(liquidityPath),
+        healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
         botDir: BOT_DIR,
       };
     }

@@ -1,4 +1,3 @@
-import { CompoundInterestCalculator } from './components/CompoundInterestCalculator';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
 import { BotStatusBadge } from './components/BotStatus';
 import { DEFAULT_BOT_STATUS_URL_15M } from './hooks/useBotStatus.js';
@@ -38,7 +37,6 @@ export default function App() {
             </div>
             <div className="space-y-8">
               <TradeHistory />
-              <CompoundInterestCalculator />
             </div>
           </div>
         </div>

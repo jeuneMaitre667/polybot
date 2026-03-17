@@ -28,7 +28,7 @@ if [ ! -f .env ]; then
   echo "MARKET_MODE=15m" > .env
   echo "PRIVATE_KEY=0xREMPLACE_PAR_TA_CLE" >> .env
   echo "USE_MARKET_ORDER=true" >> .env
-  echo "POLL_INTERVAL_SEC=3" >> .env
+  echo "POLL_INTERVAL_SEC=1" >> .env
   echo "USE_BALANCE_AS_SIZE=true" >> .env
 fi
 grep -q '^MARKET_MODE=' .env 2>/dev/null && sed -i.bak 's/^MARKET_MODE=.*/MARKET_MODE=15m/' .env || echo "MARKET_MODE=15m" >> .env

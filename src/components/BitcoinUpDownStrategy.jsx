@@ -252,7 +252,7 @@ export function BitcoinUpDownStrategy() {
     setPlacingFor(null);
   };
 
-  // Le bot place l'ordre à ta place dès qu'un signal 96,8–97 % apparaît
+  // Le bot place l'ordre à ta place dès qu'un signal 97–97,5 % apparaît
   useEffect(() => {
     if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
     const toPlace = signals.filter(
@@ -285,7 +285,7 @@ export function BitcoinUpDownStrategy() {
             <div>
               <CardTitle className="text-xl font-semibold tracking-tight">Stratégie Bitcoin Up or Down</CardTitle>
               <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                Signal 96,8–97 % sur les créneaux horaires Bitcoin Up or Down (Polymarket). Un pari par créneau, ordre limite, réinvestissement du solde — objectif environ 3 % par heure.
+                Signal 97–97,5 % sur les créneaux Bitcoin Up or Down (Polymarket), horaires ou 15 min. Un pari par créneau, ordre au marché (FOK), réinvestissement du solde — objectif environ 3 % par créneau.
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-3">
                 <a
@@ -321,11 +321,10 @@ export function BitcoinUpDownStrategy() {
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Choisir Up ou Down selon ta lecture (tendance, support/résistance, ou valeur des cotes).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Miser une fraction du solde (ex. 80–100 % si tu veux « tout réinvestir »).</li>
               <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Après résolution : réinvestir tout le solde (capital + gains) sur le créneau suivant.</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 96,8–97 % : on achète le <strong>favori</strong> (le côté à 96,8–97 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Utiliser le simulateur par heure ci-dessous pour projeter où tu peux arriver sur 24 h, 1 semaine, etc.</li>
+              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 97–97,5 % : on achète le <strong>favori</strong> (le côté à 97–97,5 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
             </ul>
             <div className="mt-3 pt-3 border-t border-border/40 flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">Afficher la taille max suggérée (liquidité à 97 %) :</span>
+              <span className="text-xs text-muted-foreground">Afficher la taille max suggérée (liquidité à 97–97,5 %) :</span>
               <button
                 type="button"
                 onClick={toggleShowLiquiditySuggestion}
@@ -343,7 +342,7 @@ export function BitcoinUpDownStrategy() {
                 Taille max suggérée (sans dégrader les gains)
               </h3>
               <p className="text-xs text-muted-foreground mb-2">
-                Liquidité disponible à 96,8–97 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour limiter le slippage.
+                Liquidité disponible à 97–97,5 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour limiter le slippage.
               </p>
               {liquidityLoading ? (
                 <span className="text-sm text-muted-foreground">Chargement du carnet…</span>
@@ -375,7 +374,7 @@ export function BitcoinUpDownStrategy() {
                   )}
                 </div>
               ) : currentSignalTokenId ? (
-                <span className="text-sm text-muted-foreground">Aucune liquidité à ≤97 % pour l’instant.</span>
+                <span className="text-sm text-muted-foreground">Aucune liquidité à 97–97,5 % pour l’instant.</span>
               ) : null}
             </div>
           )}
@@ -482,7 +481,7 @@ export function BitcoinUpDownStrategy() {
                   Résultats passés
                 </h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Créneaux Bitcoin Up or Down déjà résolus. Simulation 96,8–97 % via l’historique CLOB.
+                  Créneaux Bitcoin Up or Down déjà résolus. Simulation alignée sur le bot : fenêtre 97–97,5 %, ordre au marché, pas de trade dans les 5 dernières min (horaires) ou 4 min (15 min). Données via l’historique CLOB.
                 </p>
               </div>
               <div className="flex rounded-lg border border-border/60 p-0.5 bg-muted/30">
@@ -523,6 +522,9 @@ export function BitcoinUpDownStrategy() {
                     {!resolvedLoading && resolvedHours.length > 0 && (
                       <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
                     )}
+                    <span className="block mt-2 text-xs text-muted-foreground/90">
+                      Même règles que le bot : prix dans 97–97,5 % et pas d&apos;entrée dans les 5 dernières minutes du créneau. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
+                    </span>
                   </p>
                 </div>
                 {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
@@ -595,7 +597,7 @@ export function BitcoinUpDownStrategy() {
                     return (
                       <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                         <p>
-                          Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 96,8–97 %.
+                          Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 97–97,5 %.
                         </p>
                         {initialBalance > 0 && (
                           <p>
@@ -681,6 +683,9 @@ export function BitcoinUpDownStrategy() {
                     {!resolved15mLoading && resolved15m.length > 0 && (
                       <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolved15m.length} créneau{resolved15m.length !== 1 ? 'x' : ''} chargé{resolved15m.length !== 1 ? 's' : ''} (résolus).</span>
                     )}
+                    <span className="block mt-2 text-xs text-muted-foreground/90">
+                      Même règles que le bot : prix dans 97–97,5 % et pas d&apos;entrée dans les 4 dernières minutes du créneau 15 min. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
+                    </span>
                   </p>
                 </div>
                 {resolved15mError && <p className="text-sm text-red-500 dark:text-red-400">{resolved15mError}</p>}
@@ -747,7 +752,7 @@ export function BitcoinUpDownStrategy() {
                     {backtestResult15m.withSimul.length > 0 && (
                       <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                         <p>
-                          Simulation : <strong>{backtestResult15m.won}</strong> gagnés / <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 96,8–97 %.
+                          Simulation : <strong>{backtestResult15m.won}</strong> gagnés / <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 97–97,5 %.
                         </p>
                         {initialBalance > 0 && (
                           <p>
@@ -870,7 +875,7 @@ export function BitcoinUpDownStrategy() {
               Paramètres de session
             </h3>
             <p className="text-sm text-muted-foreground">
-              Objectif : <strong className="text-primary">environ 3 % par heure</strong> (réinvestissement du solde à chaque créneau).
+              Objectif : <strong className="text-primary">environ 3 % par créneau</strong> (réinvestissement du solde à chaque créneau ; horaire ou 15 min selon le bot).
             </p>
             <div className="flex flex-wrap items-end gap-4">
               <div className="space-y-1 min-w-[140px]">

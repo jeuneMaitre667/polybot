@@ -191,7 +191,7 @@ export function BotOverview() {
         <CardHeader className="pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Mise max (moy. 3 j)
+              Mise max au prix 97–97,5 % (moy. 3 j)
             </CardTitle>
             {show15m && (
             <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
@@ -249,7 +249,7 @@ export function BotOverview() {
           <p className="mt-2 text-xs text-muted-foreground">
             {hasActiveLiquidity ? (
               <>
-                Montant max au prix du marché (sans dégrader le prix moyen). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
+                Profondeur au meilleur ask (97–97,5 %) : montant max à miser sans dégrader le prix moyen. Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
                 <span className="block mt-0.5 opacity-80">
                   {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
                   {lastActiveLabel && ` · ${lastActiveLabel}`}
@@ -257,8 +257,8 @@ export function BotOverview() {
               </>
             ) : (
               miseMaxMode === '15m'
-                ? 'Montant max à miser au prix du marché (15m) sans dégrader le prix moyen.'
-                : 'Montant max à miser au prix du marché (horaire) sans dégrader le prix moyen.'
+                ? 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux 15 min. Relevés envoyés par le bot.'
+                : 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux horaires. Relevés envoyés par le bot.'
             )}
           </p>
         </CardContent>

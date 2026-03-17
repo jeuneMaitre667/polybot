@@ -56,8 +56,8 @@ fi
 # Appliquer la config recommandée (ordre au marché, poll 3s) sans écraser PRIVATE_KEY
 if [ -f "$BOT_DIR/.env" ]; then
   grep -q '^USE_MARKET_ORDER=' "$BOT_DIR/.env" && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' "$BOT_DIR/.env" || echo "USE_MARKET_ORDER=true" >> "$BOT_DIR/.env"
-  grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=3/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=3" >> "$BOT_DIR/.env"
-  echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=3"
+  grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=1/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=1" >> "$BOT_DIR/.env"
+  echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=1"
 fi
 
 echo ""

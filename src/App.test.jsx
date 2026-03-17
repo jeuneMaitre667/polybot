@@ -20,10 +20,6 @@ vi.mock('./components/TradeHistory', () => ({
   TradeHistory: () => <div data-testid="trade-history">TradeHistory</div>,
 }));
 
-vi.mock('./components/CompoundInterestCalculator', () => ({
-  CompoundInterestCalculator: () => <div data-testid="compound-calculator">CompoundInterestCalculator</div>,
-}));
-
 function TestWrapper({ children }) {
   return <WalletProvider>{children}</WalletProvider>;
 }

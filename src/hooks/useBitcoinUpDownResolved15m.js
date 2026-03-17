@@ -7,8 +7,8 @@ const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'ht
 const CLOB_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
 const DATA_API_TRADES_URL = 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
-const MIN_P = 0.968;
-const MAX_P = 0.97;
+const MIN_P = 0.97;
+const MAX_P = 0.975;
 
 function parseOutcomePrices(market) {
   try {
@@ -196,8 +196,8 @@ function computeBotSimulation(history, winner, endDateStr) {
     const ts = toSeconds(pt?.t ?? pt?.timestamp);
     if (ts == null) continue;
     if (endTsSec != null && ts >= endTsSec - NO_TRADE_LAST_SEC_15M) continue;
-    if (pUp >= MIN_P && pUp <= MAX_P) return { botWouldTake: 'Up', botWon: winner === 'Up', botEntryPrice: pUp, botEntryTimestamp: ts, botOrderType: 'Limit' };
-    if (pDown >= MIN_P && pDown <= MAX_P) return { botWouldTake: 'Down', botWon: winner === 'Down', botEntryPrice: pDown, botEntryTimestamp: ts, botOrderType: 'Limit' };
+    if (pUp >= MIN_P && pUp <= MAX_P) return { botWouldTake: 'Up', botWon: winner === 'Up', botEntryPrice: pUp, botEntryTimestamp: ts, botOrderType: 'Marché' };
+    if (pDown >= MIN_P && pDown <= MAX_P) return { botWouldTake: 'Down', botWon: winner === 'Down', botEntryPrice: pDown, botEntryTimestamp: ts, botOrderType: 'Marché' };
   }
   return empty;
 }

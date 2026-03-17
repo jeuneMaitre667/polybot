@@ -30,8 +30,8 @@ if [ ! -f .env ]; then
 else
   echo "Le fichier .env existe déjà."
   grep -q '^USE_MARKET_ORDER=' .env 2>/dev/null && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' .env || echo "USE_MARKET_ORDER=true" >> .env
-  grep -q '^POLL_INTERVAL_SEC=' .env 2>/dev/null && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=3/' .env || echo "POLL_INTERVAL_SEC=3" >> .env
-  echo "USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=3 appliqués (latence min)."
+  grep -q '^POLL_INTERVAL_SEC=' .env 2>/dev/null && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=1/' .env || echo "POLL_INTERVAL_SEC=1" >> .env
+  echo "USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=1 appliqués (surveillance 1 s)."
 fi
 
 echo ""

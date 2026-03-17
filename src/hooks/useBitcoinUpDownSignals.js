@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
-const MIN_PRICE = 0.968;
-const MAX_PRICE = 0.97;
+const MIN_PRICE = 0.97;
+const MAX_PRICE = 0.975;
 
 // Uniquement les événements "Bitcoin Up or Down - Hourly" (slug du type bitcoin-up-or-down-march-14-6pm-et)
 const BITCOIN_UP_DOWN_HOURLY_SLUG = 'bitcoin-up-or-down';
@@ -32,7 +32,7 @@ function getTokenIdToBuy(market, takeSide) {
 }
 
 /**
- * Détecte les marchés Bitcoin Up or Down - Hourly où un des deux prix est entre 96,8 % et 97 %.
+ * Détecte les marchés Bitcoin Up or Down - Hourly où un des deux prix est entre 97 % et 97,5 %.
  * Cible: https://polymarket.com/event/bitcoin-up-or-down-...
  */
 export function useBitcoinUpDownSignals() {

@@ -26,7 +26,7 @@ npm start
 | `POLYGON_RPC_URL` | RPC Polygon | `https://polygon-rpc.com` |
 | `ORDER_SIZE_USD` | Montant par ordre en USDC | 10 |
 | `USE_MARKET_ORDER` | `true` = marché, `false` = limite | true |
-| `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 3 |
+| `POLL_INTERVAL_SEC` | Intervalle de surveillance (secondes) | 1 |
 | `REDEEM_ENABLED` | Tenter de redeem les tokens gagnants en USDC à chaque cycle (marchés résolus) | true |
 | `USE_LIQUIDITY_CAP` | **Mise max** : plafonner la mise à la liquidité disponible à 97 % pour ne pas dégrader les profits (prix d'entrée dégradé si on dépasse) | true |
 
@@ -101,9 +101,9 @@ La doc indique : **Primary Servers** = `eu-west-2`, **Closest Non-Georestricted 
 ## Recommandations (d’après la doc Polymarket) pour que les trades passent bien
 
 1. **Vérifier le géobloc au démarrage** — [Geographic Restrictions](https://docs.polymarket.com/api-reference/geoblock) : appeler `GET https://polymarket.com/api/geoblock` et ne pas placer d’ordres si `blocked: true`. Le script le fait au lancement.
-2. **Rate limits** — [Rate Limits](https://docs.polymarket.com/api-reference/rate-limits) : ne pas dépasser les limites (ex. burst 3 500 req/10s pour POST /order). Rester à un poll ≥ 10 s et un seul ordre à la fois ; en cas de 429, utiliser un retry avec backoff (le script le fait).
-3. **Auth** — [Authentication](https://docs.polymarket.com/api-reference/authentication) : utiliser le SDK (`createOrDeriveApiKey`) pour dériver les credentials depuis la clé privée ; le maker/signer doit être l’adresse du wallet. Le script utilise déjà `ClobClient` + wallet ethers.
-4. **Erreurs courantes** — [Error Codes](https://docs.polymarket.com/resources/error-codes) : en cas de rejet, vérifier `Invalid order payload`, `address banned`, `closed only mode`, etc. Les messages d’erreur du script reprennent la réponse CLOB.
+2. **Rate limits** — [Rate Limits](https://docs.polymarket.com/api-reference/rate-limits) : ne pas dépasser les limites (ex. burst 3 500 req/10s pour POST /order). En cas de 429, augmenter `POLL_INTERVAL_SEC` ; le script fait un retry avec backoff.
+3. **Auth** — [Trading Overview](https://docs.polymarket.com/trading/overview) : `ClobClient` avec signature type 0 (EOA) et funder = adresse wallet. 4. **Latence** — Poll 1 s. Pour aller plus bas : [WebSocket CLOB](https://docs.polymarket.com/trading/orderbook#real-time-updates) pour flux temps réel. 5. (voir point 5 ci-dessous) [Authentication](https://docs.polymarket.com/api-reference/authentication) : utiliser le SDK (`createOrDeriveApiKey`) pour dériver les credentials depuis la clé privée ; le maker/signer doit être l’adresse du wallet. Le script utilise déjà `ClobClient` + wallet ethers.
+5. **Erreurs courantes** — [Error Codes](https://docs.polymarket.com/resources/error-codes) : en cas de rejet, vérifier `Invalid order payload`, `address banned`, `closed only mode`, etc. Les messages d’erreur du script reprennent la réponse CLOB.
 
 En résumé : **VPS autorisé (geoblock)** + **wallet dédié avec USDC/MATIC** + **poll raisonnable et retry sur 429** + **PM2 pour la persistance**.
 
