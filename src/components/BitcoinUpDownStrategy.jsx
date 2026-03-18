@@ -659,6 +659,15 @@ export function BitcoinUpDownStrategy() {
                   <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolvedLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
                     Un jour de moins
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setExtraDays(0)}
+                    disabled={resolvedLoading || extraDays <= 0}
+                    className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+                    title="Revenir directement aux 3 derniers jours (extraDays = 0)"
+                  >
+                    3 jours
+                  </button>
                 </div>
               </>
             )}
@@ -795,6 +804,15 @@ export function BitcoinUpDownStrategy() {
                       </button>
                       <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolved15mLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
                         Un jour de moins
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExtraDays(0)}
+                        disabled={resolved15mLoading || extraDays <= 0}
+                        className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+                        title="Revenir directement aux 3 derniers jours (extraDays = 0)"
+                      >
+                        3 jours
                       </button>
                     </div>
                   </>
