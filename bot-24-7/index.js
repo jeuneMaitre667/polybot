@@ -97,6 +97,7 @@ function appendOrderLog(obj) {
 
 // ——— Config ———
 const GAMMA_EVENTS_URL = 'https://gamma-api.polymarket.com/events';
+const GAMMA_EVENT_BY_SLUG_URL = 'https://gamma-api.polymarket.com/events/slug';
 const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
@@ -391,6 +392,20 @@ async function fetchSignals() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
+  if (MARKET_MODE === '15m' && events.length === 0) {
+    try {
+      const slug = getCurrent15mEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
+    } catch (_) {}
+  }
+  if (MARKET_MODE !== '15m' && events.length === 0) {
+    try {
+      const slug = getCurrentHourlyEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
+    } catch (_) {}
+  }
   const results = [];
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
@@ -447,6 +462,20 @@ async function getActiveMarketTokensForWs() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
+  if (MARKET_MODE === '15m' && events.length === 0) {
+    try {
+      const slug = getCurrent15mEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
+    } catch (_) {}
+  }
+  if (MARKET_MODE !== '15m' && events.length === 0) {
+    try {
+      const slug = getCurrentHourlyEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
+    } catch (_) {}
+  }
   const tokenIds = [];
   const tokenToSignal = new Map();
   for (const ev of events) {
@@ -473,6 +502,27 @@ async function getActiveMarketTokensForWs() {
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
+/** Slug du créneau 15m actuel (fin de créneau en s UTC). L'API Gamma liste ne renvoie souvent pas les events 15m ; on les récupère par slug. */
+function getCurrent15mEventSlug() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const slotSec = 15 * 60;
+  const slotEnd = Math.floor(nowSec / slotSec) * slotSec + slotSec;
+  return `${BITCOIN_UP_DOWN_15M_SLUG}-${slotEnd}`;
+}
+
+/** Slug du créneau horaire actuel (heure ET). Format: bitcoin-up-or-down-march-15-2026-4pm-et. */
+function getCurrentHourlyEventSlug() {
+  const tz = 'America/New_York';
+  const d = new Date();
+  const month = d.toLocaleString('en-US', { timeZone: tz, month: 'long' }).toLowerCase();
+  const day = parseInt(d.toLocaleString('en-US', { timeZone: tz, day: 'numeric' }), 10);
+  const year = parseInt(d.toLocaleString('en-US', { timeZone: tz, year: 'numeric' }), 10);
+  let hour = parseInt(d.toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false }), 10);
+  const ampm = hour >= 12 ? 'pm' : 'am';
+  hour = hour % 12 || 12;
+  return `${BITCOIN_UP_DOWN_SLUG}-${month}-${day}-${year}-${hour}${ampm}-et`;
+}
+
 /** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix — pour enregistrer la mise max par fenêtre même quand le prix n'est pas dans la fenêtre 97–97,5 %. */
 async function fetchActiveWindows() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
@@ -489,7 +539,23 @@ async function fetchActiveWindows() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
+  // Secours : l'API liste n'inclut parfois pas les events ; récupérer le créneau actuel par slug.
+  if (MARKET_MODE === '15m' && events.length === 0) {
+    try {
+      const slug = getCurrent15mEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
+    } catch (_) {}
+  }
+  if (MARKET_MODE !== '15m' && events.length === 0) {
+    try {
+      const slug = getCurrentHourlyEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
+    } catch (_) {}
+  }
   const results = [];
+  const seenKeys = new Set();
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
     const eventSlug = (ev.slug ?? '').toLowerCase();
@@ -497,7 +563,8 @@ async function fetchActiveWindows() {
     const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
       const key = m.conditionId ?? m.condition_id ?? '';
-      if (!key) continue;
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
       const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
       results.push({ market: m, endDate: marketEndDate, key });
     }

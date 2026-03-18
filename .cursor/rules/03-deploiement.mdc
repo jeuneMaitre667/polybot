@@ -11,3 +11,7 @@ alwaysApply: false
 - **PowerShell** : scripts à la racine (deploy-bot.ps1, setup-lightsail-git.ps1, etc.). Utiliser `-KeyPath` et `-Ip` quand la clé ou l'IP ne sont pas aux emplacements par défaut.
 - **SSH depuis le PC** : clé `.pem` dans le projet (gitignored) ou dans Téléchargements. Ne pas committer la clé ; pour les Actions GitHub, utiliser les secrets (LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST).
 - **Port 3001** : doit être ouvert dans le pare-feu Lightsail pour que le dashboard appelle `/api/bot-status`.
+- **Accès aux deux bots Lightsail** : l’assistant peut se connecter aux deux instances pour vérifier logs, liquidité, redéploiement, etc. Les deux clés SSH sont en local dans le projet :
+  - **Bot horaire** : clé `LightsailDefaultKey-eu-west-1.pem`, hôte = première URL dans `.env` (VITE_BOT_STATUS_URL, ex. 34.242.214.109).
+  - **Bot 15m** : clé `LightsailDefaultKey-eu-west-1-bot15m.pem`, hôte = deuxième URL (VITE_BOT_STATUS_URL_15M, ex. 34.244.226.192).
+  - Connexion : `ssh -i "chemin/vers/cle.pem" -o StrictHostKeyChecking=accept-new ubuntu@IP`.
