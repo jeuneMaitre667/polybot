@@ -57,6 +57,8 @@ export function BotOverview() {
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
   const hasTradeLatencyStats = (tradeLatencyStats?.all?.count ?? 0) > 0;
   const hasTradeLatencyStats15m = (tradeLatencyStats15m?.all?.count ?? 0) > 0;
+  const tradeLatencyBreakdownStats = data?.tradeLatencyBreakdownStats ?? null;
+  const tradeLatencyBreakdownStats15m = data15m?.tradeLatencyBreakdownStats ?? null;
   const cycleLatencyStats = data?.cycleLatencyStats ?? null;
   const cycleLatencyStats15m = data15m?.cycleLatencyStats ?? null;
   const hasCycleLatencyStats = (cycleLatencyStats?.count ?? 0) > 0;
@@ -90,6 +92,7 @@ export function BotOverview() {
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
+  const activeLatencyBreakdown = latencyMode === '15m' ? tradeLatencyBreakdownStats15m : tradeLatencyBreakdownStats;
   const activeCycleLatency = latencyMode === '15m' ? cycleLatencyStats15m : cycleLatencyStats;
   const hasActiveCycleLatency = latencyMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
   const activeSignalDecisionLatency = latencyMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
@@ -108,6 +111,12 @@ export function BotOverview() {
   function formatPct(n, total) {
     if (!total || total <= 0) return '—';
     return `${Math.round((n / total) * 100)}%`;
+  }
+
+  function formatMs(v) {
+    if (v == null) return '—';
+    const n = Number(v);
+    return Number.isFinite(n) ? `${Math.round(n)} ms` : '—';
   }
 
   return (
@@ -333,6 +342,28 @@ export function BotOverview() {
                         </>
                       )}
                     </span>
+                    {activeLatencyBreakdown?.all?.placeOrder?.count > 0 && (
+                      <details className="mt-2 rounded-lg border border-border/40 bg-slate-900/30 px-2 py-1.5">
+                        <summary className="cursor-pointer select-none text-[11px] text-slate-300">
+                          Détails (avg · p95)
+                        </summary>
+                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                          <div className="text-muted-foreground">bestAsk</div>
+                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.avgMs)} · {formatMs(activeLatencyBreakdown.all.bestAsk?.p95Ms)}</div>
+                          <div className="text-muted-foreground">creds</div>
+                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.avgMs)} · {formatMs(activeLatencyBreakdown.all.creds?.p95Ms)}</div>
+                          <div className="text-muted-foreground">balance</div>
+                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.avgMs)} · {formatMs(activeLatencyBreakdown.all.balance?.p95Ms)}</div>
+                          <div className="text-muted-foreground">book</div>
+                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.avgMs)} · {formatMs(activeLatencyBreakdown.all.book?.p95Ms)}</div>
+                          <div className="text-muted-foreground">placeOrder</div>
+                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.avgMs)} · {formatMs(activeLatencyBreakdown.all.placeOrder?.p95Ms)}</div>
+                        </div>
+                        <div className="mt-1 text-[10px] text-muted-foreground/80">
+                          Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
+                        </div>
+                      </details>
+                    )}
                   </>
                 ) : (
                   'Mesure seulement quand un ordre est placé.'
