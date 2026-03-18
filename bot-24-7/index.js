@@ -419,6 +419,20 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
   logJson('info', 'Liquidité 97% vide', { reason, tokenId: short });
 }
 
+/** Throttle : éviter le spam quand la création du client CLOB échoue (ex. wallet client missing account address). */
+const clobClientWarnThrottle = { ts: 0, lastMsg: '' };
+const CLOB_CLIENT_WARN_THROTTLE_MS = 30 * 1000;
+
+function warnClobClientIfThrottled(message) {
+  const msg = String(message || 'erreur');
+  const now = Date.now();
+  if (clobClientWarnThrottle.lastMsg === msg && now - clobClientWarnThrottle.ts < CLOB_CLIENT_WARN_THROTTLE_MS) return;
+  clobClientWarnThrottle.lastMsg = msg;
+  clobClientWarnThrottle.ts = now;
+  console.warn('CLOB client (solde/ordres):', msg);
+  logJson('warn', 'CLOB client indisponible (solde/ordres)', { error: msg });
+}
+
 // Cache en mémoire : dernier book par token (y compris null) pour limiter /book et réduire la latence.
 const bookCache = new Map(); // tokenId -> { atMs, value }
 
@@ -1149,7 +1163,7 @@ async function run() {
     try {
       clobClient = await buildClobClientCachedCreds();
     } catch (err) {
-      console.warn('CLOB client (solde/ordres):', err.message);
+      warnClobClientIfThrottled(err?.message);
     }
 
     async function getBalance() {
