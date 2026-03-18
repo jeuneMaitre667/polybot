@@ -550,27 +550,68 @@ async function buildClobClientCachedCreds() {
  * Objectif : maximiser la probabilité de remplissage total (moins de no-fill),
  * au prix d'une avg price potentiellement un peu plus dégradée si on consomme jusqu'au plafond.
  */
-async function getLiquidityAtTargetUsd(tokenId) {
+async function getLiquidityAtTargetUsd(tokenId, profile = null) {
   if (!tokenId) return null;
+  const overallStartMs = Date.now();
   const now = Date.now();
   const cached = bookCache.get(tokenId);
-  if (cached && now - cached.atMs < BOOK_CACHE_MS) return cached.value;
+  if (profile && typeof profile === 'object') {
+    profile.bookCacheHit = null;
+    profile.bookCacheAgeMs = null;
+    profile.bookMs = null;
+    profile.liquidityCalcMs = null;
+    profile.asksCount = null;
+    profile.levelsAfterFilter = null;
+  }
+
+  // Cache hit (y compris null) -> zéro appel réseau CLOB.
+  if (cached && now - cached.atMs < BOOK_CACHE_MS) {
+    if (profile && typeof profile === 'object') {
+      profile.bookCacheHit = true;
+      profile.bookCacheAgeMs = now - cached.atMs;
+      profile.bookMs = 0;
+      profile.liquidityCalcMs = Date.now() - overallStartMs;
+    }
+    return cached.value;
+  }
+
   try {
+    if (profile && typeof profile === 'object') profile.bookCacheHit = false;
+    const tBook0 = Date.now();
     const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
+    const bookMs = Date.now() - tBook0;
     const asks = data?.asks ?? [];
     if (!Array.isArray(asks) || asks.length === 0) {
       logLiquidityEmptyIfThrottled(tokenId, 'carnet vide (pas d\'asks)');
       bookCache.set(tokenId, { atMs: now, value: null });
+      if (profile && typeof profile === 'object') {
+        profile.bookMs = bookMs;
+        profile.asksCount = Array.isArray(asks) ? asks.length : null;
+        profile.levelsAfterFilter = 0;
+        profile.liquidityCalcMs = Date.now() - overallStartMs;
+      }
       return null;
     }
+
+    const tCalc0 = Date.now();
     const levels = asks.map((level) => {
       const p = parseFloat(level?.price ?? level?.[0] ?? 0);
       const s = parseFloat(level?.size ?? level?.[1] ?? 0);
       return { p, s };
     }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
+
+    if (profile && typeof profile === 'object') {
+      profile.bookMs = bookMs;
+      profile.asksCount = asks.length;
+      profile.levelsAfterFilter = Array.isArray(levels) ? levels.length : null;
+    }
+
     if (levels.length === 0) {
       logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
       bookCache.set(tokenId, { atMs: now, value: null });
+      if (profile && typeof profile === 'object') {
+        profile.liquidityCalcMs = Date.now() - tCalc0;
+      }
       return null;
     }
     let totalUsd = 0;
@@ -578,10 +619,20 @@ async function getLiquidityAtTargetUsd(tokenId) {
     for (const { p, s } of levels) totalUsd += p * s;
     const out = totalUsd > 0 ? totalUsd : null;
     bookCache.set(tokenId, { atMs: now, value: out });
+    if (profile && typeof profile === 'object') {
+      profile.liquidityCalcMs = Date.now() - tCalc0;
+      profile.bookCacheAgeMs = null;
+    }
     return out;
   } catch (err) {
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
     bookCache.set(tokenId, { atMs: now, value: null });
+    if (profile && typeof profile === 'object') {
+      profile.bookMs = Date.now() - overallStartMs;
+      profile.liquidityCalcMs = Date.now() - overallStartMs;
+      profile.asksCount = null;
+      profile.levelsAfterFilter = null;
+    }
     return null;
   }
 }
@@ -617,10 +668,25 @@ function isInLastMinute(signal) {
 async function fetchSignals() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
   let events = [];
+  const tFetchStartMs = Date.now();
+  const profile = {
+    totalMs: null,
+    strategy: null,
+    // Gamma
+    directSlugOk: null,
+    directSlugMs: null,
+    usedEvents: false,
+    eventsMsTotal: null,
+    eventsRetryUsed: false,
+    hasMatchingSlugAfterEvents: null,
+    fallbackSlugOk: null,
+    fallbackSlugMs: null,
+  };
 
   // Piste latence: sur le mode 15m, éviter le pattern "GET /events (puis fallback /events/slug)".
   // On fetch directement l'event courant par slug pour réduire les timeouts/variance et faire baisser le p95.
   if (MARKET_MODE === '15m') {
+    const tDirect0 = Date.now();
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -628,34 +694,47 @@ async function fetchSignals() {
         events = [ev];
         logJson('info', 'fetchSignals: direct slug 15m — event reçu', { slug });
         console.log(`[fetchSignals] Direct slug 15m: ${slug} — event reçu`);
+        profile.directSlugOk = true;
       } else {
         logJson('info', 'fetchSignals: direct slug 15m — event invalide ou vide', { slug });
         console.log(`[fetchSignals] Direct slug 15m: ${slug} — event invalide ou vide`);
+        profile.directSlugOk = false;
       }
+      profile.directSlugMs = Date.now() - tDirect0;
     } catch (err) {
       const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
       logJson('info', 'fetchSignals: direct slug 15m — erreur (fallback /events)', { slug: getCurrent15mEventSlug(), error: msg });
       console.log(`[fetchSignals] Direct slug 15m: ${getCurrent15mEventSlug()} — ${msg} (fallback /events)`);
+      profile.directSlugOk = false;
+      profile.directSlugMs = Date.now() - tDirect0;
     }
   }
 
   // Si direct slug ne donne rien (ou si on est en mode horaire), on retombe sur la logique historique /events.
   if (events.length === 0) {
     try {
+      const tEvents0 = Date.now();
       const { data } = await axios.get(GAMMA_EVENTS_URL, {
         params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
         timeout: 15000,
       });
       events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+      profile.usedEvents = true;
+      profile.eventsMsTotal = Date.now() - tEvents0;
     } catch (err) {
       if (err.response?.status === 422 || err.response?.status === 400) {
+        const tEvents1 = Date.now();
         const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+        profile.eventsRetryUsed = true;
+        profile.eventsMsTotal = (profile.eventsMsTotal ?? 0) + (Date.now() - tEvents1);
         events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
       } else throw err;
     }
 
     const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    profile.hasMatchingSlugAfterEvents = hasMatchingSlug;
     if (MARKET_MODE === '15m' && !hasMatchingSlug) {
+      const tFallback0 = Date.now();
       try {
         const slug = getCurrent15mEventSlug();
         const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -663,32 +742,44 @@ async function fetchSignals() {
           events = [ev];
           logJson('info', 'fetchSignals: secours slug 15m — event reçu', { slug });
           console.log(`[fetchSignals] Secours slug 15m: ${slug} — event reçu`);
+          profile.fallbackSlugOk = true;
         } else {
           logJson('info', 'fetchSignals: secours slug 15m — event invalide ou vide', { slug });
           console.log(`[fetchSignals] Secours slug 15m: ${slug} — event invalide ou vide`);
+          profile.fallbackSlugOk = false;
         }
+        profile.fallbackSlugMs = Date.now() - tFallback0;
       } catch (err) {
         const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
         logJson('info', 'fetchSignals: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
         console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+        profile.fallbackSlugOk = false;
+        profile.fallbackSlugMs = Date.now() - tFallback0;
       }
     }
     if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
       try {
+        // Profil uniquement si on tombe sur la logique hourly fallback slug
+        const tFallback0 = Date.now();
         const slug = getCurrentHourlyEventSlug();
         const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
         if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
           events = [ev];
           logJson('info', 'fetchSignals: secours slug horaire — event reçu', { slug });
           console.log(`[fetchSignals] Secours slug horaire: ${slug} — event reçu`);
+          profile.fallbackSlugOk = true;
         } else {
           logJson('info', 'fetchSignals: secours slug horaire — event invalide ou vide', { slug });
           console.log(`[fetchSignals] Secours slug horaire: ${slug} — event invalide ou vide`);
+          profile.fallbackSlugOk = false;
         }
+        profile.fallbackSlugMs = Date.now() - tFallback0;
       } catch (err) {
         const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
         logJson('info', 'fetchSignals: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
         console.log(`[fetchSignals] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+        profile.fallbackSlugOk = false;
+        profile.fallbackSlugMs = Date.now() - tFetchStartMs;
       }
     }
   }
@@ -728,6 +819,20 @@ async function fetchSignals() {
       }
     }
   }
+
+  // Synthèse de stratégie pour corréler la latence avec le chemin Gamma pris.
+  profile.totalMs = Date.now() - tFetchStartMs;
+  if (MARKET_MODE === '15m') {
+    if (profile.directSlugOk === true) profile.strategy = 'direct_ok';
+    else if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
+    else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
+    else profile.strategy = 'events_empty_or_invalid';
+  } else {
+    if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
+    else if (profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
+    else profile.strategy = 'events_empty_or_invalid';
+  }
+  results._fetchSignalsProfile = profile;
   return results;
 }
 
@@ -1188,8 +1293,25 @@ function startClobWs() {
 async function run() {
   const cycleStartMs = Date.now();
   let signalsCount = 0;
+  let fetchProfile = null;
+  const cycleBookStats = {
+    bookCacheHits: 0,
+    bookCacheMisses: 0,
+    bookMsTotal: 0,
+    liquidityCalcMsTotal: 0,
+  };
+
+  function bumpCycleBookStats(profile) {
+    if (!profile || typeof profile !== 'object') return;
+    if (profile.bookCacheHit === true) cycleBookStats.bookCacheHits += 1;
+    if (profile.bookCacheHit === false) cycleBookStats.bookCacheMisses += 1;
+    if (Number.isFinite(profile.bookMs)) cycleBookStats.bookMsTotal += profile.bookMs;
+    if (Number.isFinite(profile.liquidityCalcMs)) cycleBookStats.liquidityCalcMsTotal += profile.liquidityCalcMs;
+  }
+
   try {
     const signals = await fetchSignals();
+    fetchProfile = signals?._fetchSignalsProfile ?? null;
     signalsCount = Array.isArray(signals) ? signals.length : 0;
     if (signalsCount === 0) {
       appendSignalDecisionLatencyHistory({
@@ -1197,6 +1319,16 @@ async function run() {
         decisionMs: Date.now() - cycleStartMs,
         reason: 'no_signal',
         mode: MARKET_MODE,
+        fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+        fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+        fetchSignalsDirectSlugOk: fetchProfile?.directSlugOk ?? null,
+        fetchSignalsDirectSlugMs: fetchProfile?.directSlugMs ?? null,
+        fetchSignalsUsedEvents: fetchProfile?.usedEvents ?? null,
+        fetchSignalsEventsMsTotal: fetchProfile?.eventsMsTotal ?? null,
+        fetchSignalsEventsRetryUsed: fetchProfile?.eventsRetryUsed ?? null,
+        fetchSignalsHasMatchingSlugAfterEvents: fetchProfile?.hasMatchingSlugAfterEvents ?? null,
+        fetchSignalsFallbackSlugOk: fetchProfile?.fallbackSlugOk ?? null,
+        fetchSignalsFallbackSlugMs: fetchProfile?.fallbackSlugMs ?? null,
       });
     }
 
@@ -1215,8 +1347,12 @@ async function run() {
         const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
         const tokenUp = getTokenIdToBuy(m, 'Up');
         const tokenDown = getTokenIdToBuy(m, 'Down');
-        const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
-        const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
+        const liqProfileUp = {};
+        const liqProfileDown = {};
+        const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : null;
+        const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : null;
+        bumpCycleBookStats(tokenUp ? liqProfileUp : null);
+        bumpCycleBookStats(tokenDown ? liqProfileDown : null);
         const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
         const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
         logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
@@ -1242,7 +1378,9 @@ async function run() {
         endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
       }
       try {
-        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+        const liquidityProfile = {};
+        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy, liquidityProfile);
+        bumpCycleBookStats(liquidityProfile);
         if (liquidity != null && liquidity > 0) {
           appendLiquidityHistory(liquidity);
           recordedLiquidityWindows.set(key, endMs);
@@ -1258,6 +1396,24 @@ async function run() {
             conditionId: key,
             takeSide: s.takeSide,
             mode: MARKET_MODE,
+            // Profil Gamma: quel chemin a été choisi pour trouver l'event.
+            fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+            fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+            fetchSignalsDirectSlugOk: fetchProfile?.directSlugOk ?? null,
+            fetchSignalsDirectSlugMs: fetchProfile?.directSlugMs ?? null,
+            fetchSignalsUsedEvents: fetchProfile?.usedEvents ?? null,
+            fetchSignalsEventsMsTotal: fetchProfile?.eventsMsTotal ?? null,
+            fetchSignalsEventsRetryUsed: fetchProfile?.eventsRetryUsed ?? null,
+            fetchSignalsHasMatchingSlugAfterEvents: fetchProfile?.hasMatchingSlugAfterEvents ?? null,
+            fetchSignalsFallbackSlugOk: fetchProfile?.fallbackSlugOk ?? null,
+            fetchSignalsFallbackSlugMs: fetchProfile?.fallbackSlugMs ?? null,
+            // Profil CLOB /book + calcul liquidité
+            bookCacheHit: liquidityProfile.bookCacheHit ?? null,
+            bookCacheAgeMs: liquidityProfile.bookCacheAgeMs ?? null,
+            bookMs: liquidityProfile.bookMs ?? null,
+            liquidityCalcMs: liquidityProfile.liquidityCalcMs ?? null,
+            asksCount: liquidityProfile.asksCount ?? null,
+            levelsAfterFilter: liquidityProfile.levelsAfterFilter ?? null,
           });
           decisionLogged += 1;
         }
@@ -1369,7 +1525,18 @@ async function run() {
     await new Promise((r) => setTimeout(r, 350));
     }
   } finally {
-    appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount });
+    appendCycleLatencyHistory({
+      cycleMs: Date.now() - cycleStartMs,
+      ok: true,
+      mode: MARKET_MODE,
+      signalsCount,
+      fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+      fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+      bookCacheHits: cycleBookStats.bookCacheHits,
+      bookCacheMisses: cycleBookStats.bookCacheMisses,
+      bookMsTotal: cycleBookStats.bookMsTotal,
+      liquidityCalcMsTotal: cycleBookStats.liquidityCalcMsTotal,
+    });
   }
 }
 
