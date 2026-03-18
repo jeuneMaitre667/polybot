@@ -617,53 +617,79 @@ function isInLastMinute(signal) {
 async function fetchSignals() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
   let events = [];
-  try {
-    const { data } = await axios.get(GAMMA_EVENTS_URL, {
-      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-      timeout: 15000,
-    });
-    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-  } catch (err) {
-    if (err.response?.status === 422 || err.response?.status === 400) {
-      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
-      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-    } else throw err;
-  }
-  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
+
+  // Piste latence: sur le mode 15m, éviter le pattern "GET /events (puis fallback /events/slug)".
+  // On fetch directement l'event courant par slug pour réduire les timeouts/variance et faire baisser le p95.
+  if (MARKET_MODE === '15m') {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
       if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
         events = [ev];
-        logJson('info', 'fetchSignals: secours slug 15m — event reçu', { slug });
-        console.log(`[fetchSignals] Secours slug 15m: ${slug} — event reçu`);
+        logJson('info', 'fetchSignals: direct slug 15m — event reçu', { slug });
+        console.log(`[fetchSignals] Direct slug 15m: ${slug} — event reçu`);
       } else {
-        logJson('info', 'fetchSignals: secours slug 15m — event invalide ou vide', { slug });
-        console.log(`[fetchSignals] Secours slug 15m: ${slug} — event invalide ou vide`);
+        logJson('info', 'fetchSignals: direct slug 15m — event invalide ou vide', { slug });
+        console.log(`[fetchSignals] Direct slug 15m: ${slug} — event invalide ou vide`);
       }
     } catch (err) {
       const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      logJson('info', 'fetchSignals: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
-      console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+      logJson('info', 'fetchSignals: direct slug 15m — erreur (fallback /events)', { slug: getCurrent15mEventSlug(), error: msg });
+      console.log(`[fetchSignals] Direct slug 15m: ${getCurrent15mEventSlug()} — ${msg} (fallback /events)`);
     }
   }
-  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
+
+  // Si direct slug ne donne rien (ou si on est en mode horaire), on retombe sur la logique historique /events.
+  if (events.length === 0) {
     try {
-      const slug = getCurrentHourlyEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-        events = [ev];
-        logJson('info', 'fetchSignals: secours slug horaire — event reçu', { slug });
-        console.log(`[fetchSignals] Secours slug horaire: ${slug} — event reçu`);
-      } else {
-        logJson('info', 'fetchSignals: secours slug horaire — event invalide ou vide', { slug });
-        console.log(`[fetchSignals] Secours slug horaire: ${slug} — event invalide ou vide`);
-      }
+      const { data } = await axios.get(GAMMA_EVENTS_URL, {
+        params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+        timeout: 15000,
+      });
+      events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
     } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      logJson('info', 'fetchSignals: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
-      console.log(`[fetchSignals] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+      if (err.response?.status === 422 || err.response?.status === 400) {
+        const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+        events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+      } else throw err;
+    }
+
+    const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    if (MARKET_MODE === '15m' && !hasMatchingSlug) {
+      try {
+        const slug = getCurrent15mEventSlug();
+        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+          events = [ev];
+          logJson('info', 'fetchSignals: secours slug 15m — event reçu', { slug });
+          console.log(`[fetchSignals] Secours slug 15m: ${slug} — event reçu`);
+        } else {
+          logJson('info', 'fetchSignals: secours slug 15m — event invalide ou vide', { slug });
+          console.log(`[fetchSignals] Secours slug 15m: ${slug} — event invalide ou vide`);
+        }
+      } catch (err) {
+        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+        logJson('info', 'fetchSignals: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
+        console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+      }
+    }
+    if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
+      try {
+        const slug = getCurrentHourlyEventSlug();
+        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
+          events = [ev];
+          logJson('info', 'fetchSignals: secours slug horaire — event reçu', { slug });
+          console.log(`[fetchSignals] Secours slug horaire: ${slug} — event reçu`);
+        } else {
+          logJson('info', 'fetchSignals: secours slug horaire — event invalide ou vide', { slug });
+          console.log(`[fetchSignals] Secours slug horaire: ${slug} — event invalide ou vide`);
+        }
+      } catch (err) {
+        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+        logJson('info', 'fetchSignals: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
+        console.log(`[fetchSignals] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+      }
     }
   }
   const results = [];
