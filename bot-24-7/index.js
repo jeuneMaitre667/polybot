@@ -725,6 +725,7 @@ async function fetchSignals() {
       if (err.response?.status === 422 || err.response?.status === 400) {
         const tEvents1 = Date.now();
         const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+        profile.usedEvents = true;
         profile.eventsRetryUsed = true;
         profile.eventsMsTotal = (profile.eventsMsTotal ?? 0) + (Date.now() - tEvents1);
         events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
