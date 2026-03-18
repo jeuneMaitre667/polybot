@@ -153,6 +153,35 @@ function getLiquidityStats() {
   }
 }
 
+/** Lit trade-latency-history.json (tableau { latencyMs, at }[]) et retourne { avgMs, p95Ms, count, lastAt } sur les 24 dernières heures. */
+function getTradeLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const values = filtered
+      .map((e) => Number(e.latencyMs))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    if (values.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt };
+    values.sort((a, b) => a - b);
+    const sum = values.reduce((a, b) => a + b, 0);
+    const p95 = values[Math.max(0, Math.floor(0.95 * (values.length - 1)))];
+    return {
+      avgMs: Math.round(sum / values.length),
+      p95Ms: Math.round(p95),
+      count: values.length,
+      lastAt,
+    };
+  } catch {
+    return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+  }
+}
+
 /** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
 function getBotConfig() {
   const envPath = path.join(BOT_DIR, '.env');
@@ -208,6 +237,7 @@ const server = http.createServer((req, res) => {
     const config = getBotConfig();
     const stats = getStats24h();
     const liquidityStats = getLiquidityStats();
+    const tradeLatencyStats = getTradeLatencyStats24h();
     const payload = {
       status: pm2.status,
       uptime: pm2.uptime,
@@ -220,6 +250,7 @@ const server = http.createServer((req, res) => {
       ordersLast24h: stats.ordersLast24h,
       winRate: stats.winRate,
       liquidityStats,
+      tradeLatencyStats,
       at: new Date().toISOString(),
     };
     if (debugRequested) {
@@ -231,6 +262,7 @@ const server = http.createServer((req, res) => {
         lastOrderFileExists: fs.existsSync(lastOrderPath),
         liquidityHistoryFileExists: fs.existsSync(liquidityPath),
         healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
+        tradeLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'trade-latency-history.json')),
         botDir: BOT_DIR,
       };
     }

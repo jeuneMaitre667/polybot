@@ -36,9 +36,12 @@ const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
 const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
 const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
+const TRADE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'trade-latency-history.json');
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
+const TRADE_LATENCY_HISTORY_DAYS = 7;
+const TRADE_LATENCY_HISTORY_MAX = 2000;
 
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
@@ -321,6 +324,29 @@ function appendLiquidityHistory(liquidityUsd) {
   } catch (e) {
     console.error('Erreur enregistrement liquidité:', e?.message ?? e);
   }
+}
+
+/** Enregistre la latence d'un trade (ms) sur les 7 derniers jours (pour le dashboard). */
+function appendTradeLatencyHistory(entry) {
+  if (!entry || typeof entry !== 'object') return;
+  const latencyMs = Number(entry.latencyMs);
+  if (!Number.isFinite(latencyMs) || latencyMs <= 0) return;
+  try {
+    let arr = [];
+    try {
+      const raw = fs.readFileSync(TRADE_LATENCY_HISTORY_FILE, 'utf8');
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch {
+      // fichier absent ou invalide
+    }
+    const now = Date.now();
+    arr.push({ at: new Date(now).toISOString(), ...entry, latencyMs });
+    const cutoff = now - TRADE_LATENCY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    if (arr.length > TRADE_LATENCY_HISTORY_MAX) arr = arr.slice(-TRADE_LATENCY_HISTORY_MAX);
+    fs.writeFileSync(TRADE_LATENCY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
+  } catch (_) {}
 }
 
 /** Throttle : ne pas logger la même raison pour le même token plus d'une fois toutes les 5 s (évite spam tout en gardant visibilité). */
@@ -779,6 +805,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 /** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Valide le prix côté REST avant de placer, calcule la taille (solde / plafond liquidité), place l'ordre et enregistre. */
 async function tryPlaceOrderForSignal(signal) {
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
+  const t0 = Date.now();
   const key = getSignalKey(signal);
   if (placedKeys.has(key)) return;
   if (isInLastMinute(signal)) return;
@@ -820,13 +847,23 @@ async function tryPlaceOrderForSignal(signal) {
   const result = await placeOrder(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
   const time = new Date().toISOString();
   if (result.ok) {
+    const latencyMs = Date.now() - t0;
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
     const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID });
+    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs });
+    appendTradeLatencyHistory({
+      source: 'ws',
+      latencyMs,
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      conditionId: key,
+      tokenId: signalWithPrice.tokenIdToBuy,
+      orderID: result.orderID,
+    });
     const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max: ${liquidity.toFixed(0)} $` : '';
-    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID}`);
+    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)`);
   } else {
     placedKeys.delete(key);
     logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
@@ -1024,6 +1061,7 @@ async function run() {
     if (isInLastMinute(s)) continue;
     const key = getSignalKey(s);
     if (placedKeys.has(key)) continue;
+    const t0 = Date.now();
 
     if (useBalanceAsSize) {
       const balance = await getBalance();
@@ -1053,13 +1091,23 @@ async function run() {
     const result = await placeOrder(s, amountUsd, clobClient, { allowBelowMin });
     const time = new Date().toISOString();
     if (result.ok) {
+      const latencyMs = Date.now() - t0;
       writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
       const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
-      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID });
+      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs });
+      appendTradeLatencyHistory({
+        source: 'poll',
+        latencyMs,
+        takeSide: s.takeSide,
+        amountUsd,
+        conditionId: key,
+        tokenId: s.tokenIdToBuy,
+        orderID: result.orderID,
+      });
       const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max au prix du marché : ${liquidity.toFixed(0)} $` : '';
-      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID}`);
+      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)`);
     } else {
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);

@@ -23,6 +23,7 @@ export function BotOverview() {
   const { data, loading } = useBotStatus(statusUrl);
   const { data: data15m, loading: loading15m } = useBotStatus(statusUrl15m);
   const [miseMaxMode, setMiseMaxMode] = useState('1h');
+  const [latencyMode, setLatencyMode] = useState('1h');
   const [nowTs, setNowTs] = useState(null);
   useEffect(() => {
     const update = () => setNowTs(Date.now());
@@ -52,6 +53,10 @@ export function BotOverview() {
   const hasLiquidityStats = liquidityStats?.count > 0;
   const liquidityStats15m = data15m?.liquidityStats ?? null;
   const hasLiquidityStats15m = liquidityStats15m?.count > 0;
+  const tradeLatencyStats = data?.tradeLatencyStats ?? null;
+  const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
+  const hasTradeLatencyStats = tradeLatencyStats?.count > 0;
+  const hasTradeLatencyStats15m = tradeLatencyStats15m?.count > 0;
   const show15m = !!statusUrl15m;
 
   function formatLastLiquidityAt(lastAtIso, nowTsVal) {
@@ -74,6 +79,9 @@ export function BotOverview() {
   const activeLiquidity = miseMaxMode === '15m' ? liquidityStats15m : liquidityStats;
   const hasActiveLiquidity = miseMaxMode === '15m' ? hasLiquidityStats15m : hasLiquidityStats;
   const lastActiveLabel = miseMaxMode === '15m' ? lastLiquidityLabel15m : lastLiquidityLabel;
+
+  const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
+  const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
 
   const cardBase = 'border border-border/60 bg-card/90 shadow-card rounded-xl min-h-[140px] flex flex-col';
   const rowClass = 'flex items-center justify-between gap-3 py-2 first:pt-0 border-b border-border/40 last:border-0';
@@ -184,6 +192,75 @@ export function BotOverview() {
               </div>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className={`${cardBase} border-t-2 border-t-fuchsia-500/30`}>
+        <CardHeader className="pb-2 space-y-2">
+          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+              Délai moyen trade (24 h)
+            </CardTitle>
+            {show15m && (
+              <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setLatencyMode('1h')}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    latencyMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Horaire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLatencyMode('15m')}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    latencyMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  15m
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-muted-foreground">
+              Horaire :{' '}
+              {hasTradeLatencyStats ? (
+                <span className="text-emerald-500/90 font-medium">{tradeLatencyStats.count} trade{tradeLatencyStats.count !== 1 ? 's' : ''}</span>
+              ) : (
+                <span className="text-amber-500/90">aucune donnée</span>
+              )}
+            </span>
+            {show15m && (
+              <span className="text-muted-foreground">
+                15m :{' '}
+                {hasTradeLatencyStats15m ? (
+                  <span className="text-emerald-500/90 font-medium">{tradeLatencyStats15m.count} trade{tradeLatencyStats15m.count !== 1 ? 's' : ''}</span>
+                ) : (
+                  <span className="text-amber-500/90">aucune donnée</span>
+                )}
+              </span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
+          <p className="text-2xl font-semibold tabular-nums text-slate-50">
+            {hasActiveLatency && activeLatency?.avgMs != null ? `~${Math.round(activeLatency.avgMs / 1000)} s` : '—'}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {hasActiveLatency && activeLatency?.avgMs != null ? (
+              <>
+                Moyenne {Math.round(activeLatency.avgMs)} ms · p95 {activeLatency.p95Ms != null ? `${Math.round(activeLatency.p95Ms)} ms` : '—'}
+                <span className="block mt-0.5 opacity-80">
+                  {activeLatency.count} trade{activeLatency.count !== 1 ? 's' : ''} sur 24 h
+                </span>
+              </>
+            ) : (
+              'Latence mesurée entre le début du placement (pré-checks, sizing) et la réponse OK de l’API CLOB.'
+            )}
+          </p>
         </CardContent>
       </Card>
 
