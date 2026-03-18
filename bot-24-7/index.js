@@ -345,6 +345,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
     const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
     const asks = data?.asks ?? [];
     if (!Array.isArray(asks) || asks.length === 0) {
+      console.log(`[Mise max] DEBUG carnet vide (pas d'asks) token=${String(tokenId).slice(0, 20)}`);
       logLiquidityEmptyIfThrottled(tokenId, 'carnet vide (pas d\'asks)');
       return null;
     }
@@ -354,6 +355,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
       return { p, s };
     }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
     if (levels.length === 0) {
+      console.log(`[Mise max] DEBUG aucun ask en 97-97.5% token=${String(tokenId).slice(0, 20)}`);
       logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
       return null;
     }
