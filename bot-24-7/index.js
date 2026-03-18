@@ -485,7 +485,17 @@ let cachedCredsAt = 0;
 async function getClobCredsCached() {
   const now = Date.now();
   if (cachedCreds && now - cachedCredsAt < CREDS_CACHE_TTL_MS) return cachedCreds;
-  const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+  // Important : même pour la création/derivation de creds (L1),
+  // le client a besoin d'une "account context" complète (signatureType + funderAddress)
+  // sinon @polymarket/clob-client peut lever "wallet client is missing account address".
+  const clientWithoutCreds = new ClobClient(
+    CLOB_HOST,
+    CHAIN_ID,
+    wallet,
+    undefined,
+    CLOB_SIGNATURE_TYPE_EOA,
+    wallet.address,
+  );
   const creds = await clientWithoutCreds.createOrDeriveApiKey();
   cachedCreds = creds;
   cachedCredsAt = now;
