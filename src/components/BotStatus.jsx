@@ -54,9 +54,9 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   const wsLabel = data?.useWebSocket === false ? null : (wsAlert ? 'WS KO' : 'WS OK');
 
   return (
-    <div className="w-full max-w-sm rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner sm:ml-auto">
-      {label && <div className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1.5">{label}</div>}
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+    <div className="w-full min-w-0 rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner">
+      {label && <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">{label}</div>}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-2">
           <span
             className={`inline-flex h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-offset-2 ring-offset-slate-900 ${
@@ -71,29 +71,31 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
             <span className="text-xs text-slate-500">({uptimeStr})</span>
           )}
         </div>
-        {isOnline && !loading && (
-          <span className="text-[11px] text-slate-500 font-medium tabular-nums" title="Ordre au marché, poll toutes les 3 s">
-            {orderLabel} · {pollSec}s
-          </span>
-        )}
-        {isOnline && !loading && wsLabel && (
-          <span
-            className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${
-              wsAlert ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-            }`}
-            title={wsAlert ? 'WebSocket CLOB déconnecté depuis trop longtemps (polling continue).' : 'WebSocket CLOB connecté.'}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isOnline && !loading && (
+            <span className="text-[11px] text-slate-500 font-medium tabular-nums" title="Ordre au marché, poll">
+              {orderLabel} · {pollSec}s
+            </span>
+          )}
+          {isOnline && !loading && wsLabel && (
+            <span
+              className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${
+                wsAlert ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              }`}
+              title={wsAlert ? 'WebSocket CLOB déconnecté depuis trop longtemps (polling continue).' : 'WebSocket CLOB connecté.'}
+            >
+              {wsLabel}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors"
           >
-            {wsLabel}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={loading}
-          className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors"
-        >
-          Rafraîchir
-        </button>
+            Rafraîchir
+          </button>
+        </div>
       </div>
     </div>
   );
