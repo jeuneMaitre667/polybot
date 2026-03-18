@@ -200,6 +200,46 @@ function getTradeLatencyStats24h() {
   }
 }
 
+function summarizeTimingObjects(entries, getMs, lastAt) {
+  const values = [];
+  for (const e of entries) {
+    const n = Number(getMs(e));
+    if (Number.isFinite(n) && n >= 0) values.push(n);
+  }
+  return summarizeLatency(values.filter((n) => n > 0), lastAt);
+}
+
+/** Sous-mesures de latence trade (bestAsk/creds/balance/book/placeOrder) sur 24h, global + ws/poll. */
+function getTradeLatencyBreakdownStats24h() {
+  const empty = {
+    all: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+    ws: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+    poll: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+  };
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return empty;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const ws = filtered.filter((e) => String(e?.source || '').toLowerCase() === 'ws');
+    const poll = filtered.filter((e) => String(e?.source || '').toLowerCase() === 'poll');
+    const mk = (entries) => ({
+      bestAsk: summarizeTimingObjects(entries, (e) => e?.timingsMs?.bestAsk, lastAt),
+      creds: summarizeTimingObjects(entries, (e) => e?.timingsMs?.creds, lastAt),
+      balance: summarizeTimingObjects(entries, (e) => e?.timingsMs?.balance, lastAt),
+      book: summarizeTimingObjects(entries, (e) => e?.timingsMs?.book, lastAt),
+      placeOrder: summarizeTimingObjects(entries, (e) => e?.timingsMs?.placeOrder, lastAt),
+    });
+    return { all: mk(filtered), ws: mk(ws), poll: mk(poll) };
+  } catch {
+    return empty;
+  }
+}
+
 function getCycleLatencyStats24h() {
   try {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'cycle-latency-history.json'), 'utf8');
@@ -314,6 +354,7 @@ const server = http.createServer((req, res) => {
     const stats = getStats24h();
     const liquidityStats = getLiquidityStats();
     const tradeLatencyStats = getTradeLatencyStats24h();
+    const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
     const cycleLatencyStats = getCycleLatencyStats24h();
     const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
     const payload = {
@@ -329,6 +370,7 @@ const server = http.createServer((req, res) => {
       winRate: stats.winRate,
       liquidityStats,
       tradeLatencyStats,
+      tradeLatencyBreakdownStats,
       cycleLatencyStats,
       signalDecisionLatencyStats,
       at: new Date().toISOString(),

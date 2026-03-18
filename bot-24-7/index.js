@@ -858,10 +858,13 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 async function tryPlaceOrderForSignal(signal) {
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
   const t0 = Date.now();
+  const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
   const key = getSignalKey(signal);
   if (placedKeys.has(key)) return;
   if (isInLastMinute(signal)) return;
+  const tBestAsk0 = Date.now();
   const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
+  timingsMs.bestAsk = Date.now() - tBestAsk0;
   if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
     logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
     return;
@@ -873,16 +876,22 @@ async function tryPlaceOrderForSignal(signal) {
   };
   let clobClient = null;
   try {
+    const tCreds0 = Date.now();
     const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
     const creds = await clientWithoutCreds.createOrDeriveApiKey();
     clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+    timingsMs.creds = Date.now() - tCreds0;
   } catch (err) {
     console.warn('WebSocket tryPlace: CLOB client:', err.message);
     return;
   }
+  const tBal0 = Date.now();
   const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
+  timingsMs.balance = Date.now() - tBal0;
   let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
+  const tBook0 = Date.now();
   const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+  timingsMs.book = Date.now() - tBook0;
   // Enregistrer la mise max pour cette fenêtre dès qu'on a la liquidité (signal valide), même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
   if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
     appendLiquidityHistory(liquidity);
@@ -896,7 +905,9 @@ async function tryPlaceOrderForSignal(signal) {
   }
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) return;
   placedKeys.add(key);
+  const tPlace0 = Date.now();
   const result = await placeOrder(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
+  timingsMs.placeOrder = Date.now() - tPlace0;
   const time = new Date().toISOString();
   if (result.ok) {
     const latencyMs = Date.now() - t0;
@@ -904,10 +915,11 @@ async function tryPlaceOrderForSignal(signal) {
     const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs });
+    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs });
     appendTradeLatencyHistory({
       source: 'ws',
       latencyMs,
+      timingsMs,
       takeSide: signalWithPrice.takeSide,
       amountUsd,
       conditionId: key,
@@ -1140,15 +1152,20 @@ async function run() {
     const key = getSignalKey(s);
     if (placedKeys.has(key)) continue;
     const t0 = Date.now();
+    const timingsMs = { bestAsk: 0, creds: 0, balance: null, book: null, placeOrder: null };
 
     if (useBalanceAsSize) {
+      const tBal0 = Date.now();
       const balance = await getBalance();
+      timingsMs.balance = Date.now() - tBal0;
       amountUsd = balance != null ? balance : orderSizeUsd;
       if (amountUsd < orderSizeMinUsd) break;
     }
 
     let allowBelowMin = false;
+    const tBook0 = Date.now();
     const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+    timingsMs.book = Date.now() - tBook0;
     if (liquidity != null && liquidity > 0) {
       if (!recordedLiquidityWindows.has(key)) {
         appendLiquidityHistory(liquidity);
@@ -1166,7 +1183,9 @@ async function run() {
     }
 
     placedKeys.add(key);
+    const tPlace0 = Date.now();
     const result = await placeOrder(s, amountUsd, clobClient, { allowBelowMin });
+    timingsMs.placeOrder = Date.now() - tPlace0;
     const time = new Date().toISOString();
     if (result.ok) {
       const latencyMs = Date.now() - t0;
@@ -1174,10 +1193,11 @@ async function run() {
       const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
-      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs });
+      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs });
       appendTradeLatencyHistory({
         source: 'poll',
         latencyMs,
+        timingsMs,
         takeSide: s.takeSide,
         amountUsd,
         conditionId: key,
