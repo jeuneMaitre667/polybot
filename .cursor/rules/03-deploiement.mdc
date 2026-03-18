@@ -13,5 +13,5 @@ alwaysApply: false
 - **Port 3001** : doit être ouvert dans le pare-feu Lightsail pour que le dashboard appelle `/api/bot-status`.
 - **Accès aux deux bots Lightsail** : l’assistant peut se connecter aux deux instances pour vérifier logs, liquidité, redéploiement, etc. Les deux clés SSH sont dans le dossier `lightsail-keys/` à la racine du projet :
   - **Bot horaire** : `lightsail-keys/LightsailDefaultKey-eu-west-1.pem`, hôte = première URL dans `.env` (VITE_BOT_STATUS_URL, ex. 34.242.214.109).
-  - **Bot 15m** : `lightsail-keys/LightsailDefaultKey-eu-west-1-bot15m.pem`, hôte = deuxième URL (VITE_BOT_STATUS_URL_15M, ex. 34.244.226.192).
+  - **Bot 15m** : `lightsail-keys/LightsailDefaultKey-eu-west-1-bot15m.pem`, hôte = deuxième URL (VITE_BOT_STATUS_URL_15M, ex. 34.253.187.142).
   - Connexion : `ssh -i "chemin/projet/lightsail-keys/cle.pem" -o StrictHostKeyChecking=accept-new ubuntu@IP`.
