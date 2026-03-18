@@ -368,6 +368,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
     }
     return totalUsd > 0 ? totalUsd : null;
   } catch (err) {
+    console.log(`[Mise max] DEBUG catch API carnet: ${err?.message || err}`);
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
     return null;
   }
@@ -941,6 +942,7 @@ async function run() {
       const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
       const tokenUp = getTokenIdToBuy(m, 'Up');
       const tokenDown = getTokenIdToBuy(m, 'Down');
+      if (!tokenUp && !tokenDown) console.log(`[Mise max] DEBUG pas de tokenId (Up/Down) pour créneau ${String(key).slice(0, 20)}`);
       const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
       const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
       const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
