@@ -27,7 +27,6 @@ function TestWrapper({ children }) {
 describe('App', () => {
   it('renders header with title and bot badge', () => {
     render(<App />, { wrapper: TestWrapper });
-    const header = screen.getByRole('banner');
     const badges = screen.getAllByTestId('bot-status-badge');
     expect(badges.length).toBeGreaterThanOrEqual(1);
     expect(badges[0]).toBeInTheDocument();
