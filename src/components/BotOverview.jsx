@@ -206,6 +206,83 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
+      <Card className={`${cardBase} border-t-2 border-t-violet-500/30`}>
+        <CardHeader className="pb-2 space-y-2">
+          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+              Mise max au prix 97–97,5 % (moy. 3 j)
+            </CardTitle>
+            {show15m && (
+            <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
+              <button
+                type="button"
+                onClick={() => setMiseMaxMode('1h')}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  miseMaxMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Horaire
+              </button>
+              <button
+                type="button"
+                onClick={() => setMiseMaxMode('15m')}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  miseMaxMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                15m
+              </button>
+            </div>
+          )}
+          </div>
+          {/* Indication claire : données liquidité récupérées ou non pour chaque bot */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-muted-foreground">
+              Horaire :{' '}
+              {hasLiquidityStats ? (
+                <span className="text-emerald-500/90 font-medium">
+                  {liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''}
+                </span>
+              ) : (
+                <span className="text-amber-500/90">aucun relevé</span>
+              )}
+            </span>
+            {show15m && (
+              <span className="text-muted-foreground">
+                15m :{' '}
+                {hasLiquidityStats15m ? (
+                  <span className="text-emerald-500/90 font-medium">
+                    {liquidityStats15m.count} relevé{liquidityStats15m.count !== 1 ? 's' : ''}
+                  </span>
+                ) : (
+                  <span className="text-amber-500/90">aucun relevé</span>
+                )}
+              </span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
+          <p className="text-2xl font-semibold tabular-nums text-slate-50">
+            {hasActiveLiquidity ? `~${Math.round(activeLiquidity.avg)} $` : '—'}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {hasActiveLiquidity ? (
+              <>
+                Profondeur au meilleur ask (97–97,5 %) : montant max à miser sans dégrader le prix moyen. Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
+                <span className="block mt-0.5 opacity-80">
+                  {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
+                  {lastActiveLabel && ` · ${lastActiveLabel}`}
+                </span>
+              </>
+            ) : (
+              miseMaxMode === '15m'
+                ? 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux 15 min. Relevés envoyés par le bot.'
+                : 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux horaires. Relevés envoyés par le bot.'
+            )}
+          </p>
+        </CardContent>
+      </Card>
+
       <Card className={`${cardBase} border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
         <CardHeader className="pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
@@ -302,83 +379,6 @@ export function BotOverview() {
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className={`${cardBase} border-t-2 border-t-violet-500/30`}>
-        <CardHeader className="pb-2 space-y-2">
-          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Mise max au prix 97–97,5 % (moy. 3 j)
-            </CardTitle>
-            {show15m && (
-            <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
-              <button
-                type="button"
-                onClick={() => setMiseMaxMode('1h')}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  miseMaxMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Horaire
-              </button>
-              <button
-                type="button"
-                onClick={() => setMiseMaxMode('15m')}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  miseMaxMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                15m
-              </button>
-            </div>
-          )}
-          </div>
-          {/* Indication claire : données liquidité récupérées ou non pour chaque bot */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            <span className="text-muted-foreground">
-              Horaire :{' '}
-              {hasLiquidityStats ? (
-                <span className="text-emerald-500/90 font-medium">
-                  {liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''}
-                </span>
-              ) : (
-                <span className="text-amber-500/90">aucun relevé</span>
-              )}
-            </span>
-            {show15m && (
-              <span className="text-muted-foreground">
-                15m :{' '}
-                {hasLiquidityStats15m ? (
-                  <span className="text-emerald-500/90 font-medium">
-                    {liquidityStats15m.count} relevé{liquidityStats15m.count !== 1 ? 's' : ''}
-                  </span>
-                ) : (
-                  <span className="text-amber-500/90">aucun relevé</span>
-                )}
-              </span>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <p className="text-2xl font-semibold tabular-nums text-slate-50">
-            {hasActiveLiquidity ? `~${Math.round(activeLiquidity.avg)} $` : '—'}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {hasActiveLiquidity ? (
-              <>
-                Profondeur au meilleur ask (97–97,5 %) : montant max à miser sans dégrader le prix moyen. Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
-                <span className="block mt-0.5 opacity-80">
-                  {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
-                  {lastActiveLabel && ` · ${lastActiveLabel}`}
-                </span>
-              </>
-            ) : (
-              miseMaxMode === '15m'
-                ? 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux 15 min. Relevés envoyés par le bot.'
-                : 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux horaires. Relevés envoyés par le bot.'
-            )}
-          </p>
         </CardContent>
       </Card>
 
