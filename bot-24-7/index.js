@@ -27,6 +27,9 @@ const WS_RECONNECT_MS = 5000;
 const WS_REFRESH_SUBSCRIPTIONS_MS = 30 * 1000;
 const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion alive
 const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 300; // évite rafales d'ordres sur même token
+const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || 1500;
+const CREDS_CACHE_TTL_MS = Number(process.env.CREDS_CACHE_TTL_MS) || 6 * 60 * 60 * 1000;
+const ENABLE_HEARTBEAT = process.env.ENABLE_HEARTBEAT === 'true';
 
 /** Dossier du bot (où se trouve index.js), pour que balance.json et last-order.json soient toujours dans ~/bot-24-7 même si PM2 a été lancé depuis un autre répertoire. */
 const BOT_DIR = path.resolve(__dirname);
@@ -416,6 +419,28 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
   logJson('info', 'Liquidité 97% vide', { reason, tokenId: short });
 }
 
+// Cache en mémoire : dernier book par token (y compris null) pour limiter /book et réduire la latence.
+const bookCache = new Map(); // tokenId -> { atMs, value }
+
+// Cache en mémoire des credentials CLOB (évite createOrDeriveApiKey() à chaque trade).
+let cachedCreds = null;
+let cachedCredsAt = 0;
+
+async function getClobCredsCached() {
+  const now = Date.now();
+  if (cachedCreds && now - cachedCredsAt < CREDS_CACHE_TTL_MS) return cachedCreds;
+  const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+  const creds = await clientWithoutCreds.createOrDeriveApiKey();
+  cachedCreds = creds;
+  cachedCredsAt = now;
+  return creds;
+}
+
+async function buildClobClientCachedCreds() {
+  const creds = await getClobCredsCached();
+  return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+}
+
 /**
  * Récupère la mise max au prix du marché : montant max (USD) qu'on peut miser tout en restant
  * au meilleur ask (prix affiché), sans dégrader le prix moyen (évite "Avg. Price 100¢" quand le marché est à 97¢).
@@ -423,12 +448,15 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
  */
 async function getLiquidityAtTargetUsd(tokenId) {
   if (!tokenId) return null;
+  const now = Date.now();
+  const cached = bookCache.get(tokenId);
+  if (cached && now - cached.atMs < BOOK_CACHE_MS) return cached.value;
   try {
     const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
     const asks = data?.asks ?? [];
     if (!Array.isArray(asks) || asks.length === 0) {
-      console.log(`[Mise max] DEBUG carnet vide (pas d'asks) token=${String(tokenId).slice(0, 20)}`);
       logLiquidityEmptyIfThrottled(tokenId, 'carnet vide (pas d\'asks)');
+      bookCache.set(tokenId, { atMs: now, value: null });
       return null;
     }
     const levels = asks.map((level) => {
@@ -438,6 +466,7 @@ async function getLiquidityAtTargetUsd(tokenId) {
     }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
     if (levels.length === 0) {
       logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
+      bookCache.set(tokenId, { atMs: now, value: null });
       return null;
     }
     levels.sort((a, b) => a.p - b.p);
@@ -447,9 +476,12 @@ async function getLiquidityAtTargetUsd(tokenId) {
       if (Math.abs(p - bestPrice) > 1e-6) break;
       totalUsd += p * s;
     }
-    return totalUsd > 0 ? totalUsd : null;
+    const out = totalUsd > 0 ? totalUsd : null;
+    bookCache.set(tokenId, { atMs: now, value: out });
+    return out;
   } catch (err) {
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
+    bookCache.set(tokenId, { atMs: now, value: null });
     return null;
   }
 }
@@ -787,9 +819,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
     try {
       let client = clientOrNull;
       if (!client) {
-        const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
-        const creds = await clientWithoutCreds.createOrDeriveApiKey();
-        client = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+        client = await buildClobClientCachedCreds();
       }
       const options = { negRisk: false };
 
@@ -811,7 +841,9 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       }
 
       if (useMarketOrder) {
-        const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY };
+        // Worst-price limit (slippage protection) : verrouille l'entrée dans la fenêtre 97–97,5 %.
+        const worstPrice = MAX_P;
+        const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
         const result = await client.createAndPostMarketOrder(userMarketOrder, options, OrderType.FOK);
         consecutiveOrderErrors = 0;
         return { ok: true, orderID: result?.orderID ?? result?.id };
@@ -877,9 +909,7 @@ async function tryPlaceOrderForSignal(signal) {
   let clobClient = null;
   try {
     const tCreds0 = Date.now();
-    const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
-    const creds = await clientWithoutCreds.createOrDeriveApiKey();
-    clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+    clobClient = await buildClobClientCachedCreds();
     timingsMs.creds = Date.now() - tCreds0;
   } catch (err) {
     console.warn('WebSocket tryPlace: CLOB client:', err.message);
@@ -1117,9 +1147,7 @@ async function run() {
     // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
     let clobClient = null;
     try {
-      const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
-      const creds = await clientWithoutCreds.createOrDeriveApiKey();
-      clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+      clobClient = await buildClobClientCachedCreds();
     } catch (err) {
       console.warn('CLOB client (solde/ordres):', err.message);
     }
