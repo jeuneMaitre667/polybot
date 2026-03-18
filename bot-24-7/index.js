@@ -205,6 +205,14 @@ const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
 
+// @polymarket/clob-client s'attend à un signer Ethers qui expose `_signTypedData` (ethers v5).
+// Avec ethers v6, on a `signTypedData` mais pas `_signTypedData`, donc il fall back sur un autre chemin
+// et peut échouer avec "wallet client is missing account address".
+// On shim pour que le SDK utilise bien le chemin "ethers typed data signer".
+if (wallet && typeof wallet._signTypedData !== 'function' && typeof wallet.signTypedData === 'function') {
+  wallet._signTypedData = wallet.signTypedData.bind(wallet);
+}
+
 /**
  * Type de wallet CLOB (doc Polymarket) :
  * 0 = EOA (clé privée standalone),
