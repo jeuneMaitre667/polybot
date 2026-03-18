@@ -7,8 +7,8 @@ import { BotOverview } from './components/BotOverview';
 export default function App() {
   return (
     <div className="min-h-screen text-slate-200">
-      <header className="border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-xl">
-        <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6 lg:px-8">
+      <header className="border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-xl overflow-hidden">
+        <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 px-4 py-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6 lg:px-8">
           <div className="min-w-0">
             <div className="flex items-baseline gap-2 flex-wrap">
               <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
