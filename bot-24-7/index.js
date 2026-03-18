@@ -481,14 +481,18 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
 const clobClientWarnThrottle = { ts: 0, lastMsg: '' };
 const CLOB_CLIENT_WARN_THROTTLE_MS = 30 * 1000;
 
-function warnClobClientIfThrottled(message) {
-  const msg = String(message || 'erreur');
+function warnClobClientIfThrottled(errOrMessage) {
+  const err = (errOrMessage instanceof Error) ? errOrMessage : null;
+  const msg = String(errOrMessage?.message || errOrMessage || 'erreur');
   const now = Date.now();
   if (clobClientWarnThrottle.lastMsg === msg && now - clobClientWarnThrottle.ts < CLOB_CLIENT_WARN_THROTTLE_MS) return;
   clobClientWarnThrottle.lastMsg = msg;
   clobClientWarnThrottle.ts = now;
   console.warn('CLOB client (solde/ordres):', msg);
-  logJson('warn', 'CLOB client indisponible (solde/ordres)', { error: msg });
+  logJson('warn', 'CLOB client indisponible (solde/ordres)', {
+    error: msg,
+    stack: err?.stack ? String(err.stack).slice(0, 1200) : undefined,
+  });
 }
 
 // Cache en mémoire : dernier book par token (y compris null) pour limiter /book et réduire la latence.
@@ -1232,7 +1236,7 @@ async function run() {
     try {
       clobClient = await buildClobClientCachedCreds();
     } catch (err) {
-      warnClobClientIfThrottled(err?.message);
+      warnClobClientIfThrottled(err);
     }
 
     async function getBalance() {
