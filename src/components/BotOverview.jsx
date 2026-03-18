@@ -277,7 +277,7 @@ export function BotOverview() {
           <p className="mt-2 text-xs text-muted-foreground">
             {hasActiveLiquidity ? (
               <>
-                Profondeur cumulée jusqu'à 97,5 % : montant max à miser (FOK <= 97,5c). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
+                Profondeur cumulée jusqu'à 97,5 % : montant max à miser (FOK ≤ 97,5c). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
                 <span className="block mt-0.5 opacity-80">
                   {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
                   {lastActiveLabel && ` · ${lastActiveLabel}`}

@@ -339,7 +339,7 @@ export function BitcoinUpDownStrategy() {
             <div className="rounded-xl border border-border/50 bg-muted/10 p-4">
               <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-2">
                 <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                Taille max suggérée (FOK <= 97,5c)
+                Taille max suggérée (FOK ≤ 97,5c)
               </h3>
               <p className="text-xs text-muted-foreground mb-2">
                 Liquidité disponible à 97–97,5 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour ne pas dépasser 97,5c.
