@@ -8,19 +8,8 @@ export default function App() {
   return (
     <div className="min-h-screen text-slate-200">
       <header className="border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-xl overflow-hidden">
-        <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 px-4 py-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6 lg:px-8">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2 flex-wrap">
-              <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
-                <span className="text-emerald-400">Polymarket</span>
-                <span className="text-slate-400 font-medium">Bot 24/7</span>
-              </h1>
-              <span className="rounded-md bg-slate-800/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-400 border border-slate-700/60">
-                Temps réel
-              </span>
-            </div>
-          </div>
-          <nav className="w-full sm:w-auto">
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <nav className="w-full">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-stretch sm:justify-items-end">
               <BotStatusBadge label="Bot 1h" />
               {DEFAULT_BOT_STATUS_URL_15M && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="Bot 15m" />}
