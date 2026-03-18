@@ -36,7 +36,9 @@ if [ ! -d "$REPO_DIR/.git" ]; then
   git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
 else
   echo "=== Mise à jour du repo (git pull) ==="
-  (cd "$REPO_DIR" && git pull)
+  # Evite l'échec non-interactif "Need to specify how to reconcile divergent branches"
+  # (Git récent impose parfois de préciser merge vs rebase).
+  (cd "$REPO_DIR" && git pull --no-rebase)
 fi
 
 if [ ! -d "$REPO_DIR/bot-24-7" ]; then
