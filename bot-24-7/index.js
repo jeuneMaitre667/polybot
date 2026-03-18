@@ -683,47 +683,9 @@ async function fetchSignals() {
     fallbackSlugMs: null,
   };
 
-  // Piste latence: sur le mode 15m, éviter le pattern "GET /events (puis fallback /events/slug)".
-  // On fetch directement l'event courant par slug ; si échec, on réessaie une fois avant le fallback lourd pour garder une latence basse type bot 1h.
-  if (MARKET_MODE === '15m') {
-    const tDirect0 = Date.now();
-    const DIRECT_SLUG_TIMEOUT_MS = 8000;
-    const slug = getCurrent15mEventSlug();
-    let directOk = false;
-    for (let attempt = 1; attempt <= 2 && !directOk; attempt++) {
-      try {
-        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: DIRECT_SLUG_TIMEOUT_MS });
-        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
-          events = [ev];
-          logJson('info', attempt === 1 ? 'fetchSignals: direct slug 15m — event reçu' : 'fetchSignals: direct slug 15m — event reçu (retry)', { slug, attempt });
-          console.log(`[fetchSignals] Direct slug 15m: ${slug} — event reçu${attempt === 2 ? ' (retry)' : ''}`);
-          profile.directSlugOk = true;
-          directOk = true;
-        } else {
-          if (attempt === 1) {
-            logJson('info', 'fetchSignals: direct slug 15m — event invalide ou vide', { slug });
-            console.log(`[fetchSignals] Direct slug 15m: ${slug} — event invalide ou vide`);
-          }
-        }
-      } catch (err) {
-        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-        if (attempt === 1) {
-          logJson('info', 'fetchSignals: direct slug 15m — erreur, retry', { slug, error: msg });
-          console.log(`[fetchSignals] Direct slug 15m: ${slug} — ${msg} (retry)`);
-        } else {
-          logJson('info', 'fetchSignals: direct slug 15m — erreur (fallback /events)', { slug, error: msg });
-          console.log(`[fetchSignals] Direct slug 15m: ${slug} — ${msg} (fallback /events)`);
-        }
-      }
-    }
-    profile.directSlugOk = directOk;
-    profile.directSlugMs = Date.now() - tDirect0;
-  }
-
-  // Si direct slug ne donne rien (ou si on est en mode horaire), on retombe sur la logique historique /events.
-  // En 15m on réduit le timeout pour limiter la latence en cas de fallback (aligné sur le bot 1h).
-  const eventsTimeoutMs = MARKET_MODE === '15m' ? 8000 : 15000;
-  if (events.length === 0) {
+  // Même logique pour 15m et horaire : d'abord GET /events (liste), puis secours par slug si la liste ne contient pas le créneau actuel.
+  const eventsTimeoutMs = 15000;
+  {
     try {
       const tEvents0 = Date.now();
       const { data } = await axios.get(GAMMA_EVENTS_URL, {
@@ -833,18 +795,11 @@ async function fetchSignals() {
     }
   }
 
-  // Synthèse de stratégie pour corréler la latence avec le chemin Gamma pris.
+  // Synthèse de stratégie (15m et horaire : même logique liste puis secours slug).
   profile.totalMs = Date.now() - tFetchStartMs;
-  if (MARKET_MODE === '15m') {
-    if (profile.directSlugOk === true) profile.strategy = 'direct_ok';
-    else if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
-    else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
-    else profile.strategy = 'events_empty_or_invalid';
-  } else {
-    if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
-    else if (profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
-    else profile.strategy = 'events_empty_or_invalid';
-  }
+  if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
+  else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
+  else profile.strategy = 'events_empty_or_invalid';
   results._fetchSignalsProfile = profile;
   return results;
 }
