@@ -57,6 +57,14 @@ export function BotOverview() {
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
   const hasTradeLatencyStats = (tradeLatencyStats?.all?.count ?? 0) > 0;
   const hasTradeLatencyStats15m = (tradeLatencyStats15m?.all?.count ?? 0) > 0;
+  const cycleLatencyStats = data?.cycleLatencyStats ?? null;
+  const cycleLatencyStats15m = data15m?.cycleLatencyStats ?? null;
+  const hasCycleLatencyStats = (cycleLatencyStats?.count ?? 0) > 0;
+  const hasCycleLatencyStats15m = (cycleLatencyStats15m?.count ?? 0) > 0;
+  const signalDecisionLatencyStats = data?.signalDecisionLatencyStats ?? null;
+  const signalDecisionLatencyStats15m = data15m?.signalDecisionLatencyStats ?? null;
+  const hasSignalDecisionLatencyStats = (signalDecisionLatencyStats?.all?.count ?? 0) > 0;
+  const hasSignalDecisionLatencyStats15m = (signalDecisionLatencyStats15m?.all?.count ?? 0) > 0;
   const show15m = !!statusUrl15m;
 
   function formatLastLiquidityAt(lastAtIso, nowTsVal) {
@@ -343,6 +351,55 @@ export function BotOverview() {
                 ? 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux 15 min. Relevés envoyés par le bot.'
                 : 'Profondeur au meilleur ask (97–97,5 %) pour les créneaux horaires. Relevés envoyés par le bot.'
             )}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className={`${cardBase} border-t-2 border-t-cyan-500/30`}>
+        <CardHeader className="pb-2 space-y-2">
+          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+              Latence bot (sans trade)
+            </CardTitle>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-muted-foreground">
+              Cycle :{' '}
+              {hasCycleLatencyStats ? (
+                <span className="text-emerald-500/90 font-medium">{cycleLatencyStats.count} mesure{cycleLatencyStats.count !== 1 ? 's' : ''}</span>
+              ) : (
+                <span className="text-amber-500/90">aucune donnée</span>
+              )}
+            </span>
+            <span className="text-muted-foreground">
+              Signal→décision :{' '}
+              {hasSignalDecisionLatencyStats ? (
+                <span className="text-emerald-500/90 font-medium">{signalDecisionLatencyStats.all.count} mesure{signalDecisionLatencyStats.all.count !== 1 ? 's' : ''}</span>
+              ) : (
+                <span className="text-amber-500/90">aucune donnée</span>
+              )}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-xs text-muted-foreground uppercase tracking-wider">Cycle (24 h)</span>
+              <span className="text-sm font-medium text-slate-200 tabular-nums">
+                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? `~${Math.round(cycleLatencyStats.avgMs)} ms (p95 ${cycleLatencyStats.p95Ms ?? '—'} ms)` : '—'}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</span>
+              <span className="text-sm font-medium text-slate-200 tabular-nums">
+                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null
+                  ? `~${Math.round(signalDecisionLatencyStats.all.avgMs)} ms (p95 ${signalDecisionLatencyStats.all.p95Ms ?? '—'} ms)`
+                  : '—'}
+              </span>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] text-muted-foreground/80">
+            Mesures disponibles même avec solde à 0 : cycle = une boucle complète ; signal→décision = temps jusqu’aux pré-checks/sizing (sans ordre).
           </p>
         </CardContent>
       </Card>

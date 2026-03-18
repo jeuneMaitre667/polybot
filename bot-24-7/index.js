@@ -37,11 +37,17 @@ const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
 const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
 const TRADE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'trade-latency-history.json');
+const CYCLE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'cycle-latency-history.json');
+const SIGNAL_DECISION_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'signal-decision-latency-history.json');
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
 const TRADE_LATENCY_HISTORY_DAYS = 7;
 const TRADE_LATENCY_HISTORY_MAX = 2000;
+const CYCLE_LATENCY_HISTORY_DAYS = 7;
+const CYCLE_LATENCY_HISTORY_MAX = 5000;
+const SIGNAL_DECISION_LATENCY_HISTORY_DAYS = 7;
+const SIGNAL_DECISION_LATENCY_HISTORY_MAX = 10000;
 
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
@@ -346,6 +352,52 @@ function appendTradeLatencyHistory(entry) {
     arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
     if (arr.length > TRADE_LATENCY_HISTORY_MAX) arr = arr.slice(-TRADE_LATENCY_HISTORY_MAX);
     fs.writeFileSync(TRADE_LATENCY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
+  } catch (_) {}
+}
+
+/** Enregistre la latence d'un cycle (ms) sur 7 jours (mesurable même sans trade). */
+function appendCycleLatencyHistory(entry) {
+  if (!entry || typeof entry !== 'object') return;
+  const cycleMs = Number(entry.cycleMs);
+  if (!Number.isFinite(cycleMs) || cycleMs <= 0) return;
+  try {
+    let arr = [];
+    try {
+      const raw = fs.readFileSync(CYCLE_LATENCY_HISTORY_FILE, 'utf8');
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch {
+      // fichier absent ou invalide
+    }
+    const now = Date.now();
+    arr.push({ at: new Date(now).toISOString(), ...entry, cycleMs });
+    const cutoff = now - CYCLE_LATENCY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    if (arr.length > CYCLE_LATENCY_HISTORY_MAX) arr = arr.slice(-CYCLE_LATENCY_HISTORY_MAX);
+    fs.writeFileSync(CYCLE_LATENCY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
+  } catch (_) {}
+}
+
+/** Enregistre la latence "signal -> décision" (ms) sur 7 jours (mesurable même si aucun ordre n'est placé). */
+function appendSignalDecisionLatencyHistory(entry) {
+  if (!entry || typeof entry !== 'object') return;
+  const decisionMs = Number(entry.decisionMs);
+  if (!Number.isFinite(decisionMs) || decisionMs <= 0) return;
+  try {
+    let arr = [];
+    try {
+      const raw = fs.readFileSync(SIGNAL_DECISION_LATENCY_HISTORY_FILE, 'utf8');
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch {
+      // fichier absent ou invalide
+    }
+    const now = Date.now();
+    arr.push({ at: new Date(now).toISOString(), ...entry, decisionMs });
+    const cutoff = now - SIGNAL_DECISION_LATENCY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    if (arr.length > SIGNAL_DECISION_LATENCY_HISTORY_MAX) arr = arr.slice(-SIGNAL_DECISION_LATENCY_HISTORY_MAX);
+    fs.writeFileSync(SIGNAL_DECISION_LATENCY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
   } catch (_) {}
 }
 
@@ -964,6 +1016,7 @@ function startClobWs() {
 }
 
 async function run() {
+  const cycleStartMs = Date.now();
   const signals = await fetchSignals();
 
   // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
@@ -996,6 +1049,8 @@ async function run() {
   } catch (err) {
     console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
   }
+  // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
+  let decisionLogged = 0;
   for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
     const key = getSignalKey(s);
@@ -1013,13 +1068,28 @@ async function run() {
       } else {
         console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
       }
+      if (decisionLogged < 3) {
+        appendSignalDecisionLatencyHistory({
+          source: 'poll',
+          decisionMs: Date.now() - cycleStartMs,
+          reason: liquidity != null && liquidity > 0 ? 'liquidity_ok' : 'liquidity_null',
+          tokenId: s.tokenIdToBuy,
+          conditionId: key,
+          takeSide: s.takeSide,
+          mode: MARKET_MODE,
+        });
+        decisionLogged += 1;
+      }
     } catch (err) {
       console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
     }
     await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
   }
 
-  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
+    appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount: signals?.length ?? 0 });
+    return;
+  }
 
   // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
   await tryRedeemResolvedPositions();
@@ -1114,6 +1184,9 @@ async function run() {
     }
     await new Promise((r) => setTimeout(r, 350));
   }
+
+  // A) Durée de cycle (même sans trade)
+  appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount: signals?.length ?? 0 });
 }
 
 async function main() {

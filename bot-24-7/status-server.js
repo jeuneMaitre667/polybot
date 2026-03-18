@@ -200,6 +200,50 @@ function getTradeLatencyStats24h() {
   }
 }
 
+function getCycleLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'cycle-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const values = filtered.map((e) => Number(e.cycleMs)).filter((n) => Number.isFinite(n) && n > 0);
+    return summarizeLatency(values, lastAt);
+  } catch {
+    return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+  }
+}
+
+function getSignalDecisionLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'signal-decision-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+    }
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const all = [];
+    const poll = [];
+    for (const e of filtered) {
+      const n = Number(e?.decisionMs);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      all.push(n);
+      const src = String(e?.source || '').toLowerCase();
+      if (src === 'poll') poll.push(n);
+    }
+    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt) };
+  } catch {
+    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+  }
+}
+
 /** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
 function getBotConfig() {
   const envPath = path.join(BOT_DIR, '.env');
@@ -256,6 +300,8 @@ const server = http.createServer((req, res) => {
     const stats = getStats24h();
     const liquidityStats = getLiquidityStats();
     const tradeLatencyStats = getTradeLatencyStats24h();
+    const cycleLatencyStats = getCycleLatencyStats24h();
+    const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
     const payload = {
       status: pm2.status,
       uptime: pm2.uptime,
@@ -269,6 +315,8 @@ const server = http.createServer((req, res) => {
       winRate: stats.winRate,
       liquidityStats,
       tradeLatencyStats,
+      cycleLatencyStats,
+      signalDecisionLatencyStats,
       at: new Date().toISOString(),
     };
     if (debugRequested) {
@@ -281,6 +329,8 @@ const server = http.createServer((req, res) => {
         liquidityHistoryFileExists: fs.existsSync(liquidityPath),
         healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
         tradeLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'trade-latency-history.json')),
+        cycleLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'cycle-latency-history.json')),
+        signalDecisionLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'signal-decision-latency-history.json')),
         botDir: BOT_DIR,
       };
     }
