@@ -473,6 +473,38 @@ async function getActiveMarketTokensForWs() {
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
+/** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix — pour enregistrer la mise max par fenêtre même quand le prix n'est pas dans la fenêtre 97–97,5 %. */
+async function fetchActiveWindows() {
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  let events = [];
+  try {
+    const { data } = await axios.get(GAMMA_EVENTS_URL, {
+      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+      timeout: 15000,
+    });
+    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 400) {
+      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    } else throw err;
+  }
+  const results = [];
+  for (const ev of events) {
+    if (!ev?.markets?.length) continue;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+    if (!eventSlug.includes(slugMatch)) continue;
+    const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+    for (const m of ev.markets) {
+      const key = m.conditionId ?? m.condition_id ?? '';
+      if (!key) continue;
+      const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+      results.push({ market: m, endDate: marketEndDate, key });
+    }
+  }
+  return results;
+}
+
 /** Vérifie si l'IP est autorisée à trader (geoblock). */
 async function checkGeoblock() {
   try {
@@ -747,6 +779,26 @@ async function run() {
   const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
   for (const [key, endMs] of recordedLiquidityWindows) {
     if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
+  }
+  // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
+  try {
+    const activeWindows = await fetchActiveWindows();
+    for (const { market: m, endDate, key } of activeWindows) {
+      if (recordedLiquidityWindows.has(key)) continue;
+      const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
+      const tokenUp = getTokenIdToBuy(m, 'Up');
+      const tokenDown = getTokenIdToBuy(m, 'Down');
+      const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
+      const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
+      const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
+      if (liquidity > 0) {
+        appendLiquidityHistory(liquidity);
+        recordedLiquidityWindows.set(key, endMs);
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  } catch (err) {
+    console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
   }
   for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
