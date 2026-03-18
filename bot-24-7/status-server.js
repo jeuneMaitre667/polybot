@@ -281,6 +281,7 @@ function getSignalDecisionLatencyStats24h() {
       return {
         all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
         poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        byStrategy: {},
         reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
       };
     }
@@ -291,6 +292,7 @@ function getSignalDecisionLatencyStats24h() {
       : null;
     const all = [];
     const poll = [];
+    const byStrategy = {};
     const reasonCounts = { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 };
     for (const e of filtered) {
       const n = Number(e?.decisionMs);
@@ -298,17 +300,25 @@ function getSignalDecisionLatencyStats24h() {
       all.push(n);
       const src = String(e?.source || '').toLowerCase();
       if (src === 'poll') poll.push(n);
+      const strategy = String(e?.fetchSignalsStrategy || '').trim() || 'unknown';
+      if (!byStrategy[strategy]) byStrategy[strategy] = [];
+      byStrategy[strategy].push(n);
       const reason = String(e?.reason || '').toLowerCase();
       if (reason === 'no_signal') reasonCounts.no_signal++;
       else if (reason === 'liquidity_ok') reasonCounts.liquidity_ok++;
       else if (reason === 'liquidity_null') reasonCounts.liquidity_null++;
       else reasonCounts.other++;
     }
-    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt), reasonCounts };
+    const byStrategySummary = {};
+    for (const [strategy, values] of Object.entries(byStrategy)) {
+      byStrategySummary[strategy] = summarizeLatency(values, lastAt);
+    }
+    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt), byStrategy: byStrategySummary, reasonCounts };
   } catch {
     return {
       all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
       poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      byStrategy: {},
       reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
     };
   }

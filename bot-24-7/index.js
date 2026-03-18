@@ -684,39 +684,51 @@ async function fetchSignals() {
   };
 
   // Piste latence: sur le mode 15m, éviter le pattern "GET /events (puis fallback /events/slug)".
-  // On fetch directement l'event courant par slug pour réduire les timeouts/variance et faire baisser le p95.
+  // On fetch directement l'event courant par slug ; si échec, on réessaie une fois avant le fallback lourd pour garder une latence basse type bot 1h.
   if (MARKET_MODE === '15m') {
     const tDirect0 = Date.now();
-    try {
-      const slug = getCurrent15mEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
-        events = [ev];
-        logJson('info', 'fetchSignals: direct slug 15m — event reçu', { slug });
-        console.log(`[fetchSignals] Direct slug 15m: ${slug} — event reçu`);
-        profile.directSlugOk = true;
-      } else {
-        logJson('info', 'fetchSignals: direct slug 15m — event invalide ou vide', { slug });
-        console.log(`[fetchSignals] Direct slug 15m: ${slug} — event invalide ou vide`);
-        profile.directSlugOk = false;
+    const DIRECT_SLUG_TIMEOUT_MS = 8000;
+    const slug = getCurrent15mEventSlug();
+    let directOk = false;
+    for (let attempt = 1; attempt <= 2 && !directOk; attempt++) {
+      try {
+        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: DIRECT_SLUG_TIMEOUT_MS });
+        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+          events = [ev];
+          logJson('info', attempt === 1 ? 'fetchSignals: direct slug 15m — event reçu' : 'fetchSignals: direct slug 15m — event reçu (retry)', { slug, attempt });
+          console.log(`[fetchSignals] Direct slug 15m: ${slug} — event reçu${attempt === 2 ? ' (retry)' : ''}`);
+          profile.directSlugOk = true;
+          directOk = true;
+        } else {
+          if (attempt === 1) {
+            logJson('info', 'fetchSignals: direct slug 15m — event invalide ou vide', { slug });
+            console.log(`[fetchSignals] Direct slug 15m: ${slug} — event invalide ou vide`);
+          }
+        }
+      } catch (err) {
+        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+        if (attempt === 1) {
+          logJson('info', 'fetchSignals: direct slug 15m — erreur, retry', { slug, error: msg });
+          console.log(`[fetchSignals] Direct slug 15m: ${slug} — ${msg} (retry)`);
+        } else {
+          logJson('info', 'fetchSignals: direct slug 15m — erreur (fallback /events)', { slug, error: msg });
+          console.log(`[fetchSignals] Direct slug 15m: ${slug} — ${msg} (fallback /events)`);
+        }
       }
-      profile.directSlugMs = Date.now() - tDirect0;
-    } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      logJson('info', 'fetchSignals: direct slug 15m — erreur (fallback /events)', { slug: getCurrent15mEventSlug(), error: msg });
-      console.log(`[fetchSignals] Direct slug 15m: ${getCurrent15mEventSlug()} — ${msg} (fallback /events)`);
-      profile.directSlugOk = false;
-      profile.directSlugMs = Date.now() - tDirect0;
     }
+    profile.directSlugOk = directOk;
+    profile.directSlugMs = Date.now() - tDirect0;
   }
 
   // Si direct slug ne donne rien (ou si on est en mode horaire), on retombe sur la logique historique /events.
+  // En 15m on réduit le timeout pour limiter la latence en cas de fallback (aligné sur le bot 1h).
+  const eventsTimeoutMs = MARKET_MODE === '15m' ? 8000 : 15000;
   if (events.length === 0) {
     try {
       const tEvents0 = Date.now();
       const { data } = await axios.get(GAMMA_EVENTS_URL, {
         params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-        timeout: 15000,
+        timeout: eventsTimeoutMs,
       });
       events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
       profile.usedEvents = true;
@@ -724,7 +736,7 @@ async function fetchSignals() {
     } catch (err) {
       if (err.response?.status === 422 || err.response?.status === 400) {
         const tEvents1 = Date.now();
-        const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
+        const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: eventsTimeoutMs });
         profile.usedEvents = true;
         profile.eventsRetryUsed = true;
         profile.eventsMsTotal = (profile.eventsMsTotal ?? 0) + (Date.now() - tEvents1);
