@@ -897,8 +897,11 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       }
 
       if (useMarketOrder) {
-        // Worst-price limit (slippage protection) : verrouille l'entrée dans la fenêtre 97–97,5 %.
-        const worstPrice = MAX_P;
+        // Worst-price limit (slippage protection) : on plafonne dans [97c ; 97,5c] pour éviter une avg price dégradée.
+        // Pour les WS, `price` a été recalculé juste avant placement avec le meilleur ask courant.
+        // Pour le polling, `price` correspond au prix dans la fenêtre depuis Gamma (moins précis que /price, mais reste sûr).
+        const p = Number(price);
+        const worstPrice = Number.isFinite(p) ? Math.max(MIN_P, Math.min(MAX_P, p)) : MAX_P;
         const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
         const result = await client.createAndPostMarketOrder(userMarketOrder, options, OrderType.FOK);
         consecutiveOrderErrors = 0;
