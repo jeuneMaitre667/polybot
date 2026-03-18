@@ -498,9 +498,12 @@ async function buildClobClientCachedCreds() {
 }
 
 /**
- * Récupère la mise max au prix du marché : montant max (USD) qu'on peut miser tout en restant
- * au meilleur ask (prix affiché), sans dégrader le prix moyen (évite "Avg. Price 100¢" quand le marché est à 97¢).
- * On ne somme que la profondeur au niveau du meilleur ask (dans la plage 96,8–97 %).
+ * Récupère la "mise max" compatible avec un ordre market FOK :
+ * montant max (USD) qu'on peut engager en USDC tout en s'assurant que l'exécution ne dépasse pas
+ * le plafond de prix (97,5c) — en sommant la profondeur cumulée jusqu'au pire prix autorisé.
+ *
+ * Objectif : maximiser la probabilité de remplissage total (moins de no-fill),
+ * au prix d'une avg price potentiellement un peu plus dégradée si on consomme jusqu'au plafond.
  */
 async function getLiquidityAtTargetUsd(tokenId) {
   if (!tokenId) return null;
@@ -525,13 +528,9 @@ async function getLiquidityAtTargetUsd(tokenId) {
       bookCache.set(tokenId, { atMs: now, value: null });
       return null;
     }
-    levels.sort((a, b) => a.p - b.p);
-    const bestPrice = levels[0].p;
     let totalUsd = 0;
-    for (const { p, s } of levels) {
-      if (Math.abs(p - bestPrice) > 1e-6) break;
-      totalUsd += p * s;
-    }
+    // Somme cumulée : permet de caper la taille à la liquidité totale jusqu'au plafond 97,5%.
+    for (const { p, s } of levels) totalUsd += p * s;
     const out = totalUsd > 0 ? totalUsd : null;
     bookCache.set(tokenId, { atMs: now, value: out });
     return out;
@@ -897,11 +896,9 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       }
 
       if (useMarketOrder) {
-        // Worst-price limit (slippage protection) : on plafonne dans [97c ; 97,5c] pour éviter une avg price dégradée.
-        // Pour les WS, `price` a été recalculé juste avant placement avec le meilleur ask courant.
-        // Pour le polling, `price` correspond au prix dans la fenêtre depuis Gamma (moins précis que /price, mais reste sûr).
-        const p = Number(price);
-        const worstPrice = Number.isFinite(p) ? Math.max(MIN_P, Math.min(MAX_P, p)) : MAX_P;
+        // Worst-price limit : on autorise jusqu'à 97,5c (plafond constant),
+        // afin de maximiser le remplissage total (FOK) même si le signal arrive à 97c.
+        const worstPrice = MAX_P;
         const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
         const result = await client.createAndPostMarketOrder(userMarketOrder, options, OrderType.FOK);
         consecutiveOrderErrors = 0;
