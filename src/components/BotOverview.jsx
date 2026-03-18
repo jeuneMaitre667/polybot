@@ -90,13 +90,15 @@ export function BotOverview() {
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
+  const activeCycleLatency = latencyMode === '15m' ? cycleLatencyStats15m : cycleLatencyStats;
+  const hasActiveCycleLatency = latencyMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
+  const activeSignalDecisionLatency = latencyMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
+  const hasActiveSignalDecisionLatency = latencyMode === '15m' ? hasSignalDecisionLatencyStats15m : hasSignalDecisionLatencyStats;
 
   const cardBase = 'border border-border/60 bg-card/90 shadow-card rounded-xl min-h-[140px] flex flex-col';
   const rowClass = 'flex items-center justify-between gap-3 py-2 first:pt-0 border-b border-border/40 last:border-0';
 
-  const decisionReasons = signalDecisionLatencyStats?.reasonCounts ?? null;
-  const decisionReasons15m = signalDecisionLatencyStats15m?.reasonCounts ?? null;
-  const activeDecisionReasons = miseMaxMode === '15m' ? decisionReasons15m : decisionReasons;
+  const activeDecisionReasons = activeSignalDecisionLatency?.reasonCounts ?? null;
   const activeDecisionTotal =
     (activeDecisionReasons?.no_signal ?? 0)
     + (activeDecisionReasons?.liquidity_ok ?? 0)
@@ -265,12 +267,12 @@ export function BotOverview() {
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground uppercase tracking-wider">Cycle bot (24 h)</div>
               <div className="text-lg font-semibold tabular-nums text-slate-50">
-                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? `~${Math.round(cycleLatencyStats.avgMs)} ms` : '—'}
+                {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? `~${Math.round(activeCycleLatency.avgMs)} ms` : '—'}
               </div>
               <div className="text-[11px] text-muted-foreground">
-                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? (
+                {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? (
                   <>
-                    p95 {cycleLatencyStats.p95Ms ?? '—'} ms · {cycleLatencyStats.count} cycle{cycleLatencyStats.count !== 1 ? 's' : ''}
+                    p95 {activeCycleLatency.p95Ms ?? '—'} ms · {activeCycleLatency.count} cycle{activeCycleLatency.count !== 1 ? 's' : ''}
                   </>
                 ) : (
                   'Mesure même sans trade.'
@@ -282,12 +284,12 @@ export function BotOverview() {
             <div className="space-y-1">
               <div className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</div>
               <div className="text-lg font-semibold tabular-nums text-slate-50">
-                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null ? `~${Math.round(signalDecisionLatencyStats.all.avgMs)} ms` : '—'}
+                {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? `~${Math.round(activeSignalDecisionLatency.all.avgMs)} ms` : '—'}
               </div>
               <div className="text-[11px] text-muted-foreground">
-                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null ? (
+                {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? (
                   <>
-                    p95 {signalDecisionLatencyStats.all.p95Ms ?? '—'} ms · {signalDecisionLatencyStats.all.count} mesure{signalDecisionLatencyStats.all.count !== 1 ? 's' : ''}
+                    p95 {activeSignalDecisionLatency.all.p95Ms ?? '—'} ms · {activeSignalDecisionLatency.all.count} mesure{activeSignalDecisionLatency.all.count !== 1 ? 's' : ''}
                     {activeDecisionTotal > 0 && (
                       <span className="block opacity-80">
                         no_signal {formatPct(activeDecisionReasons?.no_signal ?? 0, activeDecisionTotal)} · liquidity_ok {formatPct(activeDecisionReasons?.liquidity_ok ?? 0, activeDecisionTotal)} · liquidity_null {formatPct(activeDecisionReasons?.liquidity_null ?? 0, activeDecisionTotal)}
