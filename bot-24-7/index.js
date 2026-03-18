@@ -185,10 +185,14 @@ function parsePrices(market) {
 
 function getTokenIdToBuy(market, takeSide) {
   const idx = takeSide === 'Up' ? 0 : 1;
-  const ids = market.clobTokenIds ?? market.clob_token_ids;
+  let ids = market.clobTokenIds ?? market.clob_token_ids;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch { ids = null; }
+  }
   if (Array.isArray(ids) && ids[idx]) return String(ids[idx]);
   const tokens = market.tokens;
   if (Array.isArray(tokens) && tokens[idx]?.token_id) return String(tokens[idx].token_id);
+  if (Array.isArray(tokens) && tokens[idx]?.tokenId) return String(tokens[idx].tokenId);
   return null;
 }
 
@@ -355,7 +359,6 @@ async function getLiquidityAtTargetUsd(tokenId) {
       return { p, s };
     }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
     if (levels.length === 0) {
-      console.log(`[Mise max] DEBUG aucun ask en 97-97.5% token=${String(tokenId).slice(0, 20)}`);
       logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
       return null;
     }
@@ -368,7 +371,6 @@ async function getLiquidityAtTargetUsd(tokenId) {
     }
     return totalUsd > 0 ? totalUsd : null;
   } catch (err) {
-    console.log(`[Mise max] DEBUG catch API carnet: ${err?.message || err}`);
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
     return null;
   }
@@ -942,7 +944,6 @@ async function run() {
       const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
       const tokenUp = getTokenIdToBuy(m, 'Up');
       const tokenDown = getTokenIdToBuy(m, 'Down');
-      if (!tokenUp && !tokenDown) console.log(`[Mise max] DEBUG pas de tokenId (Up/Down) pour créneau ${String(key).slice(0, 20)}`);
       const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
       const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
       const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
