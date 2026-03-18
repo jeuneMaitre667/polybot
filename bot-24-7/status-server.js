@@ -153,32 +153,50 @@ function getLiquidityStats() {
   }
 }
 
-/** Lit trade-latency-history.json (tableau { latencyMs, at }[]) et retourne { avgMs, p95Ms, count, lastAt } sur les 24 dernières heures. */
+function summarizeLatency(values, lastAt) {
+  if (!values?.length) return { avgMs: null, p95Ms: null, count: 0, lastAt };
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  const p95 = sorted[Math.max(0, Math.floor(0.95 * (sorted.length - 1)))];
+  return {
+    avgMs: Math.round(sum / sorted.length),
+    p95Ms: Math.round(p95),
+    count: sorted.length,
+    lastAt,
+  };
+}
+
+/** Lit trade-latency-history.json et retourne stats globales + par source (ws/poll) sur les 24 dernières heures. */
 function getTradeLatencyStats24h() {
   try {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+    }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
-    const values = filtered
-      .map((e) => Number(e.latencyMs))
-      .filter((n) => Number.isFinite(n) && n > 0);
     const lastAt = filtered.length > 0
       ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
       : null;
-    if (values.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt };
-    values.sort((a, b) => a - b);
-    const sum = values.reduce((a, b) => a + b, 0);
-    const p95 = values[Math.max(0, Math.floor(0.95 * (values.length - 1)))];
+    const all = [];
+    const ws = [];
+    const poll = [];
+    for (const e of filtered) {
+      const n = Number(e?.latencyMs);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      all.push(n);
+      const src = String(e?.source || '').toLowerCase();
+      if (src === 'ws') ws.push(n);
+      if (src === 'poll') poll.push(n);
+    }
     return {
-      avgMs: Math.round(sum / values.length),
-      p95Ms: Math.round(p95),
-      count: values.length,
-      lastAt,
+      all: summarizeLatency(all, lastAt),
+      ws: summarizeLatency(ws, lastAt),
+      poll: summarizeLatency(poll, lastAt),
     };
   } catch {
-    return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
   }
 }
 

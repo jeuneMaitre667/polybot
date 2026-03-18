@@ -55,8 +55,8 @@ export function BotOverview() {
   const hasLiquidityStats15m = liquidityStats15m?.count > 0;
   const tradeLatencyStats = data?.tradeLatencyStats ?? null;
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
-  const hasTradeLatencyStats = tradeLatencyStats?.count > 0;
-  const hasTradeLatencyStats15m = tradeLatencyStats15m?.count > 0;
+  const hasTradeLatencyStats = (tradeLatencyStats?.all?.count ?? 0) > 0;
+  const hasTradeLatencyStats15m = (tradeLatencyStats15m?.all?.count ?? 0) > 0;
   const show15m = !!statusUrl15m;
 
   function formatLastLiquidityAt(lastAtIso, nowTsVal) {
@@ -228,7 +228,7 @@ export function BotOverview() {
             <span className="text-muted-foreground">
               Horaire :{' '}
               {hasTradeLatencyStats ? (
-                <span className="text-emerald-500/90 font-medium">{tradeLatencyStats.count} trade{tradeLatencyStats.count !== 1 ? 's' : ''}</span>
+                <span className="text-emerald-500/90 font-medium">{tradeLatencyStats.all.count} trade{tradeLatencyStats.all.count !== 1 ? 's' : ''}</span>
               ) : (
                 <span className="text-amber-500/90">aucune donnée</span>
               )}
@@ -237,7 +237,7 @@ export function BotOverview() {
               <span className="text-muted-foreground">
                 15m :{' '}
                 {hasTradeLatencyStats15m ? (
-                  <span className="text-emerald-500/90 font-medium">{tradeLatencyStats15m.count} trade{tradeLatencyStats15m.count !== 1 ? 's' : ''}</span>
+                  <span className="text-emerald-500/90 font-medium">{tradeLatencyStats15m.all.count} trade{tradeLatencyStats15m.all.count !== 1 ? 's' : ''}</span>
                 ) : (
                   <span className="text-amber-500/90">aucune donnée</span>
                 )}
@@ -247,14 +247,20 @@ export function BotOverview() {
         </CardHeader>
         <CardContent className="pt-0 flex-1 flex flex-col justify-end">
           <p className="text-2xl font-semibold tabular-nums text-slate-50">
-            {hasActiveLatency && activeLatency?.avgMs != null ? `~${Math.round(activeLatency.avgMs / 1000)} s` : '—'}
+            {hasActiveLatency && activeLatency?.all?.avgMs != null ? `~${Math.round(activeLatency.all.avgMs / 1000)} s` : '—'}
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
-            {hasActiveLatency && activeLatency?.avgMs != null ? (
+            {hasActiveLatency && activeLatency?.all?.avgMs != null ? (
               <>
-                Moyenne {Math.round(activeLatency.avgMs)} ms · p95 {activeLatency.p95Ms != null ? `${Math.round(activeLatency.p95Ms)} ms` : '—'}
+                Moyenne {Math.round(activeLatency.all.avgMs)} ms · p95 {activeLatency.all.p95Ms != null ? `${Math.round(activeLatency.all.p95Ms)} ms` : '—'}
                 <span className="block mt-0.5 opacity-80">
-                  {activeLatency.count} trade{activeLatency.count !== 1 ? 's' : ''} sur 24 h
+                  {activeLatency.all.count} trade{activeLatency.all.count !== 1 ? 's' : ''} sur 24 h
+                  {((activeLatency.ws?.count ?? 0) > 0 || (activeLatency.poll?.count ?? 0) > 0) && (
+                    <>
+                      {' · '}WS ~{activeLatency.ws?.avgMs != null ? `${Math.round(activeLatency.ws.avgMs)} ms` : '—'}
+                      {' · '}Poll ~{activeLatency.poll?.avgMs != null ? `${Math.round(activeLatency.poll.avgMs)} ms` : '—'}
+                    </>
+                  )}
                 </span>
               </>
             ) : (
