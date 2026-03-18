@@ -33,8 +33,6 @@ function json(res, data, status = 200) {
 function getPm2List() {
   // Cache pour éviter que des échecs transitoires de `pm2 jlist` (timeout / charge CPU)
   // fassent passer brutalement le dashboard en `status:"error"` (offline côté UI).
-  // TTL court: le badge reste réactif sans "flicker".
-  const PM2_CACHE_TTL_MS = Number(process.env.PM2_STATUS_CACHE_TTL_MS) || 15_000;
   if (!getPm2List._cache) {
     getPm2List._cache = { at: 0, value: null };
   }
@@ -52,9 +50,9 @@ function getPm2List() {
     return value;
   } catch (e) {
     // Si l'appel à pm2 jlist échoue mais qu'on a déjà une valeur récente,
-    // on la renvoie pour stabiliser l'UI.
+    // on la renvoie pour stabiliser l'UI (pas de "flicker" sur échec transitoire).
     const cached = getPm2List._cache?.value;
-    if (cached && Date.now() - (getPm2List._cache?.at ?? 0) < PM2_CACHE_TTL_MS) {
+    if (cached) {
       return cached;
     }
     return { status: 'error', error: String(e.message) };
