@@ -319,6 +319,21 @@ function appendLiquidityHistory(liquidityUsd) {
   }
 }
 
+/** Throttle : ne pas logger la même raison pour le même token plus d'une fois par minute (évite spam). */
+const liquidityLogThrottle = new Map(); // tokenId -> { reason, ts }
+const LIQUIDITY_LOG_THROTTLE_MS = 60 * 1000;
+
+function logLiquidityEmptyIfThrottled(tokenId, reason) {
+  const key = tokenId || 'unknown';
+  const now = Date.now();
+  const prev = liquidityLogThrottle.get(key);
+  if (prev && prev.reason === reason && now - prev.ts < LIQUIDITY_LOG_THROTTLE_MS) return;
+  liquidityLogThrottle.set(key, { reason, ts: now });
+  const short = (typeof key === 'string' && key.length > 18) ? key.slice(0, 18) + '…' : key;
+  console.log(`[Mise max] Liquidité 97%: ${reason} (token ${short})`);
+  logJson('info', 'Liquidité 97% vide', { reason, tokenId: short });
+}
+
 /**
  * Récupère la mise max au prix du marché : montant max (USD) qu'on peut miser tout en restant
  * au meilleur ask (prix affiché), sans dégrader le prix moyen (évite "Avg. Price 100¢" quand le marché est à 97¢).
@@ -329,13 +344,19 @@ async function getLiquidityAtTargetUsd(tokenId) {
   try {
     const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 5000 });
     const asks = data?.asks ?? [];
-    if (!Array.isArray(asks) || asks.length === 0) return null;
+    if (!Array.isArray(asks) || asks.length === 0) {
+      logLiquidityEmptyIfThrottled(tokenId, 'carnet vide (pas d\'asks)');
+      return null;
+    }
     const levels = asks.map((level) => {
       const p = parseFloat(level?.price ?? level?.[0] ?? 0);
       const s = parseFloat(level?.size ?? level?.[1] ?? 0);
       return { p, s };
     }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
-    if (levels.length === 0) return null;
+    if (levels.length === 0) {
+      logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
+      return null;
+    }
     levels.sort((a, b) => a.p - b.p);
     const bestPrice = levels[0].p;
     let totalUsd = 0;
@@ -344,7 +365,8 @@ async function getLiquidityAtTargetUsd(tokenId) {
       totalUsd += p * s;
     }
     return totalUsd > 0 ? totalUsd : null;
-  } catch (_) {
+  } catch (err) {
+    logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
     return null;
   }
 }
