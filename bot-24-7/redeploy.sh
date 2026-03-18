@@ -70,7 +70,7 @@ pm2 ping >/dev/null 2>&1 || true
 pm2 ls >/dev/null 2>&1 || true
 pm2 jlist >/dev/null 2>&1 || true
 pm2 list >/dev/null 2>&1 || true
-pm2 module:list 2>/dev/null | grep -q 'pm2-logrotate' && echo "   pm2-logrotate déjà installé" || pm2 install pm2-logrotate >/dev/null 2>&1 || true
+pm2 list 2>/dev/null | grep -q 'pm2-logrotate' && echo "   pm2-logrotate déjà installé" || pm2 install pm2-logrotate >/dev/null 2>&1 || true
 # Config recommandée (sans être trop agressif)
 pm2 set pm2-logrotate:max_size 10M >/dev/null 2>&1 || true
 pm2 set pm2-logrotate:retain 7 >/dev/null 2>&1 || true
