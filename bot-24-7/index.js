@@ -27,7 +27,6 @@ const WS_RECONNECT_MS = 5000;
 const WS_REFRESH_SUBSCRIPTIONS_MS = 30 * 1000;
 const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion alive
 const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 300; // évite rafales d'ordres sur même token
-const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || 1500;
 const CREDS_CACHE_TTL_MS = Number(process.env.CREDS_CACHE_TTL_MS) || 6 * 60 * 60 * 1000;
 const ENABLE_HEARTBEAT = process.env.ENABLE_HEARTBEAT === 'true';
 
@@ -55,7 +54,38 @@ const SIGNAL_DECISION_LATENCY_HISTORY_MAX = 10000;
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
   try {
+    rotateBotJsonLogIfNeeded();
     fs.appendFileSync(BOT_JSON_LOG_FILE, JSON.stringify({ level, message, ts: new Date().toISOString(), ...meta }) + '\n', 'utf8');
+  } catch (_) {}
+}
+
+// Rotation légère de bot.log (JSONL) pour éviter qu'il grossisse indéfiniment.
+const BOT_LOG_MAX_MB = Number(process.env.BOT_LOG_MAX_MB) || 50;
+const BOT_LOG_ROTATE_KEEP = Math.max(1, Number(process.env.BOT_LOG_ROTATE_KEEP) || 5);
+const BOT_LOG_ROTATE_CHECK_MS = 5000;
+let lastBotLogRotateCheckAt = 0;
+
+function rotateBotJsonLogIfNeeded() {
+  const now = Date.now();
+  if (now - lastBotLogRotateCheckAt < BOT_LOG_ROTATE_CHECK_MS) return;
+  lastBotLogRotateCheckAt = now;
+  const maxBytes = BOT_LOG_MAX_MB * 1024 * 1024;
+  try {
+    const st = fs.statSync(BOT_JSON_LOG_FILE);
+    if (!st?.size || st.size < maxBytes) return;
+  } catch (_) {
+    return; // fichier absent, rien à faire
+  }
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const rotated = path.join(BOT_DIR, `bot.log.${stamp}`);
+    fs.renameSync(BOT_JSON_LOG_FILE, rotated);
+    // garder les N derniers rotations
+    const files = fs.readdirSync(BOT_DIR).filter((f) => f.startsWith('bot.log.')).sort();
+    const toDelete = files.length > BOT_LOG_ROTATE_KEEP ? files.slice(0, files.length - BOT_LOG_ROTATE_KEEP) : [];
+    for (const f of toDelete) {
+      try { fs.unlinkSync(path.join(BOT_DIR, f)); } catch (_) {}
+    }
   } catch (_) {}
 }
 
@@ -68,7 +98,16 @@ function writeLastOrder(data) {
 /** Met à jour health.json (lu par status-server pour /api/bot-status). Fusionne updates avec l'état existant. */
 function writeHealth(updates) {
   try {
-    let state = { wsConnected: false, lastOrderAt: null, lastOrderSource: null, geoblockOk: null, killSwitchActive: false, at: null };
+    let state = {
+      wsConnected: false,
+      wsLastChangeAt: null,
+      wsLastConnectedAt: null,
+      lastOrderAt: null,
+      lastOrderSource: null,
+      geoblockOk: null,
+      killSwitchActive: false,
+      at: null,
+    };
     try {
       const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
       const prev = JSON.parse(raw);
@@ -125,6 +164,9 @@ const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000; // 4 min pour le marché 15m
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
 const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
+
+// Cache /book : plus long sur 15m pour réduire variance/ratelimits (overridable via BOOK_CACHE_MS).
+const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || (MARKET_MODE === '15m' ? 3000 : 1500);
 
 const privateKeyRaw = process.env.PRIVATE_KEY?.trim();
 const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_here' || /^0x?REMPLACE/i.test(privateKeyRaw);
@@ -1028,7 +1070,8 @@ function startClobWs() {
     return;
   }
   clobWs.on('open', async () => {
-    writeHealth({ wsConnected: true });
+    const at = new Date().toISOString();
+    writeHealth({ wsConnected: true, wsLastChangeAt: at, wsLastConnectedAt: at });
     console.log('WebSocket CLOB connecté — abonnement best_bid_ask (temps réel).');
     await refreshWsSubscriptions(clobWs);
     wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
@@ -1058,7 +1101,7 @@ function startClobWs() {
     } catch (_) {}
   });
   clobWs.on('close', () => {
-    writeHealth({ wsConnected: false });
+    writeHealth({ wsConnected: false, wsLastChangeAt: new Date().toISOString() });
     if (wsRefreshTimer) clearInterval(wsRefreshTimer);
     if (wsPingTimer) clearInterval(wsPingTimer);
     wsRefreshTimer = null;

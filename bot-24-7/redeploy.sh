@@ -65,6 +65,20 @@ echo "=== Installation des dépendances ==="
 (cd "$BOT_DIR" && npm install)
 
 echo ""
+echo "=== Rotation logs PM2 (pm2-logrotate) ==="
+pm2 ping >/dev/null 2>&1 || true
+pm2 ls >/dev/null 2>&1 || true
+pm2 jlist >/dev/null 2>&1 || true
+pm2 list >/dev/null 2>&1 || true
+pm2 module:list 2>/dev/null | grep -q 'pm2-logrotate' && echo "   pm2-logrotate déjà installé" || pm2 install pm2-logrotate >/dev/null 2>&1 || true
+# Config recommandée (sans être trop agressif)
+pm2 set pm2-logrotate:max_size 10M >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:retain 7 >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:compress true >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:workerInterval 30 >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null 2>&1 || true
+
+echo ""
 echo "=== Redémarrage du bot (PM2) ==="
 (cd "$BOT_DIR" && pm2 restart polymarket-bot 2>/dev/null || pm2 start index.js --name polymarket-bot)
 (cd "$BOT_DIR" && pm2 restart bot-status-server 2>/dev/null || true)

@@ -117,6 +117,8 @@ function getHealth() {
   if (!o || typeof o !== 'object') return null;
   return {
     wsConnected: !!o.wsConnected,
+    wsLastChangeAt: o.wsLastChangeAt ?? null,
+    wsLastConnectedAt: o.wsLastConnectedAt ?? null,
     lastOrderAt: o.lastOrderAt ?? null,
     lastOrderSource: o.lastOrderSource ?? null,
     geoblockOk: o.geoblockOk,
@@ -305,6 +307,7 @@ function getBotConfig() {
     const raw = fs.readFileSync(envPath, 'utf8');
     let useMarketOrder = true;
     let pollIntervalSec = 1;
+    let useWebSocket = true;
     for (const line of raw.split('\n')) {
       const t = line.replace(/#.*/, '').trim();
       if (t.startsWith('USE_MARKET_ORDER=')) {
@@ -314,11 +317,36 @@ function getBotConfig() {
         const n = parseInt(t.slice('POLL_INTERVAL_SEC='.length).trim(), 10);
         if (Number.isFinite(n)) pollIntervalSec = n;
       }
+      if (t.startsWith('USE_WEBSOCKET=')) {
+        useWebSocket = t.slice('USE_WEBSOCKET='.length).trim().toLowerCase() !== 'false';
+      }
     }
-    return { useMarketOrder, pollIntervalSec };
+    return { useMarketOrder, pollIntervalSec, useWebSocket };
   } catch {
-    return { useMarketOrder: true, pollIntervalSec: 1 };
+    return { useMarketOrder: true, pollIntervalSec: 1, useWebSocket: true };
   }
+}
+
+function getHealthAlerts(health, config) {
+  const alerts = [];
+  const now = Date.now();
+  const wsAlertAfterSec = Number(process.env.WS_ALERT_AFTER_SEC) || 120;
+  if (config?.useWebSocket && health) {
+    const lastChangeMs = health.wsLastChangeAt ? new Date(health.wsLastChangeAt).getTime() : null;
+    if (health.wsConnected === false && lastChangeMs && Number.isFinite(lastChangeMs)) {
+      const disconnectedForSec = Math.max(0, Math.floor((now - lastChangeMs) / 1000));
+      if (disconnectedForSec >= wsAlertAfterSec) {
+        alerts.push({ kind: 'ws_disconnected', severity: 'warn', disconnectedForSec, thresholdSec: wsAlertAfterSec });
+      }
+    }
+  }
+  if (health?.killSwitchActive) {
+    alerts.push({ kind: 'kill_switch', severity: 'error' });
+  }
+  if (health?.geoblockOk === false) {
+    alerts.push({ kind: 'geoblock', severity: 'error' });
+  }
+  return alerts;
 }
 
 const server = http.createServer((req, res) => {
@@ -357,6 +385,8 @@ const server = http.createServer((req, res) => {
     const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
     const cycleLatencyStats = getCycleLatencyStats24h();
     const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+    const health = getHealth();
+    const alerts = getHealthAlerts(health, config);
     const payload = {
       status: pm2.status,
       uptime: pm2.uptime,
@@ -366,8 +396,11 @@ const server = http.createServer((req, res) => {
       balanceHistory,
       useMarketOrder: config.useMarketOrder,
       pollIntervalSec: config.pollIntervalSec,
+      useWebSocket: config.useWebSocket,
       ordersLast24h: stats.ordersLast24h,
       winRate: stats.winRate,
+      health,
+      alerts,
       liquidityStats,
       tradeLatencyStats,
       tradeLatencyBreakdownStats,

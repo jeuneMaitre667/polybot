@@ -19,6 +19,7 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   const { data, loading, error, refresh } = useBotStatus(statusUrl);
   const [now, setNow] = useState(() => Date.now());
   const wasOnlineRef = useRef(false);
+  const hadWsAlertRef = useRef(false);
 
   useEffect(() => {
     if (data?.status !== 'online') return;
@@ -34,6 +35,14 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
     wasOnlineRef.current = !!isOnline;
   }, [data?.status, loading, error]);
 
+  useEffect(() => {
+    const wsAlert = Array.isArray(data?.alerts) && data.alerts.some((a) => a?.kind === 'ws_disconnected');
+    if (hadWsAlertRef.current === false && wsAlert && !loading && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      new Notification('Bot Polymarket — WebSocket déconnecté', { body: 'Le WS CLOB est hors ligne depuis un moment (polling continue).' });
+    }
+    hadWsAlertRef.current = !!wsAlert;
+  }, [data?.alerts, loading]);
+
   if (!statusUrl) return null;
 
   const isOnline = data?.status === 'online';
@@ -41,6 +50,8 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   const uptimeStr = uptimeStrFrom(uptimeMs);
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
+  const wsAlert = Array.isArray(data?.alerts) && data.alerts.some((a) => a?.kind === 'ws_disconnected');
+  const wsLabel = data?.useWebSocket === false ? null : (wsAlert ? 'WS KO' : 'WS OK');
 
   return (
     <div className="w-full max-w-sm rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner sm:ml-auto">
@@ -63,6 +74,16 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
         {isOnline && !loading && (
           <span className="text-[11px] text-slate-500 font-medium tabular-nums" title="Ordre au marché, poll toutes les 3 s">
             {orderLabel} · {pollSec}s
+          </span>
+        )}
+        {isOnline && !loading && wsLabel && (
+          <span
+            className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${
+              wsAlert ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+            }`}
+            title={wsAlert ? 'WebSocket CLOB déconnecté depuis trop longtemps (polling continue).' : 'WebSocket CLOB connecté.'}
+          >
+            {wsLabel}
           </span>
         )}
         <button
