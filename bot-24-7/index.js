@@ -313,7 +313,7 @@ function appendLiquidityHistory(liquidityUsd) {
     const cutoff = now - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
     arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
     fs.writeFileSync(LIQUIDITY_HISTORY_FILE, JSON.stringify(arr), 'utf8');
-    console.log(`Liquidité enregistrée: ${Number(liquidityUsd).toFixed(0)} USD (${arr.length} relevés sur 3 j)`);
+    console.log(`[Mise max] Liquidité enregistrée: ${Number(liquidityUsd).toFixed(0)} USD (${arr.length} relevés sur 3 j)`);
   } catch (e) {
     console.error('Erreur enregistrement liquidité:', e?.message ?? e);
   }
@@ -396,15 +396,37 @@ async function fetchSignals() {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+        events = [ev];
+        logJson('info', 'fetchSignals: secours slug 15m — event reçu', { slug });
+        console.log(`[fetchSignals] Secours slug 15m: ${slug} — event reçu`);
+      } else {
+        logJson('info', 'fetchSignals: secours slug 15m — event invalide ou vide', { slug });
+        console.log(`[fetchSignals] Secours slug 15m: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      logJson('info', 'fetchSignals: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
+      console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+    }
   }
   if (MARKET_MODE !== '15m' && events.length === 0) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
+        events = [ev];
+        logJson('info', 'fetchSignals: secours slug horaire — event reçu', { slug });
+        console.log(`[fetchSignals] Secours slug horaire: ${slug} — event reçu`);
+      } else {
+        logJson('info', 'fetchSignals: secours slug horaire — event invalide ou vide', { slug });
+        console.log(`[fetchSignals] Secours slug horaire: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      logJson('info', 'fetchSignals: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
+      console.log(`[fetchSignals] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+    }
   }
   const results = [];
   for (const ev of events) {
@@ -466,15 +488,31 @@ async function getActiveMarketTokensForWs() {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+        events = [ev];
+        console.log(`[WS] Secours slug 15m: ${slug} — event reçu`);
+      } else {
+        console.log(`[WS] Secours slug 15m: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      console.log(`[WS] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+    }
   }
   if (MARKET_MODE !== '15m' && events.length === 0) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
+        events = [ev];
+        console.log(`[WS] Secours slug horaire: ${slug} — event reçu`);
+      } else {
+        console.log(`[WS] Secours slug horaire: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      console.log(`[WS] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+    }
   }
   const tokenIds = [];
   const tokenToSignal = new Map();
@@ -502,11 +540,10 @@ async function getActiveMarketTokensForWs() {
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
-/** Slug du créneau 15m actuel (fin de créneau en s UTC). L'API Gamma liste ne renvoie souvent pas les events 15m ; on les récupère par slug. */
+/** Slug du créneau 15m actuel (fin de créneau en s UTC). Aligné sur le dashboard (Math.ceil). L'API Gamma liste ne renvoie souvent pas les events 15m ; on les récupère par slug. */
 function getCurrent15mEventSlug() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const slotSec = 15 * 60;
-  const slotEnd = Math.floor(nowSec / slotSec) * slotSec + slotSec;
+  const slotEnd = Math.ceil(nowSec / 900) * 900;
   return `${BITCOIN_UP_DOWN_15M_SLUG}-${slotEnd}`;
 }
 
@@ -544,15 +581,35 @@ async function fetchActiveWindows() {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+        events = [ev];
+        logJson('info', 'fetchActiveWindows: secours slug 15m — event reçu', { slug });
+        console.log(`[Mise max] Secours slug 15m: ${slug} — event reçu`);
+      } else {
+        console.log(`[Mise max] Secours slug 15m: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      logJson('info', 'fetchActiveWindows: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
+      console.log(`[Mise max] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
+    }
   }
   if (MARKET_MODE !== '15m' && events.length === 0) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) events = [ev];
-    } catch (_) {}
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
+        events = [ev];
+        logJson('info', 'fetchActiveWindows: secours slug horaire — event reçu', { slug });
+        console.log(`[Mise max] Secours slug horaire: ${slug} — event reçu`);
+      } else {
+        console.log(`[Mise max] Secours slug horaire: ${slug} — event invalide ou vide`);
+      }
+    } catch (err) {
+      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
+      logJson('info', 'fetchActiveWindows: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
+      console.log(`[Mise max] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
+    }
   }
   const results = [];
   const seenKeys = new Set();
@@ -850,6 +907,8 @@ async function run() {
   // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
   try {
     const activeWindows = await fetchActiveWindows();
+    logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
+    console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
     for (const { market: m, endDate, key } of activeWindows) {
       if (recordedLiquidityWindows.has(key)) continue;
       const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
@@ -858,6 +917,9 @@ async function run() {
       const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
       const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
       const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
+      const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
+      logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
+      console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
       if (liquidity > 0) {
         appendLiquidityHistory(liquidity);
         recordedLiquidityWindows.set(key, endMs);
