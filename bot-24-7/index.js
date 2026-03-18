@@ -213,6 +213,13 @@ if (wallet && typeof wallet._signTypedData !== 'function' && typeof wallet.signT
   wallet._signTypedData = wallet.signTypedData.bind(wallet);
 }
 
+// Debug : confirmer que le shim est bien pris en compte par @polymarket/clob-client
+if (wallet) {
+  console.log(
+    `[CLOB signer shim] typeof wallet._signTypedData=${typeof wallet._signTypedData} typeof wallet.signTypedData=${typeof wallet.signTypedData}`
+  );
+}
+
 /**
  * Type de wallet CLOB (doc Polymarket) :
  * 0 = EOA (clé privée standalone),
