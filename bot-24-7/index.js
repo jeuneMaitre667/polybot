@@ -1017,116 +1017,116 @@ function startClobWs() {
 
 async function run() {
   const cycleStartMs = Date.now();
-  const signals = await fetchSignals();
-
-  // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
-  const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
-  for (const [key, endMs] of recordedLiquidityWindows) {
-    if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
-  }
-  // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
+  let signalsCount = 0;
   try {
-    const activeWindows = await fetchActiveWindows();
-    logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
-    console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
-    for (const { market: m, endDate, key } of activeWindows) {
-      if (recordedLiquidityWindows.has(key)) continue;
-      const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
-      const tokenUp = getTokenIdToBuy(m, 'Up');
-      const tokenDown = getTokenIdToBuy(m, 'Down');
-      const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
-      const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
-      const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
-      const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
-      logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
-      console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
-      if (liquidity > 0) {
-        appendLiquidityHistory(liquidity);
-        recordedLiquidityWindows.set(key, endMs);
-      }
-      await new Promise((r) => setTimeout(r, 150));
+    const signals = await fetchSignals();
+    signalsCount = Array.isArray(signals) ? signals.length : 0;
+
+    // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
+    const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    for (const [key, endMs] of recordedLiquidityWindows) {
+      if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
-  } catch (err) {
-    console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
-  }
-  // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
-  let decisionLogged = 0;
-  for (const s of signals) {
-    if (!s.tokenIdToBuy) continue;
-    const key = getSignalKey(s);
-    if (recordedLiquidityWindows.has(key)) continue;
-    let endMs = Date.now();
-    if (s.endDate) {
-      const raw = s.endDate;
-      endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
-    }
+    // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
     try {
-      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-      if (liquidity != null && liquidity > 0) {
-        appendLiquidityHistory(liquidity);
-        recordedLiquidityWindows.set(key, endMs);
-      } else {
-        console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
-      }
-      if (decisionLogged < 3) {
-        appendSignalDecisionLatencyHistory({
-          source: 'poll',
-          decisionMs: Date.now() - cycleStartMs,
-          reason: liquidity != null && liquidity > 0 ? 'liquidity_ok' : 'liquidity_null',
-          tokenId: s.tokenIdToBuy,
-          conditionId: key,
-          takeSide: s.takeSide,
-          mode: MARKET_MODE,
-        });
-        decisionLogged += 1;
+      const activeWindows = await fetchActiveWindows();
+      logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
+      console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
+      for (const { market: m, endDate, key } of activeWindows) {
+        if (recordedLiquidityWindows.has(key)) continue;
+        const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
+        const tokenUp = getTokenIdToBuy(m, 'Up');
+        const tokenDown = getTokenIdToBuy(m, 'Down');
+        const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp) : null;
+        const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown) : null;
+        const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
+        const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
+        logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
+        console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
+        if (liquidity > 0) {
+          appendLiquidityHistory(liquidity);
+          recordedLiquidityWindows.set(key, endMs);
+        }
+        await new Promise((r) => setTimeout(r, 150));
       }
     } catch (err) {
-      console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
+      console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
     }
-    await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
-  }
+    // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
+    let decisionLogged = 0;
+    for (const s of signals) {
+      if (!s.tokenIdToBuy) continue;
+      const key = getSignalKey(s);
+      if (recordedLiquidityWindows.has(key)) continue;
+      let endMs = Date.now();
+      if (s.endDate) {
+        const raw = s.endDate;
+        endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
+      }
+      try {
+        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+        if (liquidity != null && liquidity > 0) {
+          appendLiquidityHistory(liquidity);
+          recordedLiquidityWindows.set(key, endMs);
+        } else {
+          console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
+        }
+        if (decisionLogged < 3) {
+          appendSignalDecisionLatencyHistory({
+            source: 'poll',
+            decisionMs: Date.now() - cycleStartMs,
+            reason: liquidity != null && liquidity > 0 ? 'liquidity_ok' : 'liquidity_null',
+            tokenId: s.tokenIdToBuy,
+            conditionId: key,
+            takeSide: s.takeSide,
+            mode: MARKET_MODE,
+          });
+          decisionLogged += 1;
+        }
+      } catch (err) {
+        console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
+      }
+      await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
+    }
 
-  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
-    appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount: signals?.length ?? 0 });
-    return;
-  }
+    if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
 
-  // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
-  await tryRedeemResolvedPositions();
+    // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
+    await tryRedeemResolvedPositions();
 
-  // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
-  let clobClient = null;
-  try {
-    const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
-    const creds = await clientWithoutCreds.createOrDeriveApiKey();
-    clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
-  } catch (err) {
-    console.warn('CLOB client (solde/ordres):', err.message);
-  }
+    // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
+    let clobClient = null;
+    try {
+      const clientWithoutCreds = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+      const creds = await clientWithoutCreds.createOrDeriveApiKey();
+      clobClient = new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+    } catch (err) {
+      console.warn('CLOB client (solde/ordres):', err.message);
+    }
 
-  async function getBalance() {
-    const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
-    if (viaClob != null) return viaClob;
-    return getUsdcBalanceRpc();
-  }
+    async function getBalance() {
+      const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
+      if (viaClob != null) return viaClob;
+      return getUsdcBalanceRpc();
+    }
 
-  let amountUsd = orderSizeUsd;
-  if (useBalanceAsSize) {
-    const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
-    const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
-    amountUsd = balance != null ? balance : orderSizeUsd;
-    // Un log par cycle pour vérifier clé + solde (CLOB = bonne config, RPC = secours, null = secours ORDER_SIZE_USD)
-    if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
-    else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
-    else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
-    writeBalance(balance);
-    if (amountUsd < orderSizeMinUsd) return;
-  } else {
-    const balanceForStatus = await getBalance();
-    writeBalance(balanceForStatus);
-  }
+    let amountUsd = orderSizeUsd;
+    if (useBalanceAsSize) {
+      const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
+      const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
+      amountUsd = balance != null ? balance : orderSizeUsd;
+      // Un log par cycle pour vérifier clé + solde (CLOB = bonne config, RPC = secours, null = secours ORDER_SIZE_USD)
+      if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
+      else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
+      else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
+      writeBalance(balance);
+      if (amountUsd < orderSizeMinUsd) return;
+    } else {
+      const balanceForStatus = await getBalance();
+      writeBalance(balanceForStatus);
+    }
 
-  for (const s of signals) {
+    for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
     if (isInLastMinute(s)) continue;
     const key = getSignalKey(s);
@@ -1183,10 +1183,10 @@ async function run() {
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
     await new Promise((r) => setTimeout(r, 350));
+    }
+  } finally {
+    appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount });
   }
-
-  // A) Durée de cycle (même sans trade)
-  appendCycleLatencyHistory({ cycleMs: Date.now() - cycleStartMs, ok: true, mode: MARKET_MODE, signalsCount: signals?.length ?? 0 });
 }
 
 async function main() {
