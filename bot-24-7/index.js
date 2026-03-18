@@ -392,7 +392,8 @@ async function fetchSignals() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
-  if (MARKET_MODE === '15m' && events.length === 0) {
+  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -410,7 +411,7 @@ async function fetchSignals() {
       console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
     }
   }
-  if (MARKET_MODE !== '15m' && events.length === 0) {
+  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -484,7 +485,8 @@ async function getActiveMarketTokensForWs() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
-  if (MARKET_MODE === '15m' && events.length === 0) {
+  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -499,7 +501,7 @@ async function getActiveMarketTokensForWs() {
       console.log(`[WS] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
     }
   }
-  if (MARKET_MODE !== '15m' && events.length === 0) {
+  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -576,8 +578,9 @@ async function fetchActiveWindows() {
       events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
     } else throw err;
   }
-  // Secours : l'API liste n'inclut parfois pas les events ; récupérer le créneau actuel par slug.
-  if (MARKET_MODE === '15m' && events.length === 0) {
+  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+  // Secours : si la liste n'a aucun event qui matche notre slug (API peut ignorer slug_contains), récupérer le créneau actuel par slug.
+  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrent15mEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
@@ -594,7 +597,7 @@ async function fetchActiveWindows() {
       console.log(`[Mise max] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
     }
   }
-  if (MARKET_MODE !== '15m' && events.length === 0) {
+  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
     try {
       const slug = getCurrentHourlyEventSlug();
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
