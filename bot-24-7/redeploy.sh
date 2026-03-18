@@ -35,10 +35,16 @@ if [ ! -d "$REPO_DIR/.git" ]; then
   rm -rf "$REPO_DIR" 2>/dev/null || true
   git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
 else
-  echo "=== Mise à jour du repo (git pull) ==="
   echo "=== Mise à jour du repo (fetch + reset) ==="
   # Evite les échecs Git récents (divergent branches / lock refs) en forçant l'état local sur origin/main.
-  (cd "$REPO_DIR" && git fetch --prune && git reset --hard origin/main)
+  # Si Git échoue (lock ref), on reclone pour garantir un état cohérent.
+  if (cd "$REPO_DIR" && git fetch --prune && git reset --hard origin/main); then
+    :
+  else
+    echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
+    rm -rf "$REPO_DIR" 2>/dev/null || true
+    git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
+  fi
 fi
 
 if [ ! -d "$REPO_DIR/bot-24-7" ]; then
