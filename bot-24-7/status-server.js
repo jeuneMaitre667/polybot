@@ -222,7 +222,11 @@ function getSignalDecisionLatencyStats24h() {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'signal-decision-latency-history.json'), 'utf8');
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr) || arr.length === 0) {
-      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+      return {
+        all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
+      };
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
@@ -231,16 +235,26 @@ function getSignalDecisionLatencyStats24h() {
       : null;
     const all = [];
     const poll = [];
+    const reasonCounts = { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 };
     for (const e of filtered) {
       const n = Number(e?.decisionMs);
       if (!Number.isFinite(n) || n <= 0) continue;
       all.push(n);
       const src = String(e?.source || '').toLowerCase();
       if (src === 'poll') poll.push(n);
+      const reason = String(e?.reason || '').toLowerCase();
+      if (reason === 'no_signal') reasonCounts.no_signal++;
+      else if (reason === 'liquidity_ok') reasonCounts.liquidity_ok++;
+      else if (reason === 'liquidity_null') reasonCounts.liquidity_null++;
+      else reasonCounts.other++;
     }
-    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt) };
+    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt), reasonCounts };
   } catch {
-    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+    return {
+      all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
+    };
   }
 }
 

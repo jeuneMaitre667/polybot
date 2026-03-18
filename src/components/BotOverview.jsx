@@ -94,13 +94,27 @@ export function BotOverview() {
   const cardBase = 'border border-border/60 bg-card/90 shadow-card rounded-xl min-h-[140px] flex flex-col';
   const rowClass = 'flex items-center justify-between gap-3 py-2 first:pt-0 border-b border-border/40 last:border-0';
 
+  const decisionReasons = signalDecisionLatencyStats?.reasonCounts ?? null;
+  const decisionReasons15m = signalDecisionLatencyStats15m?.reasonCounts ?? null;
+  const activeDecisionReasons = miseMaxMode === '15m' ? decisionReasons15m : decisionReasons;
+  const activeDecisionTotal =
+    (activeDecisionReasons?.no_signal ?? 0)
+    + (activeDecisionReasons?.liquidity_ok ?? 0)
+    + (activeDecisionReasons?.liquidity_null ?? 0)
+    + (activeDecisionReasons?.other ?? 0);
+
+  function formatPct(n, total) {
+    if (!total || total <= 0) return '—';
+    return `${Math.round((n / total) * 100)}%`;
+  }
+
   return (
     <div className="grid gap-6 sm:grid-cols-2">
-      {/* Ligne 1 : Solde | PnL */}
-      <Card className={`${cardBase} border-t-2 border-t-emerald-500/30`}>
+      {/* Ligne 1 : Solde + PnL (fusion) */}
+      <Card className={`${cardBase} border-t-2 border-t-emerald-500/30 sm:col-span-2`}>
         <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-            Solde bot
+            Solde &amp; PnL
           </CardTitle>
           <div className="flex items-center gap-1.5">
             <Badge variant={isOnline ? 'secondary' : 'destructive'} className="text-[10px] px-2 py-0.5">
@@ -113,56 +127,43 @@ export function BotOverview() {
             )}
           </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <div className="space-y-0">
-            <div className={rowClass}>
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Horaire</span>
-              <span className="text-xl font-semibold tabular-nums text-emerald-400">
-                {balance != null ? formatUsd(balance) : '—'}
-              </span>
-            </div>
-            {show15m && (
+        <CardContent className="pt-0 flex-1">
+          <div className="grid gap-6 sm:grid-cols-2">
+            <div className="space-y-0">
               <div className={rowClass}>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">15 min</span>
-                <span className="text-xl font-semibold tabular-nums text-emerald-400">
-                  {balance15m != null ? formatUsd(balance15m) : '—'}
-                </span>
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Solde (horaire)</span>
+                <span className="text-xl font-semibold tabular-nums text-emerald-400">{balance != null ? formatUsd(balance) : '—'}</span>
               </div>
-            )}
-          </div>
-          <p className="mt-3 text-[11px] text-muted-foreground/80">
-            {data?.at && new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-            {show15m && data15m?.at && ` · 15m ${new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
-          </p>
-        </CardContent>
-      </Card>
+              {show15m && (
+                <div className={rowClass}>
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">Solde (15 min)</span>
+                  <span className="text-xl font-semibold tabular-nums text-emerald-400">{balance15m != null ? formatUsd(balance15m) : '—'}</span>
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-muted-foreground/80">
+                {data?.at && new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                {show15m && data15m?.at && ` · 15m ${new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
+              </p>
+            </div>
 
-      <Card className={`${cardBase} border-t-2 border-t-amber-500/30`}>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-            PnL (période graphique)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <div className="space-y-0">
-            <div className={rowClass}>
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Horaire</span>
-              <span className={`text-xl font-semibold tabular-nums ${pnl != null && pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)} %` : '—'}
-              </span>
-            </div>
-            {show15m && (
+            <div className="space-y-0">
               <div className={rowClass}>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">15 min</span>
-                <span className={`text-xl font-semibold tabular-nums ${pnl15m != null && pnl15m >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pnl15m != null ? `${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(1)} %` : '—'}
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">PnL (horaire)</span>
+                <span className={`text-xl font-semibold tabular-nums ${pnl != null && pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)} %` : '—'}
                 </span>
               </div>
-            )}
+              {show15m && (
+                <div className={rowClass}>
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">PnL (15 min)</span>
+                  <span className={`text-xl font-semibold tabular-nums ${pnl15m != null && pnl15m >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {pnl15m != null ? `${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(1)} %` : '—'}
+                  </span>
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-muted-foreground/80">PnL calculé sur l’historique de solde (période graphique).</p>
+            </div>
           </div>
-          <p className="mt-3 text-[11px] text-muted-foreground/80">
-            Historique de solde disponible
-          </p>
         </CardContent>
       </Card>
 
@@ -203,11 +204,11 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} border-t-2 border-t-fuchsia-500/30`}>
+      <Card className={`${cardBase} border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
         <CardHeader className="pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Délai moyen trade (24 h)
+              Latences (trade + bot)
             </CardTitle>
             {show15m && (
               <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
@@ -232,49 +233,73 @@ export function BotOverview() {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            <span className="text-muted-foreground">
-              Horaire :{' '}
-              {hasTradeLatencyStats ? (
-                <span className="text-emerald-500/90 font-medium">{tradeLatencyStats.all.count} trade{tradeLatencyStats.all.count !== 1 ? 's' : ''}</span>
-              ) : (
-                <span className="text-amber-500/90">aucune donnée</span>
-              )}
-            </span>
-            {show15m && (
-              <span className="text-muted-foreground">
-                15m :{' '}
-                {hasTradeLatencyStats15m ? (
-                  <span className="text-emerald-500/90 font-medium">{tradeLatencyStats15m.all.count} trade{tradeLatencyStats15m.all.count !== 1 ? 's' : ''}</span>
-                ) : (
-                  <span className="text-amber-500/90">aucune donnée</span>
-                )}
-              </span>
-            )}
-          </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <p className="text-2xl font-semibold tabular-nums text-slate-50">
-            {hasActiveLatency && activeLatency?.all?.avgMs != null ? `~${Math.round(activeLatency.all.avgMs / 1000)} s` : '—'}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {hasActiveLatency && activeLatency?.all?.avgMs != null ? (
-              <>
-                Moyenne {Math.round(activeLatency.all.avgMs)} ms · p95 {activeLatency.all.p95Ms != null ? `${Math.round(activeLatency.all.p95Ms)} ms` : '—'}
-                <span className="block mt-0.5 opacity-80">
-                  {activeLatency.all.count} trade{activeLatency.all.count !== 1 ? 's' : ''} sur 24 h
-                  {((activeLatency.ws?.count ?? 0) > 0 || (activeLatency.poll?.count ?? 0) > 0) && (
-                    <>
-                      {' · '}WS ~{activeLatency.ws?.avgMs != null ? `${Math.round(activeLatency.ws.avgMs)} ms` : '—'}
-                      {' · '}Poll ~{activeLatency.poll?.avgMs != null ? `${Math.round(activeLatency.poll.avgMs)} ms` : '—'}
-                    </>
-                  )}
-                </span>
-              </>
-            ) : (
-              'Latence mesurée entre le début du placement (pré-checks, sizing) et la réponse OK de l’API CLOB.'
-            )}
-          </p>
+        <CardContent className="pt-0 flex-1">
+          <div className="grid gap-6 sm:grid-cols-3">
+            {/* Trade */}
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground uppercase tracking-wider">Trade (24 h)</div>
+              <div className="text-lg font-semibold tabular-nums text-slate-50">
+                {hasActiveLatency && activeLatency?.all?.avgMs != null ? `~${Math.round(activeLatency.all.avgMs / 1000)} s` : '—'}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {hasActiveLatency && activeLatency?.all?.avgMs != null ? (
+                  <>
+                    Moy {Math.round(activeLatency.all.avgMs)} ms · p95 {activeLatency.all.p95Ms != null ? `${Math.round(activeLatency.all.p95Ms)} ms` : '—'}
+                    <span className="block opacity-80">
+                      {activeLatency.all.count} trade{activeLatency.all.count !== 1 ? 's' : ''}{' '}
+                      {((activeLatency.ws?.count ?? 0) > 0 || (activeLatency.poll?.count ?? 0) > 0) && (
+                        <>
+                          · WS ~{activeLatency.ws?.avgMs != null ? `${Math.round(activeLatency.ws.avgMs)} ms` : '—'} · Poll ~{activeLatency.poll?.avgMs != null ? `${Math.round(activeLatency.poll.avgMs)} ms` : '—'}
+                        </>
+                      )}
+                    </span>
+                  </>
+                ) : (
+                  'Mesure seulement quand un ordre est placé.'
+                )}
+              </div>
+            </div>
+
+            {/* Cycle */}
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground uppercase tracking-wider">Cycle bot (24 h)</div>
+              <div className="text-lg font-semibold tabular-nums text-slate-50">
+                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? `~${Math.round(cycleLatencyStats.avgMs)} ms` : '—'}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? (
+                  <>
+                    p95 {cycleLatencyStats.p95Ms ?? '—'} ms · {cycleLatencyStats.count} cycle{cycleLatencyStats.count !== 1 ? 's' : ''}
+                  </>
+                ) : (
+                  'Mesure même sans trade.'
+                )}
+              </div>
+            </div>
+
+            {/* Signal -> décision */}
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</div>
+              <div className="text-lg font-semibold tabular-nums text-slate-50">
+                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null ? `~${Math.round(signalDecisionLatencyStats.all.avgMs)} ms` : '—'}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null ? (
+                  <>
+                    p95 {signalDecisionLatencyStats.all.p95Ms ?? '—'} ms · {signalDecisionLatencyStats.all.count} mesure{signalDecisionLatencyStats.all.count !== 1 ? 's' : ''}
+                    {activeDecisionTotal > 0 && (
+                      <span className="block opacity-80">
+                        no_signal {formatPct(activeDecisionReasons?.no_signal ?? 0, activeDecisionTotal)} · liquidity_ok {formatPct(activeDecisionReasons?.liquidity_ok ?? 0, activeDecisionTotal)} · liquidity_null {formatPct(activeDecisionReasons?.liquidity_null ?? 0, activeDecisionTotal)}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  'Mesure même sans solde (inclut no_signal).'
+                )}
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -355,54 +380,7 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} border-t-2 border-t-cyan-500/30`}>
-        <CardHeader className="pb-2 space-y-2">
-          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Latence bot (sans trade)
-            </CardTitle>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            <span className="text-muted-foreground">
-              Cycle :{' '}
-              {hasCycleLatencyStats ? (
-                <span className="text-emerald-500/90 font-medium">{cycleLatencyStats.count} mesure{cycleLatencyStats.count !== 1 ? 's' : ''}</span>
-              ) : (
-                <span className="text-amber-500/90">aucune donnée</span>
-              )}
-            </span>
-            <span className="text-muted-foreground">
-              Signal→décision :{' '}
-              {hasSignalDecisionLatencyStats ? (
-                <span className="text-emerald-500/90 font-medium">{signalDecisionLatencyStats.all.count} mesure{signalDecisionLatencyStats.all.count !== 1 ? 's' : ''}</span>
-              ) : (
-                <span className="text-amber-500/90">aucune donnée</span>
-              )}
-            </span>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Cycle (24 h)</span>
-              <span className="text-sm font-medium text-slate-200 tabular-nums">
-                {hasCycleLatencyStats && cycleLatencyStats?.avgMs != null ? `~${Math.round(cycleLatencyStats.avgMs)} ms (p95 ${cycleLatencyStats.p95Ms ?? '—'} ms)` : '—'}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</span>
-              <span className="text-sm font-medium text-slate-200 tabular-nums">
-                {hasSignalDecisionLatencyStats && signalDecisionLatencyStats?.all?.avgMs != null
-                  ? `~${Math.round(signalDecisionLatencyStats.all.avgMs)} ms (p95 ${signalDecisionLatencyStats.all.p95Ms ?? '—'} ms)`
-                  : '—'}
-              </span>
-            </div>
-          </div>
-          <p className="mt-3 text-[11px] text-muted-foreground/80">
-            Mesures disponibles même avec solde à 0 : cycle = une boucle complète ; signal→décision = temps jusqu’aux pré-checks/sizing (sans ordre).
-          </p>
-        </CardContent>
-      </Card>
+      {/* Carte latences fusionnée au-dessus */}
     </div>
   );
 }
