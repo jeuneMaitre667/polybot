@@ -319,9 +319,9 @@ function appendLiquidityHistory(liquidityUsd) {
   }
 }
 
-/** Throttle : ne pas logger la même raison pour le même token plus d'une fois par minute (évite spam). */
+/** Throttle : ne pas logger la même raison pour le même token plus d'une fois toutes les 5 s (évite spam tout en gardant visibilité). */
 const liquidityLogThrottle = new Map(); // tokenId -> { reason, ts }
-const LIQUIDITY_LOG_THROTTLE_MS = 60 * 1000;
+const LIQUIDITY_LOG_THROTTLE_MS = 5 * 1000;
 
 function logLiquidityEmptyIfThrottled(tokenId, reason) {
   const key = tokenId || 'unknown';
