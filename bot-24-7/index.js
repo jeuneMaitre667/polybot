@@ -205,8 +205,24 @@ const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
 
-/** Type de wallet CLOB (doc Polymarket) : 0 = EOA (clé privée standalone), 1 = POLY_PROXY (Magic), 2 = GNOSIS_SAFE (MetaMask/Privy). On utilise une EOA. */
-const CLOB_SIGNATURE_TYPE_EOA = 0;
+/**
+ * Type de wallet CLOB (doc Polymarket) :
+ * 0 = EOA (clé privée standalone),
+ * 1 = POLY_PROXY (Magic),
+ * 2 = GNOSIS_SAFE (Gnosis Safe / proxy le plus fréquent côté Polymarket).
+ *
+ * IMPORTANT : par défaut on garde le comportement EOA (0) pour compatibilité,
+ * mais tu peux corriger en proxy en mettant CLOB_SIGNATURE_TYPE=2 dans ~/bot-24-7/.env
+ * (et éventuellement CLOB_FUNDER_ADDRESS si besoin).
+ */
+const CLOB_SIGNATURE_TYPE = Number(process.env.CLOB_SIGNATURE_TYPE) || 0;
+const CLOB_FUNDER_ADDRESS_RAW = process.env.CLOB_FUNDER_ADDRESS?.trim();
+const clobFunderAddress =
+  CLOB_FUNDER_ADDRESS_RAW
+    ? CLOB_FUNDER_ADDRESS_RAW
+    : CLOB_SIGNATURE_TYPE === 0
+      ? wallet?.address
+      : undefined; // Pour Proxy/Gnosis Safe : funder auto-déduit par le client si non fourni.
 
 const GEOBLOCK_URL = 'https://polymarket.com/api/geoblock';
 /** USDC sur Polygon (USDC.e bridged, 6 decimals). */
@@ -493,8 +509,8 @@ async function getClobCredsCached() {
     CHAIN_ID,
     wallet,
     undefined,
-    CLOB_SIGNATURE_TYPE_EOA,
-    wallet.address,
+    CLOB_SIGNATURE_TYPE,
+    clobFunderAddress,
   );
   const creds = await clientWithoutCreds.createOrDeriveApiKey();
   cachedCreds = creds;
@@ -504,7 +520,7 @@ async function getClobCredsCached() {
 
 async function buildClobClientCachedCreds() {
   const creds = await getClobCredsCached();
-  return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE_EOA, wallet.address);
+  return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE, clobFunderAddress);
 }
 
 /**
