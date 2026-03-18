@@ -1021,6 +1021,14 @@ async function run() {
   try {
     const signals = await fetchSignals();
     signalsCount = Array.isArray(signals) ? signals.length : 0;
+    if (signalsCount === 0) {
+      appendSignalDecisionLatencyHistory({
+        source: 'poll',
+        decisionMs: Date.now() - cycleStartMs,
+        reason: 'no_signal',
+        mode: MARKET_MODE,
+      });
+    }
 
     // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
     const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
