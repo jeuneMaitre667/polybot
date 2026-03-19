@@ -438,7 +438,7 @@ async function tryRedeemResolvedPositions() {
 
 /**
  * Enregistre un relevé de liquidité (dashboard / status-server).
- * @param {number|{ liquidityUsd: number, takeSide?: 'Up'|'Down', source?: string }} payload
+ * @param {number|{ liquidityUsd: number, takeSide?: 'Up'|'Down', source?: string, signalPriceP?: number }} payload
  */
 function appendLiquidityHistory(payload) {
   const obj = typeof payload === 'number' ? { liquidityUsd: payload } : payload;
@@ -446,6 +446,10 @@ function appendLiquidityHistory(payload) {
   if (!Number.isFinite(liquidityUsd) || liquidityUsd <= 0) return;
   const takeSide = obj?.takeSide === 'Up' || obj?.takeSide === 'Down' ? obj.takeSide : undefined;
   const source = typeof obj?.source === 'string' ? obj.source : undefined;
+  const signalPriceP =
+    Number.isFinite(Number(obj?.signalPriceP)) && Number(obj?.signalPriceP) > 0
+      ? Number(obj.signalPriceP)
+      : undefined;
   try {
     let arr = [];
     try {
@@ -456,7 +460,13 @@ function appendLiquidityHistory(payload) {
       // fichier absent ou invalide
     }
     const now = Date.now();
-    const row = { at: new Date(now).toISOString(), liquidityUsd, ...(takeSide ? { takeSide } : {}), ...(source ? { source } : {}) };
+    const row = {
+      at: new Date(now).toISOString(),
+      liquidityUsd,
+      ...(takeSide ? { takeSide } : {}),
+      ...(source ? { source } : {}),
+      ...(signalPriceP != null ? { signalPriceP } : {}),
+    };
     arr.push(row);
     const cutoff = now - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
     arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
@@ -1292,7 +1302,7 @@ async function tryPlaceOrderForSignal(signal) {
   // Enregistrer la mise max (définition avg constrained si activé) pour cette fenêtre dès qu'on a un montant valide,
   // même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
   if (miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
-    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws' });
+    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
     const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
     recordedLiquidityWindows.set(key, endMs);
   }
@@ -1593,8 +1603,8 @@ async function run() {
           });
           console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → mise max: ${liqLog} USD${useAvgPriceSizing ? ' (avg constrained)' : ''}`);
           if (liquidity > 0) {
-            if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window' });
-            if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window' });
+            if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window', signalPriceP: bestAskUp });
+            if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window', signalPriceP: bestAskDown });
             recordedLiquidityWindows.set(key, endMs);
           }
           await new Promise((r) => setTimeout(r, 150));
@@ -1620,7 +1630,12 @@ async function run() {
         const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy, liquidityProfile);
         bumpCycleBookStats(liquidityProfile);
         if (liquidity != null && liquidity > 0) {
-          appendLiquidityHistory({ liquidityUsd: liquidity, takeSide: s.takeSide, source: 'signal_decision' });
+          appendLiquidityHistory({
+            liquidityUsd: liquidity,
+            takeSide: s.takeSide,
+            source: 'signal_decision',
+            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+          });
           recordedLiquidityWindows.set(key, endMs);
         } else {
           console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
@@ -1761,7 +1776,12 @@ async function run() {
         timingsMs.book = Math.max(1, Date.now() - tBook0);
 
         if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
-          appendLiquidityHistory({ liquidityUsd: liquidity, takeSide: s.takeSide, source: 'poll' });
+          appendLiquidityHistory({
+            liquidityUsd: liquidity,
+            takeSide: s.takeSide,
+            source: 'poll',
+            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+          });
           const endMs = s.endDate
             ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime())
             : Date.now();
@@ -1793,7 +1813,12 @@ async function run() {
     timingsMs.book = Math.max(1, Date.now() - tBook0);
     if (liquidity != null && liquidity > 0) {
       if (!recordedLiquidityWindows.has(key)) {
-        appendLiquidityHistory({ liquidityUsd: liquidity, takeSide: s.takeSide, source: 'poll' });
+        appendLiquidityHistory({
+          liquidityUsd: liquidity,
+          takeSide: s.takeSide,
+          source: 'poll',
+          signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+        });
         const endMs = s.endDate ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime()) : Date.now();
         recordedLiquidityWindows.set(key, endMs);
       }

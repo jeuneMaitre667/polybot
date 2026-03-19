@@ -208,7 +208,40 @@ function liquiditySeriesFromFiltered(filtered) {
     at: e.at,
     liquidityUsd: Math.round(Number(e.liquidityUsd) * 100) / 100,
     takeSide: e.takeSide === 'Up' || e.takeSide === 'Down' ? e.takeSide : null,
+    signalPriceP:
+      Number.isFinite(Number(e?.signalPriceP)) && Number(e?.signalPriceP) > 0
+        ? Math.round(Number(e.signalPriceP) * 1000000) / 1000000
+        : null,
   }));
+}
+
+function liquidityBySignalFromFiltered(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    const p = Number(e?.signalPriceP);
+    return e?.at && Number.isFinite(n) && n > 0 && Number.isFinite(p) && p >= 0.97 && p <= 0.975;
+  });
+  const byBucket = new Map(); // key: 97.0..97.5 (0.1%)
+  for (const e of valid) {
+    const pPct = Number(e.signalPriceP) * 100;
+    const bucketPct = Math.round(pPct * 10) / 10;
+    const key = bucketPct.toFixed(1);
+    if (!byBucket.has(key)) byBucket.set(key, []);
+    byBucket.get(key).push(e);
+  }
+  return Array.from(byBucket.entries())
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([key, entries]) => {
+      const up = entries.filter((e) => e.takeSide === 'Up');
+      const down = entries.filter((e) => e.takeSide === 'Down');
+      return {
+        signalLabel: `${key}%`,
+        signalPct: Number(key),
+        all: summarizeLiquidityEntries(entries),
+        Up: summarizeLiquidityEntries(up),
+        Down: summarizeLiquidityEntries(down),
+      };
+    });
 }
 
 function buildLiquidityWindow(filtered) {
@@ -227,7 +260,7 @@ function buildLiquidityWindow(filtered) {
 
 /**
  * Rapport liquidité : fenêtres 24h / 3j, par côté, + séries pour graphique.
- * @returns {{ windows: { '24h': object, '72h': object }, series: { '24h': array, '72h': array } }}
+ * @returns {{ windows: { '24h': object, '72h': object }, series: { '24h': array, '72h': array }, bySignal: { '24h': array, '72h': array } }}
  */
 function getLiquidityReport() {
   const emptyWin = { all: emptyLiquidityStats(), Up: emptyLiquidityStats(), Down: emptyLiquidityStats() };
@@ -238,6 +271,7 @@ function getLiquidityReport() {
       return {
         windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
         series: { '24h': [], '72h': [] },
+        bySignal: { '24h': [], '72h': [] },
       };
     }
     const f24 = filterLiquidityByMs(arr, 24 * 60 * 60 * 1000);
@@ -251,11 +285,16 @@ function getLiquidityReport() {
         '24h': liquiditySeriesFromFiltered(f24),
         '72h': liquiditySeriesFromFiltered(f72),
       },
+      bySignal: {
+        '24h': liquidityBySignalFromFiltered(f24),
+        '72h': liquidityBySignalFromFiltered(f72),
+      },
     };
   } catch {
     return {
       windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
       series: { '24h': [], '72h': [] },
+      bySignal: { '24h': [], '72h': [] },
     };
   }
 }
