@@ -1280,6 +1280,22 @@ async function tryPlaceOrderForSignal(signal) {
       priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
     };
   }
+  // Carnet + mise max : avant credentials CLOB. Sinon « Could not create api key » fait return sans aucun relevé WS.
+  const tBook0 = Date.now();
+  const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+  timingsMs.book = Math.max(1, Date.now() - tBook0);
+  let maxUsdAvg = null;
+  if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
+    maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
+  }
+  const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
+  // Enregistrer la mise max (avg constrained si activé) dès qu'on a un montant valide, même sans ordre / sans API key.
+  if (miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
+    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
+    const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
+    recordedLiquidityWindows.set(key, endMs);
+  }
+
   let clobClient = null;
   try {
     const tCreds0 = Date.now();
@@ -1293,22 +1309,6 @@ async function tryPlaceOrderForSignal(signal) {
   const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
   timingsMs.balance = Math.max(1, Date.now() - tBal0);
   let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
-  const tBook0 = Date.now();
-  const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
-  timingsMs.book = Math.max(1, Date.now() - tBook0);
-  let maxUsdAvg = null;
-  if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
-    // Taille max telle que le prix moyen reste proche du bestAsk live (avg constrained).
-    maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
-  }
-  const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
-  // Enregistrer la mise max (définition avg constrained si activé) pour cette fenêtre dès qu'on a un montant valide,
-  // même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
-  if (miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
-    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
-    const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
-    recordedLiquidityWindows.set(key, endMs);
-  }
 
   let allowBelowMin = false;
   let cappedBy = false;
@@ -1322,7 +1322,7 @@ async function tryPlaceOrderForSignal(signal) {
   }
   if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
 
-  // Tentative d'évaluation: on a déjà mesuré bestAsk/creds/balance/book, mais pas de placement d'ordre.
+  // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
   // Permet d'avoir un breakdown même sans trade réel.
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
     if (shouldLogTradeLatencyAttempt(key)) {
