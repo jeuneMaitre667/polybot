@@ -1548,6 +1548,9 @@ async function run() {
           const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
           const tokenUp = getTokenIdToBuy(m, 'Up');
           const tokenDown = getTokenIdToBuy(m, 'Down');
+          const prices = parsePrices(m);
+          const refPriceUp = Array.isArray(prices) ? Number(prices[0]) : null;
+          const refPriceDown = Array.isArray(prices) ? Number(prices[1]) : null;
           const liqProfileUp = {};
           const liqProfileDown = {};
           const [liqUp, liqDown] = await Promise.all([
@@ -1556,13 +1559,33 @@ async function run() {
           ]);
           bumpCycleBookStats(tokenUp ? liqProfileUp : null);
           bumpCycleBookStats(tokenDown ? liqProfileDown : null);
-          const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
+          let recUp = liqUp;
+          let recDown = liqDown;
+          if (useAvgPriceSizing) {
+            if (tokenUp && Number.isFinite(refPriceUp) && refPriceUp >= MIN_P && refPriceUp <= MAX_P && liqUp != null && liqUp > 0) {
+              const maxUp = await getMaxUsdForAvgPrice(tokenUp, refPriceUp + avgPriceTolP);
+              if (maxUp != null && maxUp > 0) recUp = maxUp;
+            }
+            if (tokenDown && Number.isFinite(refPriceDown) && refPriceDown >= MIN_P && refPriceDown <= MAX_P && liqDown != null && liqDown > 0) {
+              const maxDown = await getMaxUsdForAvgPrice(tokenDown, refPriceDown + avgPriceTolP);
+              if (maxDown != null && maxDown > 0) recDown = maxDown;
+            }
+          }
+          const liquidity = Math.max(recUp ?? 0, recDown ?? 0);
           const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
-          logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
-          console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
+          logJson('info', 'Mise max créneau', {
+            key: key?.slice(0, 18) + '…',
+            liquidityUsd: liquidity > 0 ? liquidity : null,
+            rawLiquidityUpUsd: liqUp,
+            rawLiquidityDownUsd: liqDown,
+            recordedUpUsd: recUp,
+            recordedDownUsd: recDown,
+            mode: useAvgPriceSizing ? 'avg_constrained' : 'raw_liquidity',
+          });
+          console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → mise max: ${liqLog} USD${useAvgPriceSizing ? ' (avg constrained)' : ''}`);
           if (liquidity > 0) {
-            if (liqUp != null && liqUp > 0) appendLiquidityHistory({ liquidityUsd: liqUp, takeSide: 'Up', source: 'active_window' });
-            if (liqDown != null && liqDown > 0) appendLiquidityHistory({ liquidityUsd: liqDown, takeSide: 'Down', source: 'active_window' });
+            if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window' });
+            if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window' });
             recordedLiquidityWindows.set(key, endMs);
           }
           await new Promise((r) => setTimeout(r, 150));
