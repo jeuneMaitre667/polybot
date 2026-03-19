@@ -480,14 +480,23 @@ function getSignalDecisionLatencyStats24h() {
   }
 }
 
-/** Lit .env du bot et retourne { useMarketOrder, pollIntervalSec }. */
+/** Lit .env du bot (aligné sur index.js du bot). */
 function getBotConfig() {
   const envPath = path.join(BOT_DIR, '.env');
+  const defaults = {
+    useMarketOrder: true,
+    pollIntervalSec: 1,
+    useWebSocket: true,
+    marketMode: 'hourly',
+    signalPriceSource: 'gamma',
+  };
   try {
     const raw = fs.readFileSync(envPath, 'utf8');
     let useMarketOrder = true;
     let pollIntervalSec = 1;
     let useWebSocket = true;
+    let marketModeRaw = 'hourly';
+    let signalPriceSourceLine = '';
     for (const line of raw.split('\n')) {
       const t = line.replace(/#.*/, '').trim();
       if (t.startsWith('USE_MARKET_ORDER=')) {
@@ -500,10 +509,23 @@ function getBotConfig() {
       if (t.startsWith('USE_WEBSOCKET=')) {
         useWebSocket = t.slice('USE_WEBSOCKET='.length).trim().toLowerCase() !== 'false';
       }
+      if (t.startsWith('MARKET_MODE=')) {
+        marketModeRaw = t.slice('MARKET_MODE='.length).trim().toLowerCase() || 'hourly';
+      }
+      if (t.startsWith('SIGNAL_PRICE_SOURCE=')) {
+        signalPriceSourceLine = t.slice('SIGNAL_PRICE_SOURCE='.length).trim().toLowerCase();
+      }
     }
-    return { useMarketOrder, pollIntervalSec, useWebSocket };
+    const marketMode = marketModeRaw === '15m' ? '15m' : 'hourly';
+    const signalPriceSource =
+      signalPriceSourceLine === 'gamma' || signalPriceSourceLine === 'clob'
+        ? signalPriceSourceLine
+        : marketMode === '15m'
+          ? 'clob'
+          : 'gamma';
+    return { useMarketOrder, pollIntervalSec, useWebSocket, marketMode, signalPriceSource };
   } catch {
-    return { useMarketOrder: true, pollIntervalSec: 1, useWebSocket: true };
+    return { ...defaults };
   }
 }
 
@@ -579,6 +601,8 @@ const server = http.createServer((req, res) => {
       useMarketOrder: config.useMarketOrder,
       pollIntervalSec: config.pollIntervalSec,
       useWebSocket: config.useWebSocket,
+      marketMode: config.marketMode,
+      signalPriceSource: config.signalPriceSource,
       ordersLast24h: stats.ordersLast24h,
       winRate: stats.winRate,
       health,

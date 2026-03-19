@@ -309,6 +309,25 @@ export function BotOverview() {
               </div>
             )}
           </div>
+          {(data?.signalPriceSource || (show15m && data15m?.signalPriceSource)) && (
+            <p className="mt-3 text-[11px] text-muted-foreground/90 border-t border-border/40 pt-3 leading-relaxed">
+              <span className="font-medium text-muted-foreground">Prix signal (poll / fetchSignals)</span>
+              {' · '}
+              {data?.signalPriceSource && (
+                <span title={`MARKET_MODE lu sur ce serveur : ${data.marketMode ?? '?'}`}>
+                  Horaire : {data.signalPriceSource === 'clob' ? 'CLOB (best ask)' : 'Gamma'}
+                </span>
+              )}
+              {show15m && data15m?.signalPriceSource && (
+                <>
+                  {data?.signalPriceSource ? ' · ' : null}
+                  <span title={`MARKET_MODE lu sur ce serveur : ${data15m.marketMode ?? '?'}`}>
+                    15m : {data15m.signalPriceSource === 'clob' ? 'CLOB (best ask)' : 'Gamma'}
+                  </span>
+                </>
+              )}
+            </p>
+          )}
         </CardContent>
       </Card>
 

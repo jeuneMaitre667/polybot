@@ -52,6 +52,13 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   const pollSec = data?.pollIntervalSec ?? 3;
   const wsAlert = Array.isArray(data?.alerts) && data.alerts.some((a) => a?.kind === 'ws_disconnected');
   const wsLabel = data?.useWebSocket === false ? null : (wsAlert ? 'WS KO' : 'WS OK');
+  const signalPriceSource = data?.signalPriceSource;
+  const signalPollHint =
+    signalPriceSource === 'clob'
+      ? 'Prix signal (poll) : best ask CLOB — aligné carnet'
+      : signalPriceSource === 'gamma'
+        ? 'Prix signal (poll) : outcomePrices Gamma'
+        : null;
 
   return (
     <div className="w-full min-w-0 rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner">
@@ -73,8 +80,17 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {isOnline && !loading && (
-            <span className="text-[11px] text-slate-500 font-medium tabular-nums" title="Ordre au marché, poll">
+            <span
+              className="text-[11px] text-slate-500 font-medium tabular-nums"
+              title={[signalPollHint, 'Ordre au marché ou limite, intervalle poll'].filter(Boolean).join(' · ')}
+            >
               {orderLabel} · {pollSec}s
+              {signalPriceSource === 'clob' && (
+                <span className="text-cyan-400/90"> · sig. CLOB</span>
+              )}
+              {signalPriceSource === 'gamma' && (
+                <span className="text-slate-400"> · sig. Gamma</span>
+              )}
             </span>
           )}
           {isOnline && !loading && wsLabel && (
