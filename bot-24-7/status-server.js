@@ -188,7 +188,7 @@ function getTradeLatencyStats24h() {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr) || arr.length === 0) {
-      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, preSignCacheHits: 0, preSignCacheTotal: 0, preSignCacheHitRate: null };
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
@@ -198,6 +198,8 @@ function getTradeLatencyStats24h() {
     const all = [];
     const ws = [];
     const poll = [];
+    let preSignCacheHits = 0;
+    let preSignCacheTotal = 0;
     for (const e of filtered) {
       const n = Number(e?.latencyMs);
       if (!Number.isFinite(n) || n <= 0) continue;
@@ -205,14 +207,21 @@ function getTradeLatencyStats24h() {
       const src = String(e?.source || '').toLowerCase();
       if (src === 'ws') ws.push(n);
       if (src === 'poll') poll.push(n);
+      if (e && typeof e.preSignCacheHit === 'boolean') {
+        preSignCacheTotal += 1;
+        if (e.preSignCacheHit) preSignCacheHits += 1;
+      }
     }
     return {
       all: summarizeLatency(all, lastAt),
       ws: summarizeLatency(ws, lastAt),
       poll: summarizeLatency(poll, lastAt),
+      preSignCacheHits,
+      preSignCacheTotal,
+      preSignCacheHitRate: preSignCacheTotal > 0 ? Math.round((100 * preSignCacheHits) / preSignCacheTotal) : null,
     };
   } catch {
-    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null } };
+    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, preSignCacheHits: 0, preSignCacheTotal: 0, preSignCacheHitRate: null };
   }
 }
 

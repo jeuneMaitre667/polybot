@@ -29,6 +29,9 @@ const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion a
 const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 300; // évite rafales d'ordres sur même token
 const CREDS_CACHE_TTL_MS = Number(process.env.CREDS_CACHE_TTL_MS) || 6 * 60 * 60 * 1000;
 const ENABLE_HEARTBEAT = process.env.ENABLE_HEARTBEAT === 'true';
+/** Cache de pré-signature : create + sign en avance, seul le POST au moment du trade. TTL 60s. */
+const PRE_SIGN_CACHE_TTL_MS = Number(process.env.PRE_SIGN_CACHE_TTL_MS) || 60 * 1000;
+const preSignCache = new Map(); // key -> { signedOrder, expiresAt }
 
 /** Dossier du bot (où se trouve index.js), pour que balance.json et last-order.json soient toujours dans ~/bot-24-7 même si PM2 a été lancé depuis un autre répertoire. */
 const BOT_DIR = path.resolve(__dirname);
@@ -255,6 +258,30 @@ let killSwitchActive = false;
 
 function getSignalKey(signal) {
   return signal.market?.conditionId ?? signal.eventSlug ?? '';
+}
+
+/** Clé de cache pour un ordre pré-signé (même signal + même montant). */
+function getPreSignCacheKey(signal, amountUsd) {
+  const key = getSignalKey(signal);
+  const tokenId = signal?.tokenIdToBuy ?? '';
+  const amount = Number(amountUsd);
+  return `${key}|${tokenId}|${Number.isFinite(amount) ? amount.toFixed(2) : '0'}`;
+}
+
+/** Purge les entrées expirées du cache de pré-signature. */
+function purgeExpiredPreSignCache() {
+  const now = Date.now();
+  for (const [k, v] of preSignCache.entries()) {
+    if (v.expiresAt <= now) preSignCache.delete(k);
+  }
+}
+
+/**
+ * Crée et signe un ordre marché (sans le poster). Centralise la partie "signature" pour pouvoir,
+ * plus tard, la déplacer dans un worker_thread si les mesures montrent un pic de latence ici.
+ */
+async function createSignedMarketOrder(client, userMarketOrder) {
+  return client.createMarketOrder(userMarketOrder, { negRisk: false });
 }
 
 function parsePrices(market) {
@@ -1040,18 +1067,33 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       }
 
       if (useMarketOrder) {
-        // Worst-price limit : on autorise jusqu'à 97,5c (plafond constant),
-        // afin de maximiser le remplissage total (FOK) même si le signal arrive à 97c.
+        // Pré-signature : create + sign puis POST (réduit la latence perçue au moment du trade).
         const worstPrice = MAX_P;
         const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
-        const result = await client.createAndPostMarketOrder(userMarketOrder, options, OrderType.FOK);
+        const cacheKey = getPreSignCacheKey(signal, size);
+        purgeExpiredPreSignCache();
+        let signedOrder = null;
+        let preSignCacheHit = false;
+        const cached = preSignCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+          signedOrder = cached.signedOrder;
+          preSignCache.delete(cacheKey);
+          preSignCacheHit = true;
+        }
+        if (!signedOrder) {
+          signedOrder = await createSignedMarketOrder(client, userMarketOrder);
+          preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
+        }
+        const result = await client.postOrder(signedOrder, OrderType.FOK);
         consecutiveOrderErrors = 0;
-        return { ok: true, orderID: result?.orderID ?? result?.id };
+        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit };
       }
       const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
-      const result = await client.createAndPostOrder(userOrder, options, OrderType.GTC);
+      // Ordre limite : create + sign puis POST (même pattern que marché).
+      const signedOrderLimit = await client.createOrder(userOrder, options);
+      const result = await client.postOrder(signedOrderLimit, OrderType.GTC);
       consecutiveOrderErrors = 0;
-      return { ok: true, orderID: result?.orderID ?? result?.id };
+      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false };
     } catch (err) {
       lastError = err.message;
       const status = err.response?.status;
@@ -1086,7 +1128,10 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   return { ok: false, error: lastError };
 }
 
-/** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Valide le prix côté REST avant de placer, calcule la taille (solde / plafond liquidité), place l'ordre et enregistre. */
+/** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
+const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
+
+/** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
 async function tryPlaceOrderForSignal(signal) {
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
   const t0 = Date.now();
@@ -1094,18 +1139,29 @@ async function tryPlaceOrderForSignal(signal) {
   const key = getSignalKey(signal);
   if (placedKeys.has(key)) return;
   if (isInLastMinute(signal)) return;
-  const tBestAsk0 = Date.now();
-  const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
-  timingsMs.bestAsk = Date.now() - tBestAsk0;
-  if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
-    logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
-    return;
+  let signalWithPrice = signal;
+  if (USE_WS_PRICE_ONLY) {
+    // Prix déjà sur le signal (reçu par WS, filtré 97–97,5 %). Pas d'appel REST → ~50–150 ms de gagné.
+    const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
+    if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
+      logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
+      return;
+    }
+    timingsMs.bestAsk = 0;
+  } else {
+    const tBestAsk0 = Date.now();
+    const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
+    timingsMs.bestAsk = Date.now() - tBestAsk0;
+    if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
+      logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
+      return;
+    }
+    signalWithPrice = {
+      ...signal,
+      priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
+      priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
+    };
   }
-  const signalWithPrice = {
-    ...signal,
-    priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
-    priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
-  };
   let clobClient = null;
   try {
     const tCreds0 = Date.now();
@@ -1134,6 +1190,18 @@ async function tryPlaceOrderForSignal(signal) {
     allowBelowMin = amountUsd < orderSizeMinUsd;
   }
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) return;
+  // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
+  if (useMarketOrder && clobClient) {
+    try {
+      const worstPrice = MAX_P;
+      const userMarketOrder = { tokenID: signalWithPrice.tokenIdToBuy, amount: amountUsd, side: Side.BUY, price: worstPrice };
+      const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
+      const cacheKey = getPreSignCacheKey(signalWithPrice, amountUsd);
+      preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
+    } catch (e) {
+      logJson('info', 'WS: pré-signature ordre (non bloquant)', { error: e?.message });
+    }
+  }
   placedKeys.add(key);
   const tPlace0 = Date.now();
   const result = await placeOrder(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
@@ -1142,10 +1210,10 @@ async function tryPlaceOrderForSignal(signal) {
   if (result.ok) {
     const latencyMs = Date.now() - t0;
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
-    const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
+    const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID, preSignCacheHit: result.preSignCacheHit };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs });
+    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs, preSignCacheHit: result.preSignCacheHit });
     appendTradeLatencyHistory({
       source: 'ws',
       latencyMs,
@@ -1155,9 +1223,11 @@ async function tryPlaceOrderForSignal(signal) {
       conditionId: key,
       tokenId: signalWithPrice.tokenIdToBuy,
       orderID: result.orderID,
+      preSignCacheHit: result.preSignCacheHit ?? false,
     });
     const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max: ${liquidity.toFixed(0)} $` : '';
-    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)`);
+    const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
   } else {
     placedKeys.delete(key);
     logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
@@ -1258,8 +1328,37 @@ function startClobWs() {
   });
 }
 
+/** Profiler de cycle : mesure où le temps est perdu (activer avec CYCLE_PROFILER=1). */
+function createCycleProfiler() {
+  const timings = {};
+  return {
+    async measure(name, fn) {
+      const start = Date.now();
+      try {
+        return await fn();
+      } finally {
+        timings[name] = Math.round(Date.now() - start);
+      }
+    },
+    log() {
+      const entries = Object.entries(timings).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0));
+      console.log('--- Cycle profiler ---');
+      for (const [name, ms] of entries) {
+        if (ms != null) console.log(`  [${name}] ${ms}ms`);
+      }
+      console.log('----------------------');
+    },
+    getTimings() {
+      return { ...timings };
+    },
+  };
+}
+
+const CYCLE_PROFILER = process.env.CYCLE_PROFILER === '1' || process.env.CYCLE_PROFILER === 'true';
+
 async function run() {
   const cycleStartMs = Date.now();
+  const profiler = createCycleProfiler();
   let signalsCount = 0;
   let fetchProfile = null;
   const cycleBookStats = {
@@ -1278,7 +1377,7 @@ async function run() {
   }
 
   try {
-    const signals = await fetchSignals();
+    const signals = await profiler.measure('fetchSignals', () => fetchSignals());
     fetchProfile = signals?._fetchSignalsProfile ?? null;
     signalsCount = Array.isArray(signals) ? signals.length : 0;
     if (signalsCount === 0) {
@@ -1306,36 +1405,39 @@ async function run() {
       if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
     // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
-    try {
-      const activeWindows = await fetchActiveWindows();
-      logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
-      console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
-      for (const { market: m, endDate, key } of activeWindows) {
-        if (recordedLiquidityWindows.has(key)) continue;
-        const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
-        const tokenUp = getTokenIdToBuy(m, 'Up');
-        const tokenDown = getTokenIdToBuy(m, 'Down');
-        const liqProfileUp = {};
-        const liqProfileDown = {};
-        const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : null;
-        const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : null;
-        bumpCycleBookStats(tokenUp ? liqProfileUp : null);
-        bumpCycleBookStats(tokenDown ? liqProfileDown : null);
-        const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
-        const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
-        logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
-        console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
-        if (liquidity > 0) {
-          appendLiquidityHistory(liquidity);
-          recordedLiquidityWindows.set(key, endMs);
+    await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
+      try {
+        const activeWindows = await fetchActiveWindows();
+        logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
+        console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
+        for (const { market: m, endDate, key } of activeWindows) {
+          if (recordedLiquidityWindows.has(key)) continue;
+          const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
+          const tokenUp = getTokenIdToBuy(m, 'Up');
+          const tokenDown = getTokenIdToBuy(m, 'Down');
+          const liqProfileUp = {};
+          const liqProfileDown = {};
+          const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : null;
+          const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : null;
+          bumpCycleBookStats(tokenUp ? liqProfileUp : null);
+          bumpCycleBookStats(tokenDown ? liqProfileDown : null);
+          const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
+          const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
+          logJson('info', 'Mise max créneau', { key: key?.slice(0, 18) + '…', liquidityUsd: liquidity > 0 ? liquidity : null });
+          console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → liquidité: ${liqLog} USD`);
+          if (liquidity > 0) {
+            appendLiquidityHistory(liquidity);
+            recordedLiquidityWindows.set(key, endMs);
+          }
+          await new Promise((r) => setTimeout(r, 150));
         }
-        await new Promise((r) => setTimeout(r, 150));
+      } catch (err) {
+        console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
       }
-    } catch (err) {
-      console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
-    }
+    });
     // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
     let decisionLogged = 0;
+    await profiler.measure('signal_decision_liquidity', async () => {
     for (const s of signals) {
       if (!s.tokenIdToBuy) continue;
       const key = getSignalKey(s);
@@ -1390,19 +1492,21 @@ async function run() {
       }
       await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
     }
+    });
 
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
 
-    // Redeem des tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains au prochain trade
-    await tryRedeemResolvedPositions();
+    await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
     // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
     let clobClient = null;
-    try {
-      clobClient = await buildClobClientCachedCreds();
-    } catch (err) {
-      warnClobClientIfThrottled(err);
-    }
+    await profiler.measure('clob_creds', async () => {
+      try {
+        clobClient = await buildClobClientCachedCreds();
+      } catch (err) {
+        warnClobClientIfThrottled(err);
+      }
+    });
 
     async function getBalance() {
       const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
@@ -1411,21 +1515,24 @@ async function run() {
     }
 
     let amountUsd = orderSizeUsd;
-    if (useBalanceAsSize) {
-      const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
-      const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
-      amountUsd = balance != null ? balance : orderSizeUsd;
-      // Un log par cycle pour vérifier clé + solde (CLOB = bonne config, RPC = secours, null = secours ORDER_SIZE_USD)
-      if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
-      else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
-      else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
-      writeBalance(balance);
-      if (amountUsd < orderSizeMinUsd) return;
-    } else {
-      const balanceForStatus = await getBalance();
-      writeBalance(balanceForStatus);
-    }
+    await profiler.measure('balance', async () => {
+      if (useBalanceAsSize) {
+        const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
+        const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
+        amountUsd = balance != null ? balance : orderSizeUsd;
+        if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
+        else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
+        else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
+        writeBalance(balance);
+        if (amountUsd < orderSizeMinUsd) return;
+      } else {
+        const balanceForStatus = await getBalance();
+        writeBalance(balanceForStatus);
+      }
+    });
+    if (useBalanceAsSize && amountUsd < orderSizeMinUsd) return;
 
+    await profiler.measure('place_orders', async () => {
     for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
     if (isInLastMinute(s)) continue;
@@ -1470,10 +1577,10 @@ async function run() {
     if (result.ok) {
       const latencyMs = Date.now() - t0;
       writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
-      const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID };
+      const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID, preSignCacheHit: result.preSignCacheHit };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
-      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs });
+      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs, preSignCacheHit: result.preSignCacheHit ?? false });
       appendTradeLatencyHistory({
         source: 'poll',
         latencyMs,
@@ -1483,16 +1590,20 @@ async function run() {
         conditionId: key,
         tokenId: s.tokenIdToBuy,
         orderID: result.orderID,
+        preSignCacheHit: result.preSignCacheHit ?? false,
       });
       const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max au prix du marché : ${liquidity.toFixed(0)} $` : '';
-      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)`);
+      const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
     } else {
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
     await new Promise((r) => setTimeout(r, 350));
     }
+    });
   } finally {
+    if (CYCLE_PROFILER) profiler.log();
     appendCycleLatencyHistory({
       cycleMs: Date.now() - cycleStartMs,
       ok: true,
@@ -1504,6 +1615,7 @@ async function run() {
       bookCacheMisses: cycleBookStats.bookCacheMisses,
       bookMsTotal: cycleBookStats.bookMsTotal,
       liquidityCalcMsTotal: cycleBookStats.liquidityCalcMsTotal,
+      cycleProfileMs: profiler.getTimings(),
     });
   }
 }
