@@ -282,7 +282,7 @@ export function BitcoinUpDownStrategy() {
       <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/20 via-sky-500/10 to-emerald-500/20"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/45 via-sky-500/22 to-emerald-500/45 opacity-90"
         />
         <CardHeader className="relative z-10 pb-2">
           <div className="flex items-start justify-between gap-4">
