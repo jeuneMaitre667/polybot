@@ -683,7 +683,8 @@ async function getFilteredAskLevels(tokenId, profile = null) {
         const s = parseFloat(level?.size ?? level?.[1] ?? 0);
         return { p, s };
       })
-      .filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
+      .filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY)
+      .sort((a, b) => a.p - b.p);
 
     if (profile && typeof profile === 'object') {
       profile.bookMs = bookMs;
@@ -749,23 +750,21 @@ function simulateAvgPriceForUsd(amountUsd, levels) {
   return { filled, avgP };
 }
 
-/**
- * Sizing “avg constrained” : calcule la plus grosse taille (USD) telle que
- * le prix moyen de remplissage reste <= targetAvgP.
- */
-async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
-  if (!tokenId) return null;
-  const { levels, totalUsd } = await getFilteredAskLevels(tokenId, profile);
-  if (!levels?.length || !Number.isFinite(totalUsd) || totalUsd <= 0) return null;
-
+function getMaxUsdForAvgPriceFromLevels(levels, targetAvgP, totalUsdHint = null) {
+  if (!Array.isArray(levels) || levels.length === 0) return null;
   const pTarget = Number.isFinite(targetAvgP) ? Math.min(Math.max(targetAvgP, MIN_P), MAX_PRICE_LIQUIDITY) : null;
   if (!pTarget) return null;
 
-  // Binary search: max amountUsd tel que avgP(mid) <= pTarget
+  let totalUsd = Number.isFinite(totalUsdHint) ? Number(totalUsdHint) : null;
+  if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
+    totalUsd = 0;
+    for (const { p, s } of levels) totalUsd += p * s;
+  }
+  if (!Number.isFinite(totalUsd) || totalUsd <= 0) return null;
+
   let lo = 0;
   let hi = totalUsd;
   const eps = 1e-12;
-
   for (let i = 0; i < avgPriceBinIters; i++) {
     const mid = (lo + hi) / 2;
     if (mid <= 0) break;
@@ -773,8 +772,17 @@ async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
     if (filled && avgP != null && avgP <= pTarget + eps) lo = mid;
     else hi = mid;
   }
-
   return lo > 0 ? lo : 0;
+}
+
+/**
+ * Sizing “avg constrained” : calcule la plus grosse taille (USD) telle que
+ * le prix moyen de remplissage reste <= targetAvgP.
+ */
+async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
+  if (!tokenId) return null;
+  const { levels, totalUsd } = await getFilteredAskLevels(tokenId, profile);
+  return getMaxUsdForAvgPriceFromLevels(levels, targetAvgP, totalUsd);
 }
 
 /** Récupère le meilleur ask actuel pour un token (validation avant placement WS). */
@@ -1548,26 +1556,27 @@ async function run() {
           const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
           const tokenUp = getTokenIdToBuy(m, 'Up');
           const tokenDown = getTokenIdToBuy(m, 'Down');
-          const prices = parsePrices(m);
-          const refPriceUp = Array.isArray(prices) ? Number(prices[0]) : null;
-          const refPriceDown = Array.isArray(prices) ? Number(prices[1]) : null;
           const liqProfileUp = {};
           const liqProfileDown = {};
-          const [liqUp, liqDown] = await Promise.all([
-            tokenUp ? getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : Promise.resolve(null),
-            tokenDown ? getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : Promise.resolve(null),
+          const [bookUp, bookDown] = await Promise.all([
+            tokenUp ? getFilteredAskLevels(tokenUp, liqProfileUp) : Promise.resolve({ levels: [], totalUsd: null }),
+            tokenDown ? getFilteredAskLevels(tokenDown, liqProfileDown) : Promise.resolve({ levels: [], totalUsd: null }),
           ]);
+          const liqUp = bookUp?.totalUsd ?? null;
+          const liqDown = bookDown?.totalUsd ?? null;
+          const bestAskUp = Array.isArray(bookUp?.levels) && bookUp.levels.length > 0 ? Number(bookUp.levels[0].p) : null;
+          const bestAskDown = Array.isArray(bookDown?.levels) && bookDown.levels.length > 0 ? Number(bookDown.levels[0].p) : null;
           bumpCycleBookStats(tokenUp ? liqProfileUp : null);
           bumpCycleBookStats(tokenDown ? liqProfileDown : null);
           let recUp = liqUp;
           let recDown = liqDown;
           if (useAvgPriceSizing) {
-            if (tokenUp && Number.isFinite(refPriceUp) && refPriceUp >= MIN_P && refPriceUp <= MAX_P && liqUp != null && liqUp > 0) {
-              const maxUp = await getMaxUsdForAvgPrice(tokenUp, refPriceUp + avgPriceTolP);
+            if (tokenUp && Number.isFinite(bestAskUp) && liqUp != null && liqUp > 0) {
+              const maxUp = getMaxUsdForAvgPriceFromLevels(bookUp.levels, bestAskUp + avgPriceTolP, liqUp);
               if (maxUp != null && maxUp > 0) recUp = maxUp;
             }
-            if (tokenDown && Number.isFinite(refPriceDown) && refPriceDown >= MIN_P && refPriceDown <= MAX_P && liqDown != null && liqDown > 0) {
-              const maxDown = await getMaxUsdForAvgPrice(tokenDown, refPriceDown + avgPriceTolP);
+            if (tokenDown && Number.isFinite(bestAskDown) && liqDown != null && liqDown > 0) {
+              const maxDown = getMaxUsdForAvgPriceFromLevels(bookDown.levels, bestAskDown + avgPriceTolP, liqDown);
               if (maxDown != null && maxDown > 0) recDown = maxDown;
             }
           }
