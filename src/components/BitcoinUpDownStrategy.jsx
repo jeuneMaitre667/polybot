@@ -279,8 +279,12 @@ export function BitcoinUpDownStrategy() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 pb-12">
-      <Card className="border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
-        <CardHeader className="pb-2">
+      <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/12 via-sky-500/0 to-emerald-500/10"
+        />
+        <CardHeader className="relative z-10 pb-2">
           <div className="flex items-start justify-between gap-4">
             <div>
               <CardTitle className="text-xl font-semibold tracking-tight">Stratégie Bitcoin Up or Down</CardTitle>
@@ -310,7 +314,7 @@ export function BitcoinUpDownStrategy() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-8 pt-2">
+        <CardContent className="relative z-10 space-y-8 pt-2">
           <div className="rounded-xl border border-border/40 bg-muted/5 p-5">
             <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
               <span className="w-1 h-4 rounded-full bg-primary/80" aria-hidden />

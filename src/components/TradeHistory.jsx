@@ -121,8 +121,12 @@ export function TradeHistory() {
   ];
 
   return (
-    <Card className="border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
-      <CardHeader className="pb-2">
+    <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/10 via-sky-500/0 to-rose-500/10"
+      />
+      <CardHeader className="relative z-10 pb-2">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <CardTitle className="text-xl font-semibold tracking-tight">Historique des trades</CardTitle>
@@ -132,7 +136,7 @@ export function TradeHistory() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4 pt-2">
+      <CardContent className="relative z-10 space-y-4 pt-2">
         {!address ? (
           <p className="text-sm text-muted-foreground">Connecte ton wallet pour afficher l&apos;historique des trades.</p>
         ) : error ? (

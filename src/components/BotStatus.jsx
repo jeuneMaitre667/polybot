@@ -153,8 +153,12 @@ export function BotBalanceChart() {
   if (loading && fullChartData.length === 0) return null;
 
   return (
-    <Card className="border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
-      <CardHeader className="pb-2">
+    <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-sky-500/10 via-primary/0 to-emerald-500/10"
+      />
+      <CardHeader className="relative z-10 pb-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <CardTitle className="text-lg">Solde bot (évolution)</CardTitle>
@@ -186,7 +190,7 @@ export function BotBalanceChart() {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="relative z-10">
         {chartData.length === 0 ? (
           <p className="text-sm text-muted-foreground">Aucune donnée sur cette période.</p>
         ) : (

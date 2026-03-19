@@ -8,8 +8,12 @@ export function StatsHeader({ markets, onRefresh, loading }) {
   const totalVolume = markets.reduce((acc, m) => acc + (parseFloat(m.volume) || 0), 0);
 
   return (
-    <Card className="border-border/50 bg-card/80 backdrop-blur-sm">
-      <CardContent className="p-5 sm:p-6">
+    <Card className="relative overflow-hidden border-border/50 bg-card/80 backdrop-blur-sm">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/10 via-sky-500/0 to-emerald-500/10"
+      />
+      <CardContent className="relative z-10 p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-6">
           <div className="flex flex-wrap items-center gap-8">
             <div className="flex items-center gap-3">

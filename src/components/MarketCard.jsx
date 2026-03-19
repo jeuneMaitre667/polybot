@@ -45,8 +45,12 @@ export function MarketCard({ market }) {
 
   return (
     <a href={polymarketUrl} target="_blank" rel="noopener noreferrer" className="group block">
-      <Card className="h-full border-border/50 bg-card/80 transition hover:border-primary/30 hover:bg-card">
-        <CardContent className="p-5">
+      <Card className="relative h-full overflow-hidden border-border/50 bg-card/80 transition hover:border-primary/30 hover:bg-card">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-amber-500/10"
+        />
+        <CardContent className="relative z-10 p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <Badge variant={OPPORTUNITY_VARIANTS[category]} className={cn(category === 'soon' && 'bg-amber-500/15 text-amber-400 border-amber-500/30')}>
               {oppLabel}

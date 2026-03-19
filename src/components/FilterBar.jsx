@@ -21,8 +21,12 @@ export function FilterBar({
   onShowRecommendationsChange,
 }) {
   return (
-    <Card className="border-border/50 bg-card/80 backdrop-blur-sm">
-      <CardContent className="p-5 sm:p-6">
+    <Card className="relative overflow-hidden border-border/50 bg-card/80 backdrop-blur-sm">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-sky-500/0 to-emerald-500/10"
+      />
+      <CardContent className="relative z-10 p-5 sm:p-6">
         <div className="flex flex-col gap-6 sm:flex-row sm:flex-wrap sm:items-end">
           {/* Options — groupe distinct */}
           <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 sm:py-2.5 sm:gap-6">
