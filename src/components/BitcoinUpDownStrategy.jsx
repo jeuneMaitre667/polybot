@@ -5,7 +5,7 @@ import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
 import { useBitcoinUpDownResolved15m } from '../hooks/useBitcoinUpDownResolved15m';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
-import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '../hooks/useBotStatus';
+import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
 
@@ -58,12 +58,21 @@ function UpDownDot({ side, title = true }) {
   );
 }
 
+function signalBucketLabelFromPrice(priceP) {
+  const p = Number(priceP);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const pct = p * 100;
+  const bucketPct = Math.round(pct * 10) / 10;
+  return `${bucketPct.toFixed(1)}%`;
+}
+
 export function BitcoinUpDownStrategy() {
   const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon, address2, status2, errorMessage2, connect2, disconnect2 } = useWallet();
   const { signals } = useBitcoinUpDownSignals();
   const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
+  const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
   const liquidityStats = botStatusData?.liquidityStats ?? null;
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
@@ -196,6 +205,30 @@ export function BitcoinUpDownStrategy() {
       won: withSimul.filter((r) => r.botWon === true).length,
     };
   }, [resolved15m, initialBalance, includeFees]);
+
+  const miseMaxBySignalMapHourly = useMemo(() => {
+    const rows = botStatusData?.liquidityReport?.bySignal?.['72h'];
+    const map = new Map();
+    if (!Array.isArray(rows)) return map;
+    for (const r of rows) {
+      const k = String(r?.signalLabel || '').trim();
+      if (!k) continue;
+      map.set(k, r);
+    }
+    return map;
+  }, [botStatusData]);
+
+  const miseMaxBySignalMap15m = useMemo(() => {
+    const rows = botStatusData15m?.liquidityReport?.bySignal?.['72h'];
+    const map = new Map();
+    if (!Array.isArray(rows)) return map;
+    for (const r of rows) {
+      const k = String(r?.signalLabel || '').trim();
+      if (!k) continue;
+      map.set(k, r);
+    }
+    return map;
+  }, [botStatusData15m]);
 
   const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
 
@@ -553,6 +586,8 @@ export function BitcoinUpDownStrategy() {
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
+                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Signal</th>
+                          <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Mise max signal</th>
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
                           <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
@@ -563,6 +598,15 @@ export function BitcoinUpDownStrategy() {
                         {resolvedHours.map((r, i) => {
                           const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
                           const netPnl = r.botWon !== null ? backtestResult.netPnlMap.get(rowKey) : undefined;
+                          const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
+                          const signalStats = signalLabel ? miseMaxBySignalMapHourly.get(signalLabel) : null;
+                          const signalSide = r.botWouldTake === 'Up' || r.botWouldTake === 'Down' ? r.botWouldTake : null;
+                          const signalMiseMax = signalStats
+                            ? (signalSide ? signalStats?.[signalSide]?.avg : signalStats?.all?.avg)
+                            : null;
+                          const signalMiseMaxN = signalStats
+                            ? (signalSide ? signalStats?.[signalSide]?.count : signalStats?.all?.count)
+                            : null;
                           return (
                             <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
                               <td className="py-3 px-3 font-medium">
@@ -573,6 +617,14 @@ export function BitcoinUpDownStrategy() {
                               </td>
                               <td className="py-3 px-3">
                                 {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                              </td>
+                              <td className="py-3 px-3">
+                                {signalLabel ?? '—'}
+                              </td>
+                              <td className="py-3 px-3 text-right tabular-nums">
+                                {signalMiseMax != null
+                                  ? `~${Math.round(signalMiseMax)} $${signalMiseMaxN != null ? ` (N=${signalMiseMaxN})` : ''}`
+                                  : '—'}
                               </td>
                               <td className="py-3 px-3">
                                 {r.botEntryTimestamp != null
@@ -724,6 +776,8 @@ export function BitcoinUpDownStrategy() {
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
+                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Signal</th>
+                            <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Mise max signal</th>
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
                             <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
@@ -734,6 +788,15 @@ export function BitcoinUpDownStrategy() {
                           {resolved15m.map((r, i) => {
                             const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
                             const netPnl = r.botWon !== null ? backtestResult15m.netPnlMap.get(rowKey) : undefined;
+                            const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
+                            const signalStats = signalLabel ? miseMaxBySignalMap15m.get(signalLabel) : null;
+                            const signalSide = r.botWouldTake === 'Up' || r.botWouldTake === 'Down' ? r.botWouldTake : null;
+                            const signalMiseMax = signalStats
+                              ? (signalSide ? signalStats?.[signalSide]?.avg : signalStats?.all?.avg)
+                              : null;
+                            const signalMiseMaxN = signalStats
+                              ? (signalSide ? signalStats?.[signalSide]?.count : signalStats?.all?.count)
+                              : null;
                             return (
                               <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
                                 <td className="py-3 px-3 font-medium">
@@ -744,6 +807,14 @@ export function BitcoinUpDownStrategy() {
                                 </td>
                                 <td className="py-3 px-3">
                                   {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                                </td>
+                                <td className="py-3 px-3">
+                                  {signalLabel ?? '—'}
+                                </td>
+                                <td className="py-3 px-3 text-right tabular-nums">
+                                  {signalMiseMax != null
+                                    ? `~${Math.round(signalMiseMax)} $${signalMiseMaxN != null ? ` (N=${signalMiseMaxN})` : ''}`
+                                    : '—'}
                                 </td>
                                 <td className="py-3 px-3">
                                   {r.botEntryTimestamp != null
