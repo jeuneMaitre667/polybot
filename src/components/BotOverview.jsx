@@ -214,10 +214,14 @@ export function BotOverview() {
   return (
     <div className="grid gap-6 sm:grid-cols-2">
       {/* Ligne 1 : Solde + PnL (fusion) */}
-      <Card className={`${cardBase} border-t-2 border-t-emerald-500/30 sm:col-span-2`}>
-        <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+      <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-emerald-500/30 sm:col-span-2`}>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-emerald-500/15 via-sky-500/0 to-violet-500/10"
+        />
+        <CardHeader className="relative z-10 pb-2 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-            Solde &amp; PnL
+            Solde, PnL &amp; Performance
           </CardTitle>
           <div className="flex items-center gap-1.5">
             <Badge variant={isOnline ? 'secondary' : 'destructive'} className="text-[10px] px-2 py-0.5">
@@ -230,7 +234,7 @@ export function BotOverview() {
             )}
           </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1">
+        <CardContent className="relative z-10 pt-0 flex-1">
           <div className="grid gap-6 sm:grid-cols-2">
             <div className="space-y-0">
               <div className={rowClass}>
@@ -267,25 +271,20 @@ export function BotOverview() {
               <p className="mt-3 text-[11px] text-muted-foreground/80">PnL calculé sur l’historique de solde (période graphique).</p>
             </div>
           </div>
-        </CardContent>
-      </Card>
 
-      {/* Ligne 2 : Performance 24h | Mise max */}
-      <Card className={`${cardBase} border-t-2 border-t-sky-500/30`}>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-            Performance 24 h
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <div className="space-y-0">
+          {/* Performance 24h fusionnée dans la carte du haut */}
+          <div className="mt-4 pt-3 border-t border-border/40">
             <div className={rowClass}>
               <span className="text-xs text-muted-foreground uppercase tracking-wider">Horaire</span>
               <span className="text-sm font-medium text-slate-200">
                 {orders24h != null ? `${orders24h} ordre${orders24h !== 1 ? 's' : ''}` : '—'}
                 {winRate != null && (
-                  <span className={winRate >= 50 ? 'text-emerald-400 ml-1.5' : 'text-rose-400 ml-1.5'}>
-                    · Win {winRate.toFixed(1)} %
+                  <span
+                    className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[11px] ${
+                      winRate >= 50 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'
+                    }`}
+                  >
+                    Win {winRate.toFixed(1)} %
                   </span>
                 )}
               </span>
@@ -296,8 +295,12 @@ export function BotOverview() {
                 <span className="text-sm font-medium text-slate-200">
                   {orders24h15m != null ? `${orders24h15m} ordre${orders24h15m !== 1 ? 's' : ''}` : '—'}
                   {winRate15m != null && (
-                    <span className={winRate15m >= 50 ? 'text-emerald-400 ml-1.5' : 'text-rose-400 ml-1.5'}>
-                      · Win {winRate15m.toFixed(1)} %
+                    <span
+                      className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[11px] ${
+                        winRate15m >= 50 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'
+                      }`}
+                    >
+                      Win {winRate15m.toFixed(1)} %
                     </span>
                   )}
                 </span>
@@ -307,8 +310,12 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} border-t-2 border-t-violet-500/30 sm:col-span-2 min-h-0`}>
-        <CardHeader className="pb-2 space-y-2">
+      <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-violet-500/30 sm:col-span-2 min-h-0`}>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/15 via-cyan-500/0 to-sky-500/10"
+        />
+        <CardHeader className="relative z-10 pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
               Mise max 97–97,5 % · {miseMaxPeriod === '24h' ? '24 h' : '3 j'}
@@ -420,7 +427,7 @@ export function BotOverview() {
             )}
           </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col gap-3 min-h-0">
+        <CardContent className="relative z-10 pt-0 flex-1 flex flex-col gap-3 min-h-0">
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
             <div>
               <p className="text-2xl font-semibold tabular-nums text-slate-50">
@@ -517,8 +524,12 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
-        <CardHeader className="pb-2 space-y-2">
+      <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-cyan-500/15 via-sky-500/0 to-emerald-500/10"
+        />
+        <CardHeader className="relative z-10 pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
               Latences (trade + bot)
@@ -547,10 +558,10 @@ export function BotOverview() {
             )}
           </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1">
+        <CardContent className="relative z-10 pt-0 flex-1">
           <div className="grid gap-6 sm:grid-cols-3">
             {/* Trade */}
-            <div className="space-y-1">
+            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
               <div className="text-xs text-muted-foreground uppercase tracking-wider">Trade (24 h)</div>
               <div className="text-lg font-semibold tabular-nums text-slate-50">
                 {hasActiveLatency && activeLatency?.all?.avgMs != null ? `~${Math.round(activeLatency.all.avgMs / 1000)} s` : '—'}
@@ -629,7 +640,7 @@ export function BotOverview() {
             </div>
 
             {/* Cycle */}
-            <div className="space-y-1">
+            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
               <div className="text-xs text-muted-foreground uppercase tracking-wider">Cycle bot (24 h)</div>
               <div className="text-lg font-semibold tabular-nums text-slate-50">
                 {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? `~${Math.round(activeCycleLatency.avgMs)} ms` : '—'}
@@ -646,7 +657,7 @@ export function BotOverview() {
             </div>
 
             {/* Signal -> décision */}
-            <div className="space-y-1">
+            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
               <div className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</div>
               <div className="text-lg font-semibold tabular-nums text-slate-50">
                 {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? `~${Math.round(activeSignalDecisionLatency.all.avgMs)} ms` : '—'}
