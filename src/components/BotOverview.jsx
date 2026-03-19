@@ -1,7 +1,50 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  CartesianGrid,
+} from 'recharts';
+
+/** Regroupe les relevés par tranche de temps (max par tranche) pour lisser le graphique. */
+function bucketMiseMaxSeries(series, bucketMs) {
+  if (!Array.isArray(series) || series.length === 0) return [];
+  const buckets = new Map();
+  for (const p of series) {
+    const t = new Date(p.at).getTime();
+    if (Number.isNaN(t)) continue;
+    const k = Math.floor(t / bucketMs);
+    if (!buckets.has(k)) {
+      buckets.set(k, { t: k * bucketMs, Up: [], Down: [], other: [] });
+    }
+    const b = buckets.get(k);
+    const v = Number(p.liquidityUsd);
+    if (!Number.isFinite(v)) continue;
+    if (p.takeSide === 'Up') b.Up.push(v);
+    else if (p.takeSide === 'Down') b.Down.push(v);
+    else b.other.push(v);
+  }
+  const maxArr = (arr) => (arr.length ? Math.max(...arr) : null);
+  return Array.from(buckets.keys())
+    .sort((a, b) => a - b)
+    .map((key) => {
+      const b = buckets.get(key);
+      return {
+        t: b.t,
+        label: new Date(b.t).toLocaleString('fr-FR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        Up: maxArr(b.Up),
+        Down: maxArr(b.Down),
+        other: maxArr(b.other),
+      };
+    });
+}
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -23,6 +66,10 @@ export function BotOverview() {
   const { data, loading } = useBotStatus(statusUrl);
   const { data: data15m, loading: loading15m } = useBotStatus(statusUrl15m);
   const [miseMaxMode, setMiseMaxMode] = useState('1h');
+  /** Fenêtre d’agrégation des stats / graphique mise max */
+  const [miseMaxPeriod, setMiseMaxPeriod] = useState('72h');
+  /** Filtre Up / Down / tout (données issues du bot avec takeSide) */
+  const [miseMaxSide, setMiseMaxSide] = useState('all');
   const [latencyMode, setLatencyMode] = useState('1h');
   const [nowTs, setNowTs] = useState(null);
   useEffect(() => {
@@ -34,8 +81,6 @@ export function BotOverview() {
       clearTimeout(t);
     };
   }, []);
-
-  if (!statusUrl) return null;
 
   const balance = data?.balanceUsd != null ? Number(data.balanceUsd) : null;
   const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
@@ -82,13 +127,45 @@ export function BotOverview() {
     if (diffH < 24) return `il y a ${diffH} h`;
     return new Date(lastAtIso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
-  const lastLiquidityLabel = hasLiquidityStats && liquidityStats?.lastAt ? formatLastLiquidityAt(liquidityStats.lastAt, nowTs) : null;
-  const lastLiquidityLabel15m =
-    hasLiquidityStats15m && liquidityStats15m?.lastAt ? formatLastLiquidityAt(liquidityStats15m.lastAt, nowTs) : null;
+  const activeStatus = miseMaxMode === '15m' ? data15m : data;
+  const activeLiquidityReport = activeStatus?.liquidityReport;
+  const periodKey = miseMaxPeriod === '24h' ? '24h' : '72h';
+  const fallbackLiq72 = miseMaxMode === '15m' ? liquidityStats15m : liquidityStats;
+  const fallbackLiq24 = miseMaxMode === '15m' ? data15m?.liquidityStats24h : data?.liquidityStats24h;
 
-  const activeLiquidity = miseMaxMode === '15m' ? liquidityStats15m : liquidityStats;
-  const hasActiveLiquidity = miseMaxMode === '15m' ? hasLiquidityStats15m : hasLiquidityStats;
-  const lastActiveLabel = miseMaxMode === '15m' ? lastLiquidityLabel15m : lastLiquidityLabel;
+  const activeLiquidity = useMemo(() => {
+    const w = activeLiquidityReport?.windows?.[periodKey];
+    if (w) {
+      if (miseMaxSide === 'Up') return w.Up;
+      if (miseMaxSide === 'Down') return w.Down;
+      return w.all;
+    }
+    if (periodKey === '72h') return fallbackLiq72;
+    if (fallbackLiq24 && miseMaxSide === 'all') return fallbackLiq24;
+    return {
+      avg: null,
+      min: null,
+      max: null,
+      median: null,
+      p95: null,
+      lastUsd: null,
+      count: 0,
+      lastAt: null,
+    };
+  }, [activeLiquidityReport, periodKey, miseMaxSide, fallbackLiq72, fallbackLiq24]);
+
+  const hasActiveLiquidity = (activeLiquidity?.count ?? 0) > 0;
+  const lastActiveLabel =
+    activeLiquidity?.lastAt && nowTs != null ? formatLastLiquidityAt(activeLiquidity.lastAt, nowTs) : null;
+
+  const miseMaxChartData = useMemo(() => {
+    const raw = activeLiquidityReport?.series?.[periodKey];
+    if (!raw?.length) return [];
+    const bucketMs = periodKey === '24h' ? 2 * 60 * 1000 : 5 * 60 * 1000;
+    return bucketMiseMaxSeries(raw, bucketMs);
+  }, [activeLiquidityReport, periodKey]);
+
+  const winForSideCounts = activeLiquidityReport?.windows?.[periodKey];
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
@@ -131,6 +208,8 @@ export function BotOverview() {
     const n = Number(v);
     return Number.isFinite(n) ? `${Math.round(n)}` : '—';
   }
+
+  if (!statusUrl) return null;
 
   return (
     <div className="grid gap-6 sm:grid-cols-2">
@@ -228,34 +307,85 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} border-t-2 border-t-violet-500/30`}>
+      <Card className={`${cardBase} border-t-2 border-t-violet-500/30 sm:col-span-2 min-h-0`}>
         <CardHeader className="pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Mise max au prix 97–97,5 % (moy. 3 j)
+              Mise max 97–97,5 % · {miseMaxPeriod === '24h' ? '24 h' : '3 j'}
             </CardTitle>
-            {show15m && (
-            <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
-              <button
-                type="button"
-                onClick={() => setMiseMaxMode('1h')}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  miseMaxMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Horaire
-              </button>
-              <button
-                type="button"
-                onClick={() => setMiseMaxMode('15m')}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  miseMaxMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                15m
-              </button>
+            <div className="flex flex-wrap items-center gap-1.5 justify-end">
+              <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setMiseMaxPeriod('24h')}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    miseMaxPeriod === '24h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  24 h
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMiseMaxPeriod('72h')}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    miseMaxPeriod === '72h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  3 j
+                </button>
+              </div>
+              <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setMiseMaxSide('all')}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                    miseMaxSide === 'all' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Tout
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMiseMaxSide('Up')}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                    miseMaxSide === 'Up' ? 'bg-violet-700 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Up
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMiseMaxSide('Down')}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                    miseMaxSide === 'Down' ? 'bg-amber-800/80 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Down
+                </button>
+              </div>
+              {show15m && (
+                <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMiseMaxMode('1h')}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      miseMaxMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Horaire
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMiseMaxMode('15m')}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      miseMaxMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    15m
+                  </button>
+                </div>
+              )}
             </div>
-          )}
           </div>
           {/* Indication claire : données liquidité récupérées ou non pour chaque bot */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
@@ -281,18 +411,34 @@ export function BotOverview() {
                 )}
               </span>
             )}
+            {winForSideCounts && (
+              <span className="text-muted-foreground opacity-90">
+                (fenêtre {miseMaxPeriod === '24h' ? '24 h' : '3 j'} — N: tout {winForSideCounts.all?.count ?? 0}
+                {', '}
+                Up {winForSideCounts.Up?.count ?? 0}, Down {winForSideCounts.Down?.count ?? 0})
+              </span>
+            )}
           </div>
         </CardHeader>
-        <CardContent className="pt-0 flex-1 flex flex-col justify-end">
-          <p className="text-2xl font-semibold tabular-nums text-slate-50">
-            {hasActiveLiquidity ? `~${Math.round(activeLiquidity.avg)} $` : '—'}
-          </p>
-          {hasActiveLiquidity && activeLiquidity.lastUsd != null && (
-            <p className="mt-1 text-sm tabular-nums text-violet-200/95">
-              Dernier relevé : ~{Math.round(activeLiquidity.lastUsd)} $
-            </p>
-          )}
-          <p className="mt-2 text-xs text-muted-foreground">
+        <CardContent className="pt-0 flex-1 flex flex-col gap-3 min-h-0">
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+            <div>
+              <p className="text-2xl font-semibold tabular-nums text-slate-50">
+                {hasActiveLiquidity ? `~${Math.round(activeLiquidity.avg)} $` : '—'}
+              </p>
+              {hasActiveLiquidity && activeLiquidity.lastUsd != null && (
+                <p className="mt-1 text-sm tabular-nums text-violet-200/95">
+                  Dernier relevé : ~{Math.round(activeLiquidity.lastUsd)} $
+                </p>
+              )}
+            </div>
+            {!activeLiquidityReport && (
+              <p className="text-[11px] text-amber-500/90 max-w-md">
+                API status-server à jour requise pour le graphique et le filtre Up/Down (redéploie le bot sur Lightsail).
+              </p>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
             {hasActiveLiquidity ? (
               <>
                 Profondeur cumulée jusqu'à 97,5 % : montant max à miser (FOK ≤ 97,5c). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
@@ -313,11 +459,61 @@ export function BotOverview() {
                 </span>
               </>
             ) : (
-              miseMaxMode === '15m'
-                ? 'Profondeur cumulée jusqu\'à 97,5 % pour les créneaux 15 min. Relevés envoyés par le bot.'
-                : 'Profondeur cumulée jusqu\'à 97,5 % pour les créneaux horaires. Relevés envoyés par le bot.'
+              <>
+                {miseMaxMode === '15m'
+                  ? 'Profondeur cumulée jusqu\'à 97,5 % pour les créneaux 15 min. Relevés envoyés par le bot.'
+                  : 'Profondeur cumulée jusqu\'à 97,5 % pour les créneaux horaires. Relevés envoyés par le bot.'}
+                {miseMaxSide !== 'all' && !activeLiquidityReport && (
+                  <span className="block mt-1 text-amber-500/80">Sélection Up/Down disponible après mise à jour du status-server.</span>
+                )}
+              </>
             )}
           </p>
+
+          {miseMaxChartData.length > 0 ? (
+            <div className="w-full h-[220px] mt-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={miseMaxChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} interval="preserveStartEnd" />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
+                    width={48}
+                    tickFormatter={(v) => `${Math.round(v)}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                    labelStyle={{ color: '#e2e8f0' }}
+                    formatter={(value) => (value != null ? [`~${Math.round(value)} $`, ''] : ['—', ''])}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {(miseMaxSide === 'all' || miseMaxSide === 'Up') && (
+                    <Line type="monotone" dataKey="Up" name="Up" stroke="#a78bfa" dot={false} strokeWidth={2} connectNulls />
+                  )}
+                  {(miseMaxSide === 'all' || miseMaxSide === 'Down') && (
+                    <Line type="monotone" dataKey="Down" name="Down" stroke="#fbbf24" dot={false} strokeWidth={2} connectNulls />
+                  )}
+                  {miseMaxSide === 'all' && (
+                    <Line
+                      type="monotone"
+                      dataKey="other"
+                      name="Sans côté (ancien)"
+                      stroke="#64748b"
+                      strokeDasharray="4 4"
+                      dot={false}
+                      strokeWidth={1.5}
+                      connectNulls
+                    />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-[10px] text-muted-foreground/80 mt-1">
+                Courbe : max par tranche ({miseMaxPeriod === '24h' ? '2 min' : '5 min'}) pour lisibilité — jusqu’à {periodKey === '24h' ? '24 h' : '3 j'}.
+              </p>
+            </div>
+          ) : activeLiquidityReport ? (
+            <p className="text-[11px] text-muted-foreground">Pas encore assez de points pour tracer l’historique sur cette fenêtre.</p>
+          ) : null}
         </CardContent>
       </Card>
 

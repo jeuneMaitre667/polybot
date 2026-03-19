@@ -141,9 +141,10 @@ function getHealth() {
   };
 }
 
-/** Lit liquidity-history.json (relevés du bot) et retourne des stats sur les 3 derniers jours. */
-function getLiquidityStats() {
-  const empty = {
+const LIQUIDITY_SERIES_CAP = 800;
+
+function emptyLiquidityStats() {
+  return {
     avg: null,
     min: null,
     max: null,
@@ -153,46 +154,118 @@ function getLiquidityStats() {
     count: 0,
     lastAt: null,
   };
+}
+
+/** Agrège des entrées { at, liquidityUsd, takeSide? } en stats scalaires. */
+function summarizeLiquidityEntries(entries) {
+  const empty = emptyLiquidityStats();
+  const valid = entries.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  if (valid.length === 0) return { ...empty };
+  const values = valid.map((e) => Number(e.liquidityUsd));
+  let lastEntry = null;
+  for (const e of valid) {
+    if (!lastEntry || e.at > lastEntry.at) lastEntry = e;
+  }
+  const lastAt = lastEntry?.at ?? null;
+  const lastUsd = lastEntry != null ? Math.round(Number(lastEntry.liquidityUsd) * 100) / 100 : null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 1
+      ? sorted[mid]
+      : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100;
+  const p95Idx = Math.max(0, Math.floor(0.95 * (sorted.length - 1)));
+  const p95 = sorted[p95Idx];
+  return {
+    avg: Math.round((sum / values.length) * 100) / 100,
+    min: Math.round(Math.min(...values) * 100) / 100,
+    max: Math.round(Math.max(...values) * 100) / 100,
+    median: Math.round(median * 100) / 100,
+    p95: Math.round(p95 * 100) / 100,
+    lastUsd,
+    count: values.length,
+    lastAt,
+  };
+}
+
+function filterLiquidityByMs(arr, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  return arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+}
+
+function liquiditySeriesFromFiltered(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  valid.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  const slice = valid.length > LIQUIDITY_SERIES_CAP ? valid.slice(-LIQUIDITY_SERIES_CAP) : valid;
+  return slice.map((e) => ({
+    at: e.at,
+    liquidityUsd: Math.round(Number(e.liquidityUsd) * 100) / 100,
+    takeSide: e.takeSide === 'Up' || e.takeSide === 'Down' ? e.takeSide : null,
+  }));
+}
+
+function buildLiquidityWindow(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  const up = valid.filter((e) => e.takeSide === 'Up');
+  const down = valid.filter((e) => e.takeSide === 'Down');
+  return {
+    all: summarizeLiquidityEntries(valid),
+    Up: summarizeLiquidityEntries(up),
+    Down: summarizeLiquidityEntries(down),
+  };
+}
+
+/**
+ * Rapport liquidité : fenêtres 24h / 3j, par côté, + séries pour graphique.
+ * @returns {{ windows: { '24h': object, '72h': object }, series: { '24h': array, '72h': array } }}
+ */
+function getLiquidityReport() {
+  const emptyWin = { all: emptyLiquidityStats(), Up: emptyLiquidityStats(), Down: emptyLiquidityStats() };
   try {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'liquidity-history.json'), 'utf8');
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return { ...empty };
-    const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
-    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
-    const values = filtered
-      .map((e) => Number(e.liquidityUsd))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    /** Dernier relevé avec liquidité > 0 (aligné sur ce que le bot enregistre). */
-    let lastEntry = null;
-    for (const e of filtered) {
-      const n = Number(e.liquidityUsd);
-      if (!Number.isFinite(n) || n <= 0) continue;
-      if (!lastEntry || e.at > lastEntry.at) lastEntry = e;
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return {
+        windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
+        series: { '24h': [], '72h': [] },
+      };
     }
-    const lastAt = lastEntry?.at ?? null;
-    const lastUsd = lastEntry != null ? Math.round(Number(lastEntry.liquidityUsd) * 100) / 100 : null;
-    if (values.length === 0) return { ...empty, lastAt, lastUsd };
-    const sum = values.reduce((a, b) => a + b, 0);
-    const sorted = [...values].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    const median =
-      sorted.length % 2 === 1
-        ? sorted[mid]
-        : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100;
-    const p95Idx = Math.max(0, Math.floor(0.95 * (sorted.length - 1)));
-    const p95 = sorted[p95Idx];
+    const f24 = filterLiquidityByMs(arr, 24 * 60 * 60 * 1000);
+    const f72 = filterLiquidityByMs(arr, 3 * 24 * 60 * 60 * 1000);
     return {
-      avg: Math.round((sum / values.length) * 100) / 100,
-      min: Math.round(Math.min(...values) * 100) / 100,
-      max: Math.round(Math.max(...values) * 100) / 100,
-      median: Math.round(median * 100) / 100,
-      p95: Math.round(p95 * 100) / 100,
-      lastUsd,
-      count: values.length,
-      lastAt,
+      windows: {
+        '24h': buildLiquidityWindow(f24),
+        '72h': buildLiquidityWindow(f72),
+      },
+      series: {
+        '24h': liquiditySeriesFromFiltered(f24),
+        '72h': liquiditySeriesFromFiltered(f72),
+      },
     };
   } catch {
-    return { ...empty };
+    return {
+      windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
+      series: { '24h': [], '72h': [] },
+    };
+  }
+}
+
+/** Rétrocompat : stats globales 3 j (tous relevés). */
+function getLiquidityStats() {
+  try {
+    return getLiquidityReport().windows['72h'].all;
+  } catch {
+    return emptyLiquidityStats();
   }
 }
 
@@ -440,7 +513,9 @@ const server = http.createServer((req, res) => {
     const balanceHistory = getBalanceHistory();
     const config = getBotConfig();
     const stats = getStats24h();
-    const liquidityStats = getLiquidityStats();
+    const liquidityReport = getLiquidityReport();
+    const liquidityStats = liquidityReport.windows['72h'].all;
+    const liquidityStats24h = liquidityReport.windows['24h'].all;
     const tradeLatencyStats = getTradeLatencyStats24h();
     const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
     const cycleLatencyStats = getCycleLatencyStats24h();
@@ -462,6 +537,8 @@ const server = http.createServer((req, res) => {
       health,
       alerts,
       liquidityStats,
+      liquidityStats24h,
+      liquidityReport,
       tradeLatencyStats,
       tradeLatencyBreakdownStats,
       cycleLatencyStats,
