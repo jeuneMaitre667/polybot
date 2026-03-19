@@ -280,6 +280,10 @@ function getLiquidityReport() {
       : arr.filter((e) => String(e?.source || '').toLowerCase() !== 'active_window');
     const f24 = filterLiquidityByMs(filteredSources, 24 * 60 * 60 * 1000);
     const f72 = filterLiquidityByMs(filteredSources, 3 * 24 * 60 * 60 * 1000);
+    // bySignal : toutes les sources dans la fenêtre (y compris active_window si signalPriceP),
+    // sinon les seuls relevés avec niveau de signal sont exclus quand INCLUDE_ACTIVE_WINDOW_LIQUIDITY=false.
+    const f24BySignal = filterLiquidityByMs(arr, 24 * 60 * 60 * 1000);
+    const f72BySignal = filterLiquidityByMs(arr, 3 * 24 * 60 * 60 * 1000);
     return {
       windows: {
         '24h': buildLiquidityWindow(f24),
@@ -290,8 +294,8 @@ function getLiquidityReport() {
         '72h': liquiditySeriesFromFiltered(f72),
       },
       bySignal: {
-        '24h': liquidityBySignalFromFiltered(f24),
-        '72h': liquidityBySignalFromFiltered(f72),
+        '24h': liquidityBySignalFromFiltered(f24BySignal),
+        '72h': liquidityBySignalFromFiltered(f72BySignal),
       },
     };
   } catch {
