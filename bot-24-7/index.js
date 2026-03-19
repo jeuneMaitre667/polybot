@@ -1586,7 +1586,6 @@ async function run() {
     await profiler.measure('place_orders', async () => {
     for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
-    if (isInLastMinute(s)) continue;
     const key = getSignalKey(s);
     if (placedKeys.has(key)) continue;
     const t0 = Date.now();
@@ -1599,6 +1598,38 @@ async function run() {
       book: null,
       placeOrder: null,
     };
+
+    // Même si on ne place pas d'ordre (last minute), on loggue un breakdown attempt.
+    // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
+    if (isInLastMinute(s)) {
+      let attemptAmountUsd = amountUsd;
+      if (useBalanceAsSize) {
+        const tBal0 = Date.now();
+        const balance = await getBalance();
+        timingsMs.balance = Math.max(1, Date.now() - tBal0);
+        attemptAmountUsd = balance != null ? balance : orderSizeUsd;
+      }
+      const tBook0 = Date.now();
+      await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+      timingsMs.book = Math.max(1, Date.now() - tBook0);
+
+      if (shouldLogTradeLatencyAttempt(key)) {
+        logJson('info', 'Trade latency attempt (poll, last-minute no order)', {
+          conditionId: key,
+          timingsMs,
+        });
+        appendTradeLatencyHistory({
+          source: 'poll',
+          latencyMs: 0,
+          timingsMs,
+          takeSide: s.takeSide,
+          amountUsd: attemptAmountUsd,
+          conditionId: key,
+          tokenId: s.tokenIdToBuy,
+        });
+      }
+      continue;
+    }
 
     if (useBalanceAsSize) {
       const tBal0 = Date.now();
