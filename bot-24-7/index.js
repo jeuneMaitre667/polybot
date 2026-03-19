@@ -54,6 +54,14 @@ const CYCLE_LATENCY_HISTORY_MAX = 5000;
 const SIGNAL_DECISION_LATENCY_HISTORY_DAYS = 7;
 const SIGNAL_DECISION_LATENCY_HISTORY_MAX = 10000;
 
+// Assure que le fichier existe pour que le dashboard puisse agréger même si aucun trade n'a encore eu lieu.
+function ensureJsonArrayFileExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, '[]', 'utf8');
+  } catch (_) {}
+}
+ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
+
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
   try {
@@ -1215,6 +1223,10 @@ async function tryPlaceOrderForSignal(signal) {
   // Permet d'avoir un breakdown même sans trade réel.
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
     if (shouldLogTradeLatencyAttempt(key)) {
+      logJson('info', 'Trade latency attempt (WS, no order)', {
+        conditionId: key,
+        timingsMs,
+      });
       appendTradeLatencyHistory({
         source: 'ws',
         latencyMs: 0,
@@ -1608,6 +1620,10 @@ async function run() {
         }
 
         if (shouldLogTradeLatencyAttempt(key)) {
+          logJson('info', 'Trade latency attempt (poll, no order)', {
+            conditionId: key,
+            timingsMs,
+          });
           appendTradeLatencyHistory({
             source: 'poll',
             latencyMs: 0,
