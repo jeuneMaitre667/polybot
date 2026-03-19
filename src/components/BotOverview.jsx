@@ -70,8 +70,6 @@ export function BotOverview() {
   const [miseMaxPeriod, setMiseMaxPeriod] = useState('72h');
   /** Filtre Up / Down / tout (données issues du bot avec takeSide) */
   const [miseMaxSide, setMiseMaxSide] = useState('all');
-  /** Vue du graphique: temporelle ou par niveau de signal (97.0..97.5). */
-  const [miseMaxChartView, setMiseMaxChartView] = useState('time');
   const [latencyMode, setLatencyMode] = useState('1h');
   const [nowTs, setNowTs] = useState(null);
   useEffect(() => {
@@ -348,26 +346,6 @@ export function BotOverview() {
               <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
                 <button
                   type="button"
-                  onClick={() => setMiseMaxChartView('time')}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                    miseMaxChartView === 'time' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Par fenêtre
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMiseMaxChartView('signal')}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                    miseMaxChartView === 'signal' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Par signal
-                </button>
-              </div>
-              <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
-                <button
-                  type="button"
                   onClick={() => setMiseMaxSide('all')}
                   className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                     miseMaxSide === 'all' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
@@ -501,45 +479,43 @@ export function BotOverview() {
             )}
           </p>
 
-          {miseMaxChartView === 'signal' ? (
-            miseMaxBySignalData.length > 0 ? (
-              <div className="w-full h-[220px] mt-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={miseMaxBySignalData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={48} tickFormatter={(v) => `${Math.round(v)}`} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
-                      labelStyle={{ color: '#e2e8f0' }}
-                      formatter={(value, key, ctx) => {
-                        const k = String(key);
-                        if (value == null) return ['—', k];
-                        if (k === 'All') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nAll ?? 0})`, 'Tout'];
-                        if (k === 'Up') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nUp ?? 0})`, 'Up'];
-                        if (k === 'Down') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nDown ?? 0})`, 'Down'];
-                        return [`~${Math.round(Number(value))} $`, k];
-                      }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    {miseMaxSide === 'all' && (
-                      <Line type="monotone" dataKey="All" name="Tout" stroke="#22d3ee" dot={{ r: 2 }} strokeWidth={2} connectNulls />
-                    )}
-                    {(miseMaxSide === 'all' || miseMaxSide === 'Up') && (
-                      <Line type="monotone" dataKey="Up" name="Up" stroke="#a78bfa" dot={{ r: 2 }} strokeWidth={2} connectNulls />
-                    )}
-                    {(miseMaxSide === 'all' || miseMaxSide === 'Down') && (
-                      <Line type="monotone" dataKey="Down" name="Down" stroke="#fbbf24" dot={{ r: 2 }} strokeWidth={2} connectNulls />
-                    )}
-                  </LineChart>
-                </ResponsiveContainer>
-                <p className="text-[10px] text-muted-foreground/80 mt-1">
-                  Moyenne de mise max par niveau de signal (97.0% → 97.5%), utile pour calibrer la stratégie par prix.
-                </p>
-              </div>
-            ) : activeLiquidityReport ? (
-              <p className="text-[11px] text-muted-foreground">Pas encore assez de points avec signalPrice pour la vue "Par signal".</p>
-            ) : null
+          {miseMaxBySignalData.length > 0 ? (
+            <div className="w-full h-[220px] mt-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={miseMaxBySignalData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={48} tickFormatter={(v) => `${Math.round(v)}`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                    labelStyle={{ color: '#e2e8f0' }}
+                    formatter={(value, key, ctx) => {
+                      const k = String(key);
+                      if (value == null) return ['—', k];
+                      if (k === 'All') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nAll ?? 0})`, 'Tout'];
+                      if (k === 'Up') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nUp ?? 0})`, 'Up'];
+                      if (k === 'Down') return [`~${Math.round(Number(value))} $ (N=${ctx?.payload?.nDown ?? 0})`, 'Down'];
+                      return [`~${Math.round(Number(value))} $`, k];
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {miseMaxSide === 'all' && (
+                    <Line type="monotone" dataKey="All" name="Tout" stroke="#22d3ee" dot={{ r: 2 }} strokeWidth={2} connectNulls />
+                  )}
+                  {(miseMaxSide === 'all' || miseMaxSide === 'Up') && (
+                    <Line type="monotone" dataKey="Up" name="Up" stroke="#a78bfa" dot={{ r: 2 }} strokeWidth={2} connectNulls />
+                  )}
+                  {(miseMaxSide === 'all' || miseMaxSide === 'Down') && (
+                    <Line type="monotone" dataKey="Down" name="Down" stroke="#fbbf24" dot={{ r: 2 }} strokeWidth={2} connectNulls />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-[10px] text-muted-foreground/80 mt-1">
+                Moyenne de mise max par niveau de signal (97.0% → 97.5%), utile pour calibrer la stratégie par prix.
+              </p>
+            </div>
+          ) : activeLiquidityReport ? (
+            <p className="text-[11px] text-muted-foreground">Pas encore assez de points avec signalPrice pour la vue "Par signal".</p>
           ) : miseMaxChartData.length > 0 ? (
             <div className="w-full h-[220px] mt-1">
               <ResponsiveContainer width="100%" height="100%">
