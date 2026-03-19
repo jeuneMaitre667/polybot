@@ -183,6 +183,22 @@ const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m
 // Cache /book : plus long sur 15m pour réduire variance/ratelimits (overridable via BOOK_CACHE_MS).
 const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || (MARKET_MODE === '15m' ? 3000 : 1500);
 
+/**
+ * Prix utilisés pour décider si fetchSignals() émet un signal (poll).
+ * - gamma : outcomePrices Gamma (lissé / mid, défaut historique 1h).
+ * - clob : best ask CLOB par token Up/Down (aligné exécution, défaut auto pour MARKET_MODE=15m).
+ * Défaut si non défini : 15m → clob, hourly → gamma. Override : SIGNAL_PRICE_SOURCE=gamma|clob
+ */
+const signalPriceSourceEnv = (process.env.SIGNAL_PRICE_SOURCE || '').trim().toLowerCase();
+const signalPriceSource =
+  signalPriceSourceEnv === 'gamma' || signalPriceSourceEnv === 'clob'
+    ? signalPriceSourceEnv
+    : MARKET_MODE === '15m'
+      ? 'clob'
+      : 'gamma';
+/** Cache court best ask pour fetchSignals (évite 2 hits CLOB identiques dans le même cycle). */
+const BEST_ASK_SIGNAL_CACHE_MS = Number(process.env.BEST_ASK_SIGNAL_CACHE_MS) || 400;
+
 const privateKeyRaw = process.env.PRIVATE_KEY?.trim();
 const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_here' || /^0x?REMPLACE/i.test(privateKeyRaw);
 // Détecter si l'utilisateur a mis l'adresse (0x + 40 hex) au lieu de la clé privée (0x + 64 hex)
@@ -810,6 +826,39 @@ async function getBestAsk(tokenId) {
   }
 }
 
+const bestAskSignalCache = new Map(); // tokenId -> { p, exp }
+
+async function getBestAskCachedForSignal(tokenId) {
+  if (!tokenId) return null;
+  const now = Date.now();
+  const hit = bestAskSignalCache.get(tokenId);
+  if (hit && hit.exp > now) return hit.p;
+  const p = await getBestAsk(tokenId);
+  if (p != null) bestAskSignalCache.set(tokenId, { p, exp: now + BEST_ASK_SIGNAL_CACHE_MS });
+  return p;
+}
+
+/**
+ * Paire [priceUp, priceDown] pour le filtre signal : Gamma ou best asks CLOB selon signalPriceSource.
+ * En mode clob, secours partiel sur Gamma si un ask CLOB manque.
+ */
+async function getOutcomePricesForSignal(market) {
+  const fromGamma = parsePrices(market);
+  if (signalPriceSource !== 'clob') return fromGamma;
+
+  const tokenUp = getTokenIdToBuy(market, 'Up');
+  const tokenDown = getTokenIdToBuy(market, 'Down');
+  const [askUp, askDown] = await Promise.all([
+    tokenUp ? getBestAskCachedForSignal(tokenUp) : Promise.resolve(null),
+    tokenDown ? getBestAskCachedForSignal(tokenDown) : Promise.resolve(null),
+  ]);
+  if (askUp == null && askDown == null) return fromGamma;
+  const priceUp = askUp != null ? askUp : fromGamma?.[0] ?? null;
+  const priceDown = askDown != null ? askDown : fromGamma?.[1] ?? null;
+  if (priceUp == null || priceDown == null) return fromGamma;
+  return [priceUp, priceDown];
+}
+
 /** Pas de trade si l'événement se termine dans moins de X ms (5 min horaire, 4 min 15m). */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
@@ -917,7 +966,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
   return out;
 }
 
-/** Récupère les signaux 96,8–97 % depuis l’API Gamma. */
+/** Récupère les signaux (fenêtre MIN_P–MAX_P) : marchés via Gamma, prix via Gamma ou best ask CLOB selon signalPriceSource. */
 async function fetchSignals() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
   let events = [];
@@ -954,7 +1003,7 @@ async function fetchSignals() {
     if (!eventSlug.includes(slugMatch)) continue;
     const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
-      const prices = parsePrices(m);
+      const prices = await getOutcomePricesForSignal(m);
       if (!prices) continue;
       const [priceUp, priceDown] = prices;
       const upInRange = priceUp >= MIN_P && priceUp <= MAX_P;
@@ -1891,6 +1940,9 @@ async function run() {
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   console.log(`Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '4 min avant fin' : '5 min avant fin'}`);
+  console.log(
+    `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
+  );
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
