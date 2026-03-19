@@ -156,7 +156,7 @@ export function BotBalanceChart() {
     <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-sky-500/10 via-primary/0 to-emerald-500/10"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
       />
       <CardHeader className="relative z-10 pb-2">
         <div className="flex flex-wrap items-center justify-between gap-2">

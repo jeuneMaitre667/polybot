@@ -209,6 +209,18 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
+/**
+ * Sizing “avg constrained” (recommandé pour coller à ton objectif):
+ * - on calcule une taille max (USD) telle que le prix moyen de remplissage reste <= bestAsk_live + tol
+ * - tout en gardant worstPrice = MAX_P (plafond d'exécution à 97,5c)
+ *
+ * Mettre USE_AVG_PRICE_SIZING=false pour revenir au sizing basé uniquement sur la liquidité [97c..97,5c].
+ */
+const useAvgPriceSizing = process.env.USE_AVG_PRICE_SIZING !== 'false';
+/** Tolérance en delta de prix (ex: 0.0005 = 0,05c) pour éviter que l'avg devienne trop strict. */
+const avgPriceTolP = Number(process.env.AVG_PRICE_TOL_P) || 0.0005;
+/** Nombre d'itérations de binary search pour trouver la taille max (USD). */
+const avgPriceBinIters = Number(process.env.AVG_PRICE_BIN_ITERS) || 25;
 /** Réagir en temps réel aux changements de prix via WebSocket CLOB (best_bid_ask). USE_WEBSOCKET=false pour ne faire que du polling. */
 const useWebSocket = process.env.USE_WEBSOCKET !== 'false';
 const walletConfigured = !!privateKey;
@@ -579,7 +591,8 @@ function warnClobClientIfThrottled(errOrMessage) {
 }
 
 // Cache en mémoire : dernier book par token (y compris null) pour limiter /book et réduire la latence.
-const bookCache = new Map(); // tokenId -> { atMs, value }
+// tokenId -> { atMs, value: totalUsd|null, levels: Array<{ p:number, s:number }> }
+const bookCache = new Map();
 
 // Cache en mémoire des credentials CLOB (évite createOrDeriveApiKey() à chaque trade).
 let cachedCreds = null;
@@ -618,11 +631,13 @@ async function buildClobClientCachedCreds() {
  * Objectif : maximiser la probabilité de remplissage total (moins de no-fill),
  * au prix d'une avg price potentiellement un peu plus dégradée si on consomme jusqu'au plafond.
  */
-async function getLiquidityAtTargetUsd(tokenId, profile = null) {
-  if (!tokenId) return null;
+async function getFilteredAskLevels(tokenId, profile = null) {
+  if (!tokenId) return { levels: [], totalUsd: null };
+
   const overallStartMs = Date.now();
   const now = Date.now();
   const cached = bookCache.get(tokenId);
+
   if (profile && typeof profile === 'object') {
     profile.bookCacheHit = null;
     profile.bookCacheAgeMs = null;
@@ -640,7 +655,7 @@ async function getLiquidityAtTargetUsd(tokenId, profile = null) {
       profile.bookMs = 0;
       profile.liquidityCalcMs = Date.now() - overallStartMs;
     }
-    return cached.value;
+    return { levels: Array.isArray(cached.levels) ? cached.levels : [], totalUsd: cached.value };
   }
 
   try {
@@ -650,23 +665,25 @@ async function getLiquidityAtTargetUsd(tokenId, profile = null) {
     const bookMs = Date.now() - tBook0;
     const asks = data?.asks ?? [];
     if (!Array.isArray(asks) || asks.length === 0) {
-      logLiquidityEmptyIfThrottled(tokenId, 'carnet vide (pas d\'asks)');
-      bookCache.set(tokenId, { atMs: now, value: null });
+      logLiquidityEmptyIfThrottled(tokenId, "carnet vide (pas d'asks)");
+      bookCache.set(tokenId, { atMs: now, value: null, levels: [] });
       if (profile && typeof profile === 'object') {
         profile.bookMs = bookMs;
         profile.asksCount = Array.isArray(asks) ? asks.length : null;
         profile.levelsAfterFilter = 0;
         profile.liquidityCalcMs = Date.now() - overallStartMs;
       }
-      return null;
+      return { levels: [], totalUsd: null };
     }
 
     const tCalc0 = Date.now();
-    const levels = asks.map((level) => {
-      const p = parseFloat(level?.price ?? level?.[0] ?? 0);
-      const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-      return { p, s };
-    }).filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
+    const levels = asks
+      .map((level) => {
+        const p = parseFloat(level?.price ?? level?.[0] ?? 0);
+        const s = parseFloat(level?.size ?? level?.[1] ?? 0);
+        return { p, s };
+      })
+      .filter(({ p, s }) => Number.isFinite(p) && Number.isFinite(s) && s > 0 && p >= MIN_P && p <= MAX_PRICE_LIQUIDITY);
 
     if (profile && typeof profile === 'object') {
       profile.bookMs = bookMs;
@@ -676,33 +693,88 @@ async function getLiquidityAtTargetUsd(tokenId, profile = null) {
 
     if (levels.length === 0) {
       logLiquidityEmptyIfThrottled(tokenId, `aucun ask dans la plage ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(1)}%`);
-      bookCache.set(tokenId, { atMs: now, value: null });
+      bookCache.set(tokenId, { atMs: now, value: null, levels: [] });
       if (profile && typeof profile === 'object') {
         profile.liquidityCalcMs = Date.now() - tCalc0;
       }
-      return null;
+      return { levels: [], totalUsd: null };
     }
+
     let totalUsd = 0;
     // Somme cumulée : permet de caper la taille à la liquidité totale jusqu'au plafond 97,5%.
     for (const { p, s } of levels) totalUsd += p * s;
     const out = totalUsd > 0 ? totalUsd : null;
-    bookCache.set(tokenId, { atMs: now, value: out });
+    bookCache.set(tokenId, { atMs: now, value: out, levels });
     if (profile && typeof profile === 'object') {
       profile.liquidityCalcMs = Date.now() - tCalc0;
       profile.bookCacheAgeMs = null;
     }
-    return out;
+    return { levels, totalUsd: out };
   } catch (err) {
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
-    bookCache.set(tokenId, { atMs: now, value: null });
+    bookCache.set(tokenId, { atMs: now, value: null, levels: [] });
     if (profile && typeof profile === 'object') {
       profile.bookMs = Date.now() - overallStartMs;
       profile.liquidityCalcMs = Date.now() - overallStartMs;
       profile.asksCount = null;
       profile.levelsAfterFilter = null;
     }
-    return null;
+    return { levels: [], totalUsd: null };
   }
+}
+
+async function getLiquidityAtTargetUsd(tokenId, profile = null) {
+  if (!tokenId) return null;
+  const { totalUsd } = await getFilteredAskLevels(tokenId, profile);
+  return totalUsd;
+}
+
+function simulateAvgPriceForUsd(amountUsd, levels) {
+  // amountUsd est une valeur USDC (coût total) qu'on veut remplir à travers le carnet.
+  let costRemaining = amountUsd;
+  let sharesUsed = 0;
+  for (const { p, s } of levels) {
+    if (costRemaining <= 0) break;
+    const levelCost = p * s; // USDC coût pour consommer tout le niveau
+    if (costRemaining <= levelCost) {
+      sharesUsed += costRemaining / p;
+      costRemaining = 0;
+      break;
+    }
+    sharesUsed += s;
+    costRemaining -= levelCost;
+  }
+  const filled = costRemaining <= 1e-9;
+  const avgP = sharesUsed > 0 ? amountUsd / sharesUsed : null;
+  return { filled, avgP };
+}
+
+/**
+ * Sizing “avg constrained” : calcule la plus grosse taille (USD) telle que
+ * le prix moyen de remplissage reste <= targetAvgP.
+ */
+async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
+  if (!tokenId) return null;
+  const { levels, totalUsd } = await getFilteredAskLevels(tokenId, profile);
+  if (!levels?.length || !Number.isFinite(totalUsd) || totalUsd <= 0) return null;
+
+  const pTarget = Number.isFinite(targetAvgP) ? Math.min(Math.max(targetAvgP, MIN_P), MAX_PRICE_LIQUIDITY) : null;
+  if (!pTarget) return null;
+
+  // Binary search: max amountUsd tel que avgP(mid) <= pTarget
+  let lo = 0;
+  let hi = totalUsd;
+  const eps = 1e-12;
+
+  for (let i = 0; i < avgPriceBinIters; i++) {
+    const mid = (lo + hi) / 2;
+    if (mid <= 0) break;
+    const { filled, avgP } = simulateAvgPriceForUsd(mid, levels);
+    if (filled && avgP != null && avgP <= pTarget + eps) lo = mid;
+    else hi = mid;
+  }
+
+  return lo > 0 ? lo : 0;
 }
 
 /** Récupère le meilleur ask actuel pour un token (validation avant placement WS). */
@@ -1161,6 +1233,7 @@ async function tryPlaceOrderForSignal(signal) {
   if (placedKeys.has(key)) return;
   if (isInLastMinute(signal)) return;
   let signalWithPrice = signal;
+  let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
   if (USE_WS_PRICE_ONLY) {
     // Prix déjà sur le signal (reçu par WS, filtré 97–97,5 %). Pas d'appel REST → ~50–150 ms de gagné.
     const tBestAsk0 = Date.now();
@@ -1169,6 +1242,7 @@ async function tryPlaceOrderForSignal(signal) {
       logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
       return;
     }
+    bestAskLive = wsBestAsk;
     timingsMs.bestAsk = Math.max(1, Date.now() - tBestAsk0);
   } else {
     const tBestAsk0 = Date.now();
@@ -1178,6 +1252,7 @@ async function tryPlaceOrderForSignal(signal) {
       logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
       return;
     }
+    bestAskLive = currentBestAsk;
     signalWithPrice = {
       ...signal,
       priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
@@ -1200,17 +1275,31 @@ async function tryPlaceOrderForSignal(signal) {
   const tBook0 = Date.now();
   const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
   timingsMs.book = Math.max(1, Date.now() - tBook0);
-  // Enregistrer la mise max pour cette fenêtre dès qu'on a la liquidité (signal valide), même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
-  if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
-    appendLiquidityHistory({ liquidityUsd: liquidity, takeSide: signal.takeSide, source: 'ws' });
+  let maxUsdAvg = null;
+  if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
+    // Taille max telle que le prix moyen reste proche du bestAsk live (avg constrained).
+    maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
+  }
+  const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
+  // Enregistrer la mise max (définition avg constrained si activé) pour cette fenêtre dès qu'on a un montant valide,
+  // même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
+  if (miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
+    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws' });
     const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
     recordedLiquidityWindows.set(key, endMs);
   }
+
   let allowBelowMin = false;
+  let cappedBy = false;
   if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
     amountUsd = liquidity;
-    allowBelowMin = amountUsd < orderSizeMinUsd;
+    cappedBy = true;
   }
+  if (useAvgPriceSizing && maxUsdAvg != null && maxUsdAvg > 0 && amountUsd > maxUsdAvg) {
+    amountUsd = maxUsdAvg;
+    cappedBy = true;
+  }
+  if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
 
   // Tentative d'évaluation: on a déjà mesuré bestAsk/creds/balance/book, mais pas de placement d'ordre.
   // Permet d'avoir un breakdown même sans trade réel.
@@ -1268,7 +1357,8 @@ async function tryPlaceOrderForSignal(signal) {
       orderID: result.orderID,
       preSignCacheHit: result.preSignCacheHit ?? false,
     });
-    const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max: ${liquidity.toFixed(0)} $` : '';
+    const miseMaxInfoUsd = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
+    const miseMaxInfo = miseMaxInfoUsd != null && miseMaxInfoUsd > 0 ? ` | Mise max: ${miseMaxInfoUsd.toFixed(0)} $` : '';
     const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
     console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
   } else {

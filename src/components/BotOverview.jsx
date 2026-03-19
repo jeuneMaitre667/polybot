@@ -215,7 +215,7 @@ export function BotOverview() {
       <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-emerald-500/30 sm:col-span-2`}>
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-emerald-500/15 via-sky-500/0 to-violet-500/10"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-emerald-500/15 via-cyan-500/0 to-violet-500/10"
         />
         <CardHeader className="relative z-10 pb-2 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
@@ -301,7 +301,7 @@ export function BotOverview() {
       <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-violet-500/30 sm:col-span-2 min-h-0`}>
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/15 via-cyan-500/0 to-sky-500/10"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/15 via-cyan-500/0 to-emerald-500/10"
         />
         <CardHeader className="relative z-10 pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
@@ -512,10 +512,10 @@ export function BotOverview() {
         </CardContent>
       </Card>
 
-      <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
+      <Card className={`${cardBase} bg-card/70 relative overflow-hidden border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-cyan-500/15 via-sky-500/0 to-emerald-500/10"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-cyan-500/30 via-cyan-500/12 to-emerald-500/30 opacity-100"
         />
         <CardHeader className="relative z-10 pb-2 space-y-2">
           <div className="flex flex-row items-center justify-between gap-2 flex-wrap">

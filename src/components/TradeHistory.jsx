@@ -17,6 +17,14 @@ function formatPrice(p) {
   return `${(Number(p) * 100).toFixed(1)} %`;
 }
 
+function tradeStakeUsdc(t) {
+  const size = Number(t.size) || 0;
+  const price = Number(t.price) || 0;
+  const stake = Math.abs(size * price);
+  if (!Number.isFinite(stake) || stake <= 0) return null;
+  return stake;
+}
+
 function tradeValue(t) {
   const size = Number(t.size) || 0;
   const price = Number(t.price) || 0;
@@ -117,14 +125,21 @@ export function TradeHistory() {
     { label: 'Côté', get: (t) => (t.side === 'BUY' ? 'Achat' : 'Vente') },
     { label: 'Outcome', get: (t) => t.outcome ?? '' },
     { label: 'Taille', get: (t) => (t.size != null ? Number(t.size).toFixed(2) : '') },
-    { label: 'Prix', get: (t) => (t.price != null ? (Number(t.price) * 100).toFixed(1) + '%' : '') },
+    {
+      label: 'Stake (USDC)',
+      get: (t) => {
+        const s = tradeStakeUsdc(t);
+        return s == null ? '' : s.toFixed(2);
+      },
+    },
+    { label: 'Avg price', get: (t) => (t.price != null ? (Number(t.price) * 100).toFixed(1) + '%' : '') },
   ];
 
   return (
     <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/40 via-sky-500/18 to-rose-500/40 opacity-90"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/40 via-cyan-500/18 to-emerald-500/40 opacity-100"
       />
       <CardHeader className="relative z-10 pb-2">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -244,7 +259,8 @@ export function TradeHistory() {
                     <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Côté</th>
                     <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Outcome</th>
                     <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Taille</th>
-                    <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix</th>
+                    <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Stake (USDC)</th>
+                    <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Avg price</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -264,6 +280,12 @@ export function TradeHistory() {
                       </td>
                       <td className="py-3 px-3 text-muted-foreground">{t.outcome ?? '—'}</td>
                       <td className="py-3 px-3 text-right font-medium">{t.size != null ? Number(t.size).toFixed(2) : '—'}</td>
+                      <td className="py-3 px-3 text-right">
+                        {(() => {
+                          const s = tradeStakeUsdc(t);
+                          return s == null ? '—' : `${s.toFixed(2)} $`;
+                        })()}
+                      </td>
                       <td className="py-3 px-3 text-right">{formatPrice(t.price)}</td>
                     </tr>
                   ))}

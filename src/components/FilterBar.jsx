@@ -24,7 +24,7 @@ export function FilterBar({
     <Card className="relative overflow-hidden border-border/50 bg-card/80 backdrop-blur-sm">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-sky-500/0 to-emerald-500/10"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
       />
       <CardContent className="relative z-10 p-5 sm:p-6">
         <div className="flex flex-col gap-6 sm:flex-row sm:flex-wrap sm:items-end">

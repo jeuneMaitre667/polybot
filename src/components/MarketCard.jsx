@@ -48,7 +48,7 @@ export function MarketCard({ market }) {
       <Card className="relative h-full overflow-hidden border-border/50 bg-card/80 transition hover:border-primary/30 hover:bg-card">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-amber-500/10"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
         />
         <CardContent className="relative z-10 p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
