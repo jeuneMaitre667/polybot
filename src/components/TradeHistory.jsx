@@ -124,7 +124,7 @@ export function TradeHistory() {
     <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/10 via-sky-500/0 to-rose-500/10"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/20 via-sky-500/10 to-rose-500/20"
       />
       <CardHeader className="relative z-10 pb-2">
         <div className="flex flex-wrap items-start justify-between gap-4">
