@@ -141,31 +141,58 @@ function getHealth() {
   };
 }
 
-/** Lit liquidity-history.json (relevés du bot) et retourne { avg, min, max, count, lastAt } sur les 3 derniers jours. lastAt = date ISO du dernier relevé (pour vérifier si le bot a récupéré des données en 1 h). */
+/** Lit liquidity-history.json (relevés du bot) et retourne des stats sur les 3 derniers jours. */
 function getLiquidityStats() {
+  const empty = {
+    avg: null,
+    min: null,
+    max: null,
+    median: null,
+    p95: null,
+    lastUsd: null,
+    count: 0,
+    lastAt: null,
+  };
   try {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'liquidity-history.json'), 'utf8');
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return { avg: null, min: null, max: null, count: 0, lastAt: null };
+    if (!Array.isArray(arr) || arr.length === 0) return { ...empty };
     const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
     const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
     const values = filtered
       .map((e) => Number(e.liquidityUsd))
       .filter((n) => Number.isFinite(n) && n > 0);
-    const lastAt = filtered.length > 0
-      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
-      : null;
-    if (values.length === 0) return { avg: null, min: null, max: null, count: 0, lastAt };
+    /** Dernier relevé avec liquidité > 0 (aligné sur ce que le bot enregistre). */
+    let lastEntry = null;
+    for (const e of filtered) {
+      const n = Number(e.liquidityUsd);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      if (!lastEntry || e.at > lastEntry.at) lastEntry = e;
+    }
+    const lastAt = lastEntry?.at ?? null;
+    const lastUsd = lastEntry != null ? Math.round(Number(lastEntry.liquidityUsd) * 100) / 100 : null;
+    if (values.length === 0) return { ...empty, lastAt, lastUsd };
     const sum = values.reduce((a, b) => a + b, 0);
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median =
+      sorted.length % 2 === 1
+        ? sorted[mid]
+        : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100;
+    const p95Idx = Math.max(0, Math.floor(0.95 * (sorted.length - 1)));
+    const p95 = sorted[p95Idx];
     return {
       avg: Math.round((sum / values.length) * 100) / 100,
       min: Math.round(Math.min(...values) * 100) / 100,
       max: Math.round(Math.max(...values) * 100) / 100,
+      median: Math.round(median * 100) / 100,
+      p95: Math.round(p95 * 100) / 100,
+      lastUsd,
       count: values.length,
       lastAt,
     };
   } catch {
-    return { avg: null, min: null, max: null, count: 0, lastAt: null };
+    return { ...empty };
   }
 }
 

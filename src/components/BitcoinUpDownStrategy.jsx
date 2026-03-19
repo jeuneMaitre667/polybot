@@ -369,6 +369,15 @@ export function BitcoinUpDownStrategy() {
                       {liquidityStats.min != null && liquidityStats.max != null && (
                         <span> (min {Math.round(liquidityStats.min)} $, max {Math.round(liquidityStats.max)} $)</span>
                       )}
+                      {liquidityStats.median != null && liquidityStats.p95 != null && (
+                        <span>
+                          {' '}
+                          · médiane ~{Math.round(liquidityStats.median)} $ · p95 ~{Math.round(liquidityStats.p95)} $
+                        </span>
+                      )}
+                      {liquidityStats.lastUsd != null && (
+                        <span> · dernier relevé ~{Math.round(liquidityStats.lastUsd)} $</span>
+                      )}
                       <span> — {liquidityStats.count} relevé{liquidityStats.count !== 1 ? 's' : ''}</span>
                     </p>
                   )}

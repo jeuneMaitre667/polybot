@@ -287,10 +287,26 @@ export function BotOverview() {
           <p className="text-2xl font-semibold tabular-nums text-slate-50">
             {hasActiveLiquidity ? `~${Math.round(activeLiquidity.avg)} $` : '—'}
           </p>
+          {hasActiveLiquidity && activeLiquidity.lastUsd != null && (
+            <p className="mt-1 text-sm tabular-nums text-violet-200/95">
+              Dernier relevé : ~{Math.round(activeLiquidity.lastUsd)} $
+            </p>
+          )}
           <p className="mt-2 text-xs text-muted-foreground">
             {hasActiveLiquidity ? (
               <>
                 Profondeur cumulée jusqu'à 97,5 % : montant max à miser (FOK ≤ 97,5c). Min {Math.round(activeLiquidity.min)} $ · Max {Math.round(activeLiquidity.max)} $
+                {(activeLiquidity.median != null || activeLiquidity.p95 != null) && (
+                  <span className="block mt-1">
+                    {activeLiquidity.median != null && (
+                      <span>Médiane ~{Math.round(activeLiquidity.median)} $</span>
+                    )}
+                    {activeLiquidity.median != null && activeLiquidity.p95 != null && <span> · </span>}
+                    {activeLiquidity.p95 != null && (
+                      <span>p95 ~{Math.round(activeLiquidity.p95)} $</span>
+                    )}
+                  </span>
+                )}
                 <span className="block mt-0.5 opacity-80">
                   {activeLiquidity.count} relevé{activeLiquidity.count !== 1 ? 's' : ''}
                   {lastActiveLabel && ` · ${lastActiveLabel}`}
