@@ -439,7 +439,14 @@ function appendLiquidityHistory(liquidityUsd) {
 function appendTradeLatencyHistory(entry) {
   if (!entry || typeof entry !== 'object') return;
   const latencyMs = Number(entry.latencyMs);
-  if (!Number.isFinite(latencyMs) || latencyMs <= 0) return;
+  const hasTimings =
+    entry?.timingsMs &&
+    typeof entry.timingsMs === 'object' &&
+    Object.values(entry.timingsMs).some((v) => Number.isFinite(Number(v)) && Number(v) > 0);
+  // On veut aussi logger des "tentatives d'évaluation" (bestAsk/creds/balance/book) même sans trade réel.
+  // Dans ce cas, latencyMs peut être 0/undefined => le dashboard n'en tiendra pas compte pour Trade latency,
+  // mais pourra agréger le breakdown via timingsMs.
+  if ((!Number.isFinite(latencyMs) || latencyMs <= 0) && !hasTimings) return;
   try {
     let arr = [];
     try {
@@ -450,7 +457,8 @@ function appendTradeLatencyHistory(entry) {
       // fichier absent ou invalide
     }
     const now = Date.now();
-    arr.push({ at: new Date(now).toISOString(), ...entry, latencyMs });
+    const latencyMsToStore = Number.isFinite(latencyMs) && latencyMs > 0 ? latencyMs : 0;
+    arr.push({ at: new Date(now).toISOString(), ...entry, latencyMs: latencyMsToStore });
     const cutoff = now - TRADE_LATENCY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
     arr = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
     if (arr.length > TRADE_LATENCY_HISTORY_MAX) arr = arr.slice(-TRADE_LATENCY_HISTORY_MAX);
@@ -517,6 +525,18 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
   const short = (typeof key === 'string' && key.length > 18) ? key.slice(0, 18) + '…' : key;
   console.log(`[Mise max] Liquidité 97%: ${reason} (token ${short})`);
   logJson('info', 'Liquidité 97% vide', { reason, tokenId: short });
+}
+
+// Eviter de spammer trade-latency-history.json quand le bot ne peut pas placer (ex: wallet=0).
+const tradeLatencyAttemptLogThrottle = new Map(); // conditionKey -> lastAt
+const TRADE_LATENCY_ATTEMPT_LOG_THROTTLE_MS = Number(process.env.TRADE_LATENCY_ATTEMPT_LOG_THROTTLE_MS) || 60 * 1000;
+function shouldLogTradeLatencyAttempt(conditionKey) {
+  if (!conditionKey) return true;
+  const now = Date.now();
+  const prev = tradeLatencyAttemptLogThrottle.get(conditionKey);
+  if (prev && now - prev < TRADE_LATENCY_ATTEMPT_LOG_THROTTLE_MS) return false;
+  tradeLatencyAttemptLogThrottle.set(conditionKey, now);
+  return true;
 }
 
 /** Throttle : éviter le spam quand la création du client CLOB échoue (ex. wallet client missing account address). */
@@ -1142,12 +1162,13 @@ async function tryPlaceOrderForSignal(signal) {
   let signalWithPrice = signal;
   if (USE_WS_PRICE_ONLY) {
     // Prix déjà sur le signal (reçu par WS, filtré 97–97,5 %). Pas d'appel REST → ~50–150 ms de gagné.
+    const tBestAsk0 = Date.now();
     const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
     if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
       logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
       return;
     }
-    timingsMs.bestAsk = 0;
+    timingsMs.bestAsk = Math.max(1, Date.now() - tBestAsk0);
   } else {
     const tBestAsk0 = Date.now();
     const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
@@ -1166,18 +1187,18 @@ async function tryPlaceOrderForSignal(signal) {
   try {
     const tCreds0 = Date.now();
     clobClient = await buildClobClientCachedCreds();
-    timingsMs.creds = Date.now() - tCreds0;
+    timingsMs.creds = Math.max(1, Date.now() - tCreds0);
   } catch (err) {
     console.warn('WebSocket tryPlace: CLOB client:', err.message);
     return;
   }
   const tBal0 = Date.now();
   const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
-  timingsMs.balance = Date.now() - tBal0;
+  timingsMs.balance = Math.max(1, Date.now() - tBal0);
   let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
   const tBook0 = Date.now();
   const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
-  timingsMs.book = Date.now() - tBook0;
+  timingsMs.book = Math.max(1, Date.now() - tBook0);
   // Enregistrer la mise max pour cette fenêtre dès qu'on a la liquidité (signal valide), même si on ne placera pas d'ordre (ex. pas de fonds, montant < min).
   if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
     appendLiquidityHistory(liquidity);
@@ -1189,7 +1210,24 @@ async function tryPlaceOrderForSignal(signal) {
     amountUsd = liquidity;
     allowBelowMin = amountUsd < orderSizeMinUsd;
   }
-  if (amountUsd < orderSizeMinUsd && !allowBelowMin) return;
+
+  // Tentative d'évaluation: on a déjà mesuré bestAsk/creds/balance/book, mais pas de placement d'ordre.
+  // Permet d'avoir un breakdown même sans trade réel.
+  if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
+    if (shouldLogTradeLatencyAttempt(key)) {
+      appendTradeLatencyHistory({
+        source: 'ws',
+        latencyMs: 0,
+        timingsMs,
+        takeSide: signalWithPrice.takeSide,
+        amountUsd,
+        conditionId: key,
+        tokenId: signalWithPrice.tokenIdToBuy,
+      });
+    }
+    placedKeys.delete(key); // sécurité: ne pas bloquer un éventuel trade si le wallet change
+    return;
+  }
   // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
   if (useMarketOrder && clobClient) {
     try {
@@ -1530,7 +1568,8 @@ async function run() {
         writeBalance(balanceForStatus);
       }
     });
-    if (useBalanceAsSize && amountUsd < orderSizeMinUsd) return;
+    // Même si le wallet est < min et qu'aucun ordre ne sera placé, on continue pour pouvoir logger
+    // des timings d'évaluation (bestAsk/creds/balance/book) dans trade-latency-history.json.
 
     await profiler.measure('place_orders', async () => {
     for (const s of signals) {
@@ -1539,20 +1578,54 @@ async function run() {
     const key = getSignalKey(s);
     if (placedKeys.has(key)) continue;
     const t0 = Date.now();
-    const timingsMs = { bestAsk: 0, creds: 0, balance: null, book: null, placeOrder: null };
+    // En poll, le "bestAsk" provient des prix déjà inclus dans le signal (pas d'appel REST dédié),
+    // donc on loggue au minimum 1ms pour que le breakdown ait une granularité exploitable.
+    const timingsMs = {
+      bestAsk: 1,
+      creds: clobClient ? 1 : null,
+      balance: null,
+      book: null,
+      placeOrder: null,
+    };
 
     if (useBalanceAsSize) {
       const tBal0 = Date.now();
       const balance = await getBalance();
-      timingsMs.balance = Date.now() - tBal0;
+      timingsMs.balance = Math.max(1, Date.now() - tBal0);
       amountUsd = balance != null ? balance : orderSizeUsd;
-      if (amountUsd < orderSizeMinUsd) break;
+      if (amountUsd < orderSizeMinUsd) {
+        // Pas de placement d'ordre, mais on mesure quand même book/liquidité et on loggue pour le breakdown.
+        const tBook0 = Date.now();
+        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+        timingsMs.book = Math.max(1, Date.now() - tBook0);
+
+        if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
+          appendLiquidityHistory(liquidity);
+          const endMs = s.endDate
+            ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime())
+            : Date.now();
+          recordedLiquidityWindows.set(key, endMs);
+        }
+
+        if (shouldLogTradeLatencyAttempt(key)) {
+          appendTradeLatencyHistory({
+            source: 'poll',
+            latencyMs: 0,
+            timingsMs,
+            takeSide: s.takeSide,
+            amountUsd,
+            conditionId: key,
+            tokenId: s.tokenIdToBuy,
+          });
+        }
+        break;
+      }
     }
 
     let allowBelowMin = false;
     const tBook0 = Date.now();
     const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-    timingsMs.book = Date.now() - tBook0;
+    timingsMs.book = Math.max(1, Date.now() - tBook0);
     if (liquidity != null && liquidity > 0) {
       if (!recordedLiquidityWindows.has(key)) {
         appendLiquidityHistory(liquidity);

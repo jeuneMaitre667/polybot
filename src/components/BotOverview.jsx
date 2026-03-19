@@ -101,6 +101,13 @@ export function BotOverview() {
   const cardBase = 'border border-border/60 bg-card/90 shadow-card rounded-xl min-h-[140px] flex flex-col';
   const rowClass = 'flex items-center justify-between gap-3 py-2 first:pt-0 border-b border-border/40 last:border-0';
 
+  const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
+  const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
+  const balanceCount = activeLatencyBreakdown?.all?.balance?.count ?? 0;
+  const bookCount = activeLatencyBreakdown?.all?.book?.count ?? 0;
+  const placeOrderCount = activeLatencyBreakdown?.all?.placeOrder?.count ?? 0;
+  const hasAnyTradeLatencyBreakdown = [bestAskCount, credsCount, balanceCount, bookCount, placeOrderCount].some((c) => c > 0);
+
   const activeDecisionReasons = activeSignalDecisionLatency?.reasonCounts ?? null;
   const activeDecisionTotal =
     (activeDecisionReasons?.no_signal ?? 0)
@@ -117,6 +124,12 @@ export function BotOverview() {
     if (v == null) return '—';
     const n = Number(v);
     return Number.isFinite(n) ? `${Math.round(n)} ms` : '—';
+  }
+
+  function formatCount(v) {
+    if (v == null) return '—';
+    const n = Number(v);
+    return Number.isFinite(n) ? `${Math.round(n)}` : '—';
   }
 
   return (
@@ -342,32 +355,64 @@ export function BotOverview() {
                         </>
                       )}
                     </span>
-                    {activeLatencyBreakdown?.all?.placeOrder?.count > 0 && (
-                      <details className="mt-2 rounded-lg border border-border/40 bg-slate-900/30 px-2 py-1.5">
-                        <summary className="cursor-pointer select-none text-[11px] text-slate-300">
-                          Détails (avg · p95)
-                        </summary>
-                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                          <div className="text-muted-foreground">bestAsk</div>
-                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.avgMs)} · {formatMs(activeLatencyBreakdown.all.bestAsk?.p95Ms)}</div>
-                          <div className="text-muted-foreground">creds</div>
-                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.avgMs)} · {formatMs(activeLatencyBreakdown.all.creds?.p95Ms)}</div>
-                          <div className="text-muted-foreground">balance</div>
-                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.avgMs)} · {formatMs(activeLatencyBreakdown.all.balance?.p95Ms)}</div>
-                          <div className="text-muted-foreground">book</div>
-                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.avgMs)} · {formatMs(activeLatencyBreakdown.all.book?.p95Ms)}</div>
-                          <div className="text-muted-foreground">placeOrder</div>
-                          <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.avgMs)} · {formatMs(activeLatencyBreakdown.all.placeOrder?.p95Ms)}</div>
-                        </div>
-                        <div className="mt-1 text-[10px] text-muted-foreground/80">
-                          Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
-                        </div>
-                      </details>
-                    )}
                   </>
                 ) : (
                   'Mesure seulement quand un ordre est placé.'
                 )}
+
+                <div className="mt-1 opacity-80">
+                  Détails placeOrder:{' '}
+                  <span className="tabular-nums text-slate-200">{activeLatencyBreakdown?.all?.placeOrder?.count ?? 0}</span> mesures sur 24 h.
+                </div>
+
+                <details className="mt-2 rounded-lg border border-border/40 bg-slate-900/30 px-2 py-1.5">
+                  <summary className="cursor-pointer select-none text-[11px] text-slate-300">
+                    Détails (avg · p95)
+                  </summary>
+
+                  {hasAnyTradeLatencyBreakdown ? (
+                    <>
+                      <div className="mt-2 grid grid-cols-4 gap-x-3 gap-y-1 text-[11px]">
+                        <div className="text-muted-foreground">Étape</div>
+                        <div className="text-muted-foreground">Avg</div>
+                        <div className="text-muted-foreground">p95</div>
+                        <div className="text-muted-foreground">N</div>
+
+                        <div className="text-muted-foreground">bestAsk</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.avgMs)}</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.p95Ms)}</div>
+                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.bestAsk?.count)}</div>
+
+                        <div className="text-muted-foreground">creds</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.avgMs)}</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.p95Ms)}</div>
+                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.creds?.count)}</div>
+
+                        <div className="text-muted-foreground">balance</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.avgMs)}</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.p95Ms)}</div>
+                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.balance?.count)}</div>
+
+                        <div className="text-muted-foreground">book</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.avgMs)}</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.p95Ms)}</div>
+                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.book?.count)}</div>
+
+                        <div className="text-muted-foreground">placeOrder</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.avgMs)}</div>
+                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.p95Ms)}</div>
+                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.placeOrder?.count)}</div>
+                      </div>
+                      <div className="mt-1 text-[10px] text-muted-foreground/80">
+                        Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mt-2 text-[11px] text-slate-300/90">
+                      Pas encore assez de données pour le breakdown (aucune mesure sur bestAsk/creds/balance/book) sur les 24h.
+                    </div>
+                  )}
+                </details>
               </div>
             </div>
 
