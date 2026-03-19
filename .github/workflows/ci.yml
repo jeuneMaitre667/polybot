@@ -28,5 +28,4 @@ jobs:
         run: npm test
 
       - name: Audit (high/critical, non bloquant)
-        continue-on-error: true
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=high || true
