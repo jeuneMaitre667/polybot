@@ -225,6 +225,15 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
+/**
+ * Si true (défaut), refuse l'ordre si le scénario « victoire » ne rapporte pas strictement plus USDC que la mise
+ * (marché binaire : encaissement ≈ mise / prix, donc exiger prix < 1 $). Protège contre prix corrompu / MAX_P=1.
+ * Ordre marché : prix conservateur = MAX_P (pire exécution dans la plage). Ordre limite : prix signal clamp [MIN_P, MAX_P].
+ * REQUIRE_WIN_GROSS_GAIN_GUARD=false pour désactiver.
+ */
+const requireWinGrossGainGuard = process.env.REQUIRE_WIN_GROSS_GAIN_GUARD !== 'false';
+/** Gain brut minimum si victoire (USDC), en plus de encaissement > mise. Défaut 0. */
+const minWinGrossProfitUsd = Number(process.env.MIN_WIN_GROSS_PROFIT_USD) || 0;
 // Si true (défaut), la mise max est enregistrée uniquement au moment où un signal est détecté/évalué,
 // pas via le relevé périodique des créneaux actifs.
 const recordMiseMaxOnSignalOnly = process.env.RECORD_MISE_MAX_ON_SIGNAL_ONLY !== 'false';
@@ -1189,6 +1198,45 @@ async function getTickSizeForToken(client, tokenId) {
 /** Seuil en dessous duquel on ne place jamais (évite les ordres dust). */
 const ABSOLUTE_MIN_USD = 0.5;
 
+/**
+ * Garde : mise `stakeUsd` au prix moyen `p` (0<p<1) → parts ≈ stake/p → si victoire encaissement ≈ stake/p USDC.
+ * Exige encaissement > mise et gain brut ≥ minWinGrossProfitUsd.
+ */
+function validateWinPayoutExceedsStake(stakeUsd, effectivePriceP) {
+  const stake = Number(stakeUsd);
+  const p = Number(effectivePriceP);
+  if (!Number.isFinite(stake) || stake <= 0) {
+    return { ok: false, error: 'Garde gain : mise USDC invalide.' };
+  }
+  if (!Number.isFinite(p) || p <= 0 || p >= 1) {
+    return { ok: false, error: `Garde gain : prix effectif invalide (${String(effectivePriceP)}) — attendu dans ]0,1[.` };
+  }
+  const payoutIfWin = stake / p;
+  const grossGain = payoutIfWin - stake;
+  if (payoutIfWin <= stake + 1e-9) {
+    return {
+      ok: false,
+      error: `Garde gain : si victoire, encaissement ${payoutIfWin.toFixed(2)} $ ≤ mise ${stake.toFixed(2)} $ (p=${p.toFixed(4)}). Trade refusé.`,
+    };
+  }
+  if (grossGain + 1e-9 < minWinGrossProfitUsd) {
+    return {
+      ok: false,
+      error: `Garde gain : gain brut si victoire ${grossGain.toFixed(4)} $ < minimum ${minWinGrossProfitUsd} $ — trade refusé.`,
+    };
+  }
+  return { ok: true, payoutIfWin, grossGain };
+}
+
+/** Prix conservateur pour la garde : marché = MAX_P ; limite = prix signal clamp stratégie. */
+function getConservativePriceForGainGuard(signal, marketOrder) {
+  if (marketOrder) return MAX_P;
+  const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
+  const p = Number(raw);
+  if (!Number.isFinite(p)) return null;
+  return Math.min(Math.max(p, MIN_P), MAX_P);
+}
+
 /** Place un ordre sur le CLOB (marché ou limite), avec retry sur 429 / erreur réseau et kill switch en cas d'erreurs répétées. amountUsd = taille du trade. clientOrNull = client CLOB déjà créé. options.allowBelowMin = true pour accepter une taille < ORDER_SIZE_MIN_USD (ex. plafond liquidité). */
 async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) {
   if (!walletConfigured || !wallet) {
@@ -1203,6 +1251,19 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   }
   const { tokenIdToBuy, takeSide, priceUp, priceDown } = signal;
   const price = takeSide === 'Down' ? priceDown : priceUp;
+
+  if (requireWinGrossGainGuard) {
+    const pGuard = getConservativePriceForGainGuard(signal, useMarketOrder);
+    if (pGuard == null) {
+      return { ok: false, error: 'Garde gain : prix du signal indisponible — trade refusé.' };
+    }
+    const gainCheck = validateWinPayoutExceedsStake(size, pGuard);
+    if (!gainCheck.ok) {
+      logJson('warn', 'Garde gain vs mise', { stake: size, pGuard, error: gainCheck.error });
+      return { ok: false, error: gainCheck.error };
+    }
+  }
+
   let lastError;
   for (let attempt = 0; attempt < ORDER_RETRY_ATTEMPTS; attempt++) {
     try {
@@ -1913,6 +1974,7 @@ async function run() {
       const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
       console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
     } else {
+      placedKeys.delete(key);
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
