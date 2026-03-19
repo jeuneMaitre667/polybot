@@ -18,6 +18,7 @@ const BOT_DIR = process.env.BOT_DIR || path.resolve(__dirname);
 
 const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
 const SECRET = process.env.BOT_STATUS_SECRET || '';
+const includeActiveWindowLiquidity = process.env.INCLUDE_ACTIVE_WINDOW_LIQUIDITY === 'true';
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -274,8 +275,11 @@ function getLiquidityReport() {
         bySignal: { '24h': [], '72h': [] },
       };
     }
-    const f24 = filterLiquidityByMs(arr, 24 * 60 * 60 * 1000);
-    const f72 = filterLiquidityByMs(arr, 3 * 24 * 60 * 60 * 1000);
+    const filteredSources = includeActiveWindowLiquidity
+      ? arr
+      : arr.filter((e) => String(e?.source || '').toLowerCase() !== 'active_window');
+    const f24 = filterLiquidityByMs(filteredSources, 24 * 60 * 60 * 1000);
+    const f72 = filterLiquidityByMs(filteredSources, 3 * 24 * 60 * 60 * 1000);
     return {
       windows: {
         '24h': buildLiquidityWindow(f24),

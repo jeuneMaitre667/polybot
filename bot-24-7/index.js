@@ -209,6 +209,9 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
+// Si true (défaut), la mise max est enregistrée uniquement au moment où un signal est détecté/évalué,
+// pas via le relevé périodique des créneaux actifs.
+const recordMiseMaxOnSignalOnly = process.env.RECORD_MISE_MAX_ON_SIGNAL_ONLY !== 'false';
 /**
  * Sizing “avg constrained” (recommandé pour coller à ton objectif):
  * - on calcule une taille max (USD) telle que le prix moyen de remplissage reste <= bestAsk_live + tol
@@ -1555,64 +1558,66 @@ async function run() {
     for (const [key, endMs] of recordedLiquidityWindows) {
       if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
-    // Enregistrer la mise max pour tous les créneaux actifs (sans filtre de prix) pour avoir des données même quand le prix n'est jamais dans 97–97,5 %.
-    await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
-      try {
-        const activeWindows = await fetchActiveWindows();
-        logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
-        console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
-        for (const { market: m, endDate, key } of activeWindows) {
-          if (recordedLiquidityWindows.has(key)) continue;
-          const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
-          const tokenUp = getTokenIdToBuy(m, 'Up');
-          const tokenDown = getTokenIdToBuy(m, 'Down');
-          const liqProfileUp = {};
-          const liqProfileDown = {};
-          const [bookUp, bookDown] = await Promise.all([
-            tokenUp ? getFilteredAskLevels(tokenUp, liqProfileUp) : Promise.resolve({ levels: [], totalUsd: null }),
-            tokenDown ? getFilteredAskLevels(tokenDown, liqProfileDown) : Promise.resolve({ levels: [], totalUsd: null }),
-          ]);
-          const liqUp = bookUp?.totalUsd ?? null;
-          const liqDown = bookDown?.totalUsd ?? null;
-          const bestAskUp = Array.isArray(bookUp?.levels) && bookUp.levels.length > 0 ? Number(bookUp.levels[0].p) : null;
-          const bestAskDown = Array.isArray(bookDown?.levels) && bookDown.levels.length > 0 ? Number(bookDown.levels[0].p) : null;
-          bumpCycleBookStats(tokenUp ? liqProfileUp : null);
-          bumpCycleBookStats(tokenDown ? liqProfileDown : null);
-          let recUp = liqUp;
-          let recDown = liqDown;
-          if (useAvgPriceSizing) {
-            if (tokenUp && Number.isFinite(bestAskUp) && liqUp != null && liqUp > 0) {
-              const maxUp = getMaxUsdForAvgPriceFromLevels(bookUp.levels, bestAskUp + avgPriceTolP, liqUp);
-              if (maxUp != null && maxUp > 0) recUp = maxUp;
+    // Option legacy: relever la mise max périodiquement sur les créneaux actifs (peut arriver tard dans la fenêtre).
+    if (!recordMiseMaxOnSignalOnly) {
+      await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
+        try {
+          const activeWindows = await fetchActiveWindows();
+          logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
+          console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
+          for (const { market: m, endDate, key } of activeWindows) {
+            if (recordedLiquidityWindows.has(key)) continue;
+            const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
+            const tokenUp = getTokenIdToBuy(m, 'Up');
+            const tokenDown = getTokenIdToBuy(m, 'Down');
+            const liqProfileUp = {};
+            const liqProfileDown = {};
+            const [bookUp, bookDown] = await Promise.all([
+              tokenUp ? getFilteredAskLevels(tokenUp, liqProfileUp) : Promise.resolve({ levels: [], totalUsd: null }),
+              tokenDown ? getFilteredAskLevels(tokenDown, liqProfileDown) : Promise.resolve({ levels: [], totalUsd: null }),
+            ]);
+            const liqUp = bookUp?.totalUsd ?? null;
+            const liqDown = bookDown?.totalUsd ?? null;
+            const bestAskUp = Array.isArray(bookUp?.levels) && bookUp.levels.length > 0 ? Number(bookUp.levels[0].p) : null;
+            const bestAskDown = Array.isArray(bookDown?.levels) && bookDown.levels.length > 0 ? Number(bookDown.levels[0].p) : null;
+            bumpCycleBookStats(tokenUp ? liqProfileUp : null);
+            bumpCycleBookStats(tokenDown ? liqProfileDown : null);
+            let recUp = liqUp;
+            let recDown = liqDown;
+            if (useAvgPriceSizing) {
+              if (tokenUp && Number.isFinite(bestAskUp) && liqUp != null && liqUp > 0) {
+                const maxUp = getMaxUsdForAvgPriceFromLevels(bookUp.levels, bestAskUp + avgPriceTolP, liqUp);
+                if (maxUp != null && maxUp > 0) recUp = maxUp;
+              }
+              if (tokenDown && Number.isFinite(bestAskDown) && liqDown != null && liqDown > 0) {
+                const maxDown = getMaxUsdForAvgPriceFromLevels(bookDown.levels, bestAskDown + avgPriceTolP, liqDown);
+                if (maxDown != null && maxDown > 0) recDown = maxDown;
+              }
             }
-            if (tokenDown && Number.isFinite(bestAskDown) && liqDown != null && liqDown > 0) {
-              const maxDown = getMaxUsdForAvgPriceFromLevels(bookDown.levels, bestAskDown + avgPriceTolP, liqDown);
-              if (maxDown != null && maxDown > 0) recDown = maxDown;
+            const liquidity = Math.max(recUp ?? 0, recDown ?? 0);
+            const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
+            logJson('info', 'Mise max créneau', {
+              key: key?.slice(0, 18) + '…',
+              liquidityUsd: liquidity > 0 ? liquidity : null,
+              rawLiquidityUpUsd: liqUp,
+              rawLiquidityDownUsd: liqDown,
+              recordedUpUsd: recUp,
+              recordedDownUsd: recDown,
+              mode: useAvgPriceSizing ? 'avg_constrained' : 'raw_liquidity',
+            });
+            console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → mise max: ${liqLog} USD${useAvgPriceSizing ? ' (avg constrained)' : ''}`);
+            if (liquidity > 0) {
+              if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window', signalPriceP: bestAskUp });
+              if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window', signalPriceP: bestAskDown });
+              recordedLiquidityWindows.set(key, endMs);
             }
+            await new Promise((r) => setTimeout(r, 150));
           }
-          const liquidity = Math.max(recUp ?? 0, recDown ?? 0);
-          const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
-          logJson('info', 'Mise max créneau', {
-            key: key?.slice(0, 18) + '…',
-            liquidityUsd: liquidity > 0 ? liquidity : null,
-            rawLiquidityUpUsd: liqUp,
-            rawLiquidityDownUsd: liqDown,
-            recordedUpUsd: recUp,
-            recordedDownUsd: recDown,
-            mode: useAvgPriceSizing ? 'avg_constrained' : 'raw_liquidity',
-          });
-          console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → mise max: ${liqLog} USD${useAvgPriceSizing ? ' (avg constrained)' : ''}`);
-          if (liquidity > 0) {
-            if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window', signalPriceP: bestAskUp });
-            if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window', signalPriceP: bestAskDown });
-            recordedLiquidityWindows.set(key, endMs);
-          }
-          await new Promise((r) => setTimeout(r, 150));
+        } catch (err) {
+          console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
         }
-      } catch (err) {
-        console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
-      }
-    });
+      });
+    }
     // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
     let decisionLogged = 0;
     await profiler.measure('signal_decision_liquidity', async () => {
