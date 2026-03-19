@@ -63,8 +63,8 @@ function computePnl(balanceHistory, currentBalance) {
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const statusUrl15m = DEFAULT_BOT_STATUS_URL_15M;
-  const { data, loading } = useBotStatus(statusUrl);
-  const { data: data15m, loading: loading15m } = useBotStatus(statusUrl15m);
+  const { data } = useBotStatus(statusUrl);
+  const { data: data15m } = useBotStatus(statusUrl15m);
   const [miseMaxMode, setMiseMaxMode] = useState('1h');
   /** Fenêtre d’agrégation des stats / graphique mise max */
   const [miseMaxPeriod, setMiseMaxPeriod] = useState('72h');
@@ -92,8 +92,6 @@ export function BotOverview() {
   const pnl = computePnl(data?.balanceHistory, balance);
   const pnl15m = computePnl(data15m?.balanceHistory, balance15m);
 
-  const isOnline = data?.status === 'online';
-  const isOnline15m = data15m?.status === 'online';
   const liquidityStats = data?.liquidityStats ?? null;
   const hasLiquidityStats = liquidityStats?.count > 0;
   const liquidityStats15m = data15m?.liquidityStats ?? null;
@@ -223,16 +221,6 @@ export function BotOverview() {
           <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
             Solde, PnL &amp; Performance
           </CardTitle>
-          <div className="flex items-center gap-1.5">
-            <Badge variant={isOnline ? 'secondary' : 'destructive'} className="text-[10px] px-2 py-0.5">
-              {loading ? '…' : '1h'}
-            </Badge>
-            {show15m && (
-              <Badge variant={isOnline15m ? 'secondary' : 'destructive'} className="text-[10px] px-2 py-0.5">
-                {loading15m ? '…' : '15m'}
-              </Badge>
-            )}
-          </div>
         </CardHeader>
         <CardContent className="relative z-10 pt-0 flex-1">
           <div className="grid gap-6 sm:grid-cols-2">
