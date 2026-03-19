@@ -62,6 +62,10 @@ function ensureJsonArrayFileExists(filePath) {
 }
 ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
 
+// Cache Gamma (évite de retaper l'API Gamma deux fois par cycle : fetchSignals + fetchActiveWindows).
+const GAMMA_EVENTS_CACHE_MS = Number(process.env.GAMMA_EVENTS_CACHE_MS) || 4000;
+const gammaEventsCache = new Map(); // cacheKey -> { expiresAt, events, profile }
+
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
   try {
@@ -719,6 +723,98 @@ function isInLastMinute(signal) {
   return Date.now() >= endMs - thresholdMs;
 }
 
+function getGammaEventsCacheKey(slugMatch) {
+  // La fallback dépend du créneau courant (hourly/15m). On inclut donc le slug courant dans la clé.
+  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
+  return `${MARKET_MODE}|${slugMatch}|${currentSlug}`;
+}
+
+/**
+ * Récupère la liste d'events Gamma, avec fallback par slug courant si `slug_contains` ne renvoie pas.
+ * Met en cache pour réduire la latence du cycle (fetchSignals + fetchActiveWindows).
+ */
+async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
+  const cacheKey = getGammaEventsCacheKey(slugMatch);
+  const now = Date.now();
+  const cached = gammaEventsCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached;
+
+  const profile = {
+    usedEvents: false,
+    eventsMsTotal: null,
+    eventsRetryUsed: false,
+    hasMatchingSlugAfterEvents: null,
+    fallbackSlugOk: null,
+    fallbackSlugMs: null,
+  };
+
+  let events = [];
+  try {
+    const tEvents0 = Date.now();
+    const { data } = await axios.get(GAMMA_EVENTS_URL, {
+      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+      timeout: eventsTimeoutMs,
+    });
+    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+    profile.usedEvents = true;
+    profile.eventsMsTotal = Date.now() - tEvents0;
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 400) {
+      const tEvents1 = Date.now();
+      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: eventsTimeoutMs });
+      profile.usedEvents = true;
+      profile.eventsRetryUsed = true;
+      profile.eventsMsTotal = (profile.eventsMsTotal ?? 0) + (Date.now() - tEvents1);
+      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+    } else throw err;
+  }
+
+  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+  profile.hasMatchingSlugAfterEvents = hasMatchingSlug;
+
+  // Secours : si la liste n'a aucun event qui matche notre slug (API peut ignorer slug_contains), récupérer le créneau actuel par slug.
+  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
+    try {
+      const tFallback0 = Date.now();
+      const slug = getCurrent15mEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+        events = [ev];
+        profile.fallbackSlugOk = true;
+      } else {
+        profile.fallbackSlugOk = false;
+      }
+      profile.fallbackSlugMs = Date.now() - tFallback0;
+    } catch (_) {
+      profile.fallbackSlugOk = false;
+      profile.fallbackSlugMs = 0;
+    }
+  }
+
+  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
+    try {
+      const tFallback0 = Date.now();
+      const slug = getCurrentHourlyEventSlug();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
+        events = [ev];
+        profile.fallbackSlugOk = true;
+      } else {
+        profile.fallbackSlugOk = false;
+      }
+      profile.fallbackSlugMs = Date.now() - tFallback0;
+    } catch (_) {
+      profile.fallbackSlugOk = false;
+      profile.fallbackSlugMs = 0;
+    }
+  }
+
+  const expiresAt = now + GAMMA_EVENTS_CACHE_MS;
+  const out = { expiresAt, events, profile };
+  gammaEventsCache.set(cacheKey, out);
+  return out;
+}
+
 /** Récupère les signaux 96,8–97 % depuis l’API Gamma. */
 async function fetchSignals() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
@@ -739,80 +835,16 @@ async function fetchSignals() {
   };
 
   // Même logique pour 15m et horaire : d'abord GET /events (liste), puis secours par slug si la liste ne contient pas le créneau actuel.
+  // On appelle un helper mutualisé + cache pour réduire la latence (évite un 2e appel Gamma dans fetchActiveWindows()).
   const eventsTimeoutMs = 15000;
-  {
-    try {
-      const tEvents0 = Date.now();
-      const { data } = await axios.get(GAMMA_EVENTS_URL, {
-        params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-        timeout: eventsTimeoutMs,
-      });
-      events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-      profile.usedEvents = true;
-      profile.eventsMsTotal = Date.now() - tEvents0;
-    } catch (err) {
-      if (err.response?.status === 422 || err.response?.status === 400) {
-        const tEvents1 = Date.now();
-        const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: eventsTimeoutMs });
-        profile.usedEvents = true;
-        profile.eventsRetryUsed = true;
-        profile.eventsMsTotal = (profile.eventsMsTotal ?? 0) + (Date.now() - tEvents1);
-        events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-      } else throw err;
-    }
-
-    const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-    profile.hasMatchingSlugAfterEvents = hasMatchingSlug;
-    if (MARKET_MODE === '15m' && !hasMatchingSlug) {
-      const tFallback0 = Date.now();
-      try {
-        const slug = getCurrent15mEventSlug();
-        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
-          events = [ev];
-          logJson('info', 'fetchSignals: secours slug 15m — event reçu', { slug });
-          console.log(`[fetchSignals] Secours slug 15m: ${slug} — event reçu`);
-          profile.fallbackSlugOk = true;
-        } else {
-          logJson('info', 'fetchSignals: secours slug 15m — event invalide ou vide', { slug });
-          console.log(`[fetchSignals] Secours slug 15m: ${slug} — event invalide ou vide`);
-          profile.fallbackSlugOk = false;
-        }
-        profile.fallbackSlugMs = Date.now() - tFallback0;
-      } catch (err) {
-        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-        logJson('info', 'fetchSignals: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
-        console.log(`[fetchSignals] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
-        profile.fallbackSlugOk = false;
-        profile.fallbackSlugMs = Date.now() - tFallback0;
-      }
-    }
-    if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
-      try {
-        // Profil uniquement si on tombe sur la logique hourly fallback slug
-        const tFallback0 = Date.now();
-        const slug = getCurrentHourlyEventSlug();
-        const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-        if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-          events = [ev];
-          logJson('info', 'fetchSignals: secours slug horaire — event reçu', { slug });
-          console.log(`[fetchSignals] Secours slug horaire: ${slug} — event reçu`);
-          profile.fallbackSlugOk = true;
-        } else {
-          logJson('info', 'fetchSignals: secours slug horaire — event invalide ou vide', { slug });
-          console.log(`[fetchSignals] Secours slug horaire: ${slug} — event invalide ou vide`);
-          profile.fallbackSlugOk = false;
-        }
-        profile.fallbackSlugMs = Date.now() - tFallback0;
-      } catch (err) {
-        const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-        logJson('info', 'fetchSignals: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
-        console.log(`[fetchSignals] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
-        profile.fallbackSlugOk = false;
-        profile.fallbackSlugMs = Date.now() - tFetchStartMs;
-      }
-    }
-  }
+  const gammaOut = await fetchGammaEventsCached(slugMatch, eventsTimeoutMs);
+  events = gammaOut.events;
+  profile.usedEvents = gammaOut.profile.usedEvents;
+  profile.eventsMsTotal = gammaOut.profile.eventsMsTotal;
+  profile.eventsRetryUsed = gammaOut.profile.eventsRetryUsed;
+  profile.hasMatchingSlugAfterEvents = gammaOut.profile.hasMatchingSlugAfterEvents;
+  profile.fallbackSlugOk = gammaOut.profile.fallbackSlugOk;
+  profile.fallbackSlugMs = gammaOut.profile.fallbackSlugMs;
   const results = [];
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
@@ -956,55 +988,7 @@ function getCurrentHourlyEventSlug() {
 /** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix — pour enregistrer la mise max par fenêtre même quand le prix n'est pas dans la fenêtre 97–97,5 %. */
 async function fetchActiveWindows() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
-  let events = [];
-  try {
-    const { data } = await axios.get(GAMMA_EVENTS_URL, {
-      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-      timeout: 15000,
-    });
-    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-  } catch (err) {
-    if (err.response?.status === 422 || err.response?.status === 400) {
-      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
-      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-    } else throw err;
-  }
-  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-  // Secours : si la liste n'a aucun event qui matche notre slug (API peut ignorer slug_contains), récupérer le créneau actuel par slug.
-  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
-    try {
-      const slug = getCurrent15mEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
-        events = [ev];
-        logJson('info', 'fetchActiveWindows: secours slug 15m — event reçu', { slug });
-        console.log(`[Mise max] Secours slug 15m: ${slug} — event reçu`);
-      } else {
-        console.log(`[Mise max] Secours slug 15m: ${slug} — event invalide ou vide`);
-      }
-    } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      logJson('info', 'fetchActiveWindows: secours slug 15m — erreur', { slug: getCurrent15mEventSlug(), error: msg });
-      console.log(`[Mise max] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
-    }
-  }
-  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
-    try {
-      const slug = getCurrentHourlyEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-        events = [ev];
-        logJson('info', 'fetchActiveWindows: secours slug horaire — event reçu', { slug });
-        console.log(`[Mise max] Secours slug horaire: ${slug} — event reçu`);
-      } else {
-        console.log(`[Mise max] Secours slug horaire: ${slug} — event invalide ou vide`);
-      }
-    } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      logJson('info', 'fetchActiveWindows: secours slug horaire — erreur', { slug: getCurrentHourlyEventSlug(), error: msg });
-      console.log(`[Mise max] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
-    }
-  }
+  const { events } = await fetchGammaEventsCached(slugMatch, 15000);
   const results = [];
   const seenKeys = new Set();
   for (const ev of events) {
@@ -1467,8 +1451,10 @@ async function run() {
           const tokenDown = getTokenIdToBuy(m, 'Down');
           const liqProfileUp = {};
           const liqProfileDown = {};
-          const liqUp = tokenUp ? await getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : null;
-          const liqDown = tokenDown ? await getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : null;
+          const [liqUp, liqDown] = await Promise.all([
+            tokenUp ? getLiquidityAtTargetUsd(tokenUp, liqProfileUp) : Promise.resolve(null),
+            tokenDown ? getLiquidityAtTargetUsd(tokenDown, liqProfileDown) : Promise.resolve(null),
+          ]);
           bumpCycleBookStats(tokenUp ? liqProfileUp : null);
           bumpCycleBookStats(tokenDown ? liqProfileDown : null);
           const liquidity = Math.max(liqUp ?? 0, liqDown ?? 0);
