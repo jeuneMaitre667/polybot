@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
+import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -49,6 +50,20 @@ export function BotOverview() {
   const hasSignalDecisionLatencyStats = (signalDecisionLatencyStats?.all?.count ?? 0) > 0;
   const hasSignalDecisionLatencyStats15m = (signalDecisionLatencyStats15m?.all?.count ?? 0) > 0;
   const show15m = !!statusUrl15m;
+
+  const {
+    avgUsd: miseMaxAvg15m,
+    minUsd: miseMaxMin15m,
+    maxUsd: miseMaxMax15m,
+    medianUsd: miseMaxMedian15m,
+    sampleSize: miseMaxSample15m,
+    slotsAttempted: miseMaxSlotsAttempted15m,
+    currentSlotMiseMaxUsd: miseMaxCurrent15m,
+    loading: miseMax15mLoading,
+    error: miseMax15mError,
+    lastAt: miseMax15mLastAt,
+    refresh: refreshMiseMax15m,
+  } = use15mMiseMaxBookAvg({ enabled: show15m, slotCount: 36, staggerMs: 45 });
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
@@ -201,6 +216,78 @@ export function BotOverview() {
           )}
         </CardContent>
       </Card>
+
+      {show15m && (
+        <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-amber-500/35 sm:col-span-2`}>
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-gradient-to-r from-amber-500/12 via-orange-500/5 to-amber-500/10"
+          />
+          <CardHeader className="relative z-10 pb-2 flex flex-row items-start justify-between gap-3 flex-wrap">
+            <div>
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
+                Mise max carnet (Bitcoin 15m)
+              </CardTitle>
+              <p className="mt-1 text-[11px] text-muted-foreground/90 max-w-2xl leading-relaxed">
+                Moyenne côté dashboard : pour chaque créneau <code className="text-[10px] opacity-90">btc-updown-15m-&lt;fin UTC&gt;</code> (même slug que Polymarket), Gamma <strong>events/slug</strong> puis <strong>markets/slug</strong>, puis carnet CLOB Up &amp; Down — liquidité asks entre{' '}
+                <strong>97 % et 97,5 %</strong>, <strong>max(Up, Down)</strong>, moyenne sur <strong>36</strong> créneaux (~9 h). Indépendant de{' '}
+                <code className="text-[10px] opacity-90">liquidity-history</code> du bot.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => refreshMiseMax15m()}
+              disabled={miseMax15mLoading}
+              className="shrink-0 rounded-lg border border-border/60 bg-background/80 px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              Rafraîchir
+            </button>
+          </CardHeader>
+          <CardContent className="relative z-10 pt-0 flex-1">
+            {miseMax15mLoading && (
+              <p className="text-sm text-muted-foreground">Analyse des carnets 15m… (~quelques secondes)</p>
+            )}
+            {!miseMax15mLoading && miseMax15mError && (
+              <p className="text-sm text-amber-600 dark:text-amber-400">{miseMax15mError}</p>
+            )}
+            {!miseMax15mLoading && !miseMax15mError && miseMaxSample15m > 0 && (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Moyenne</div>
+                  <div className="text-2xl font-semibold tabular-nums text-amber-200">{formatUsd(miseMaxAvg15m)}</div>
+                </div>
+                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Créneau actuel</div>
+                  <div className="text-xl font-semibold tabular-nums text-slate-100">{formatUsd(miseMaxCurrent15m)}</div>
+                </div>
+                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Min · Max</div>
+                  <div className="text-sm font-medium tabular-nums text-slate-200">
+                    {formatUsd(miseMaxMin15m)} · {formatUsd(miseMaxMax15m)}
+                  </div>
+                  {miseMaxMedian15m != null && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">Médiane {formatUsd(miseMaxMedian15m)}</div>
+                  )}
+                </div>
+                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Échantillon</div>
+                  <div className="text-sm font-medium text-slate-200">
+                    {miseMaxSample15m} créneau{miseMaxSample15m !== 1 ? 'x' : ''} avec carnet
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {miseMaxSlotsAttempted15m} slugs testés (Gamma + CLOB)
+                  </div>
+                </div>
+              </div>
+            )}
+            {miseMax15mLastAt && (
+              <p className="mt-3 text-[10px] text-muted-foreground/80">
+                Dernière mise à jour : {new Date(miseMax15mLastAt).toLocaleString('fr-FR')}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card className={`${cardBase} bg-card/70 relative overflow-hidden border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
         <div
@@ -358,8 +445,6 @@ export function BotOverview() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Carte latences fusionnée au-dessus */}
     </div>
   );
 }

@@ -1,11 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { liquidityUsdFromAsks, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P } from '@/lib/orderBookLiquidity.js';
 
-const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
-
-/** Fenêtre de prix pour la liquidité affichée : 97 % – 97,5 % (aligné avec le bot). */
-const MIN_PRICE_TARGET = 0.97;
-const MAX_PRICE_TARGET = 0.975;
+const CLOB_BOOK_URL = import.meta.env.DEV ? '/api-clob/book' : 'https://clob.polymarket.com/book';
 
 /**
  * Récupère le carnet d'ordres pour un token et calcule la liquidité (en USD) disponible
@@ -32,19 +29,8 @@ export function useOrderBookLiquidity(tokenId) {
         timeout: 8000,
       });
       const asks = data?.asks ?? [];
-      if (!Array.isArray(asks)) {
-        setLiquidityUsd(null);
-        return;
-      }
-      let totalUsd = 0;
-      for (const level of asks) {
-        const p = parseFloat(level?.price ?? level?.[0] ?? 0);
-        const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-        if (p >= MIN_PRICE_TARGET && p <= MAX_PRICE_TARGET && s > 0) {
-          totalUsd += p * s;
-        }
-      }
-      setLiquidityUsd(totalUsd > 0 ? Math.round(totalUsd * 100) / 100 : null);
+      const totalUsd = liquidityUsdFromAsks(asks, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+      setLiquidityUsd(totalUsd > 0 ? totalUsd : null);
     } catch (err) {
       setError(err.message || 'Impossible de charger le carnet');
       setLiquidityUsd(null);

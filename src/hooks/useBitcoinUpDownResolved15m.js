@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { parseUpDownTokenIdsFromMarket } from '@/lib/gammaPolymarket.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
@@ -117,11 +118,7 @@ async function fetchTokenIdsByMarketSlug(eventSlug) {
   if (!eventSlug) return { tokenIdUp: null, tokenIdDown: null };
   try {
     const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(eventSlug)}`, { timeout: 8000 });
-    const ids = m?.clobTokenIds ?? m?.clob_token_ids;
-    const tokens = m?.tokens;
-    const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
-    const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
-    return { tokenIdUp, tokenIdDown };
+    return parseUpDownTokenIdsFromMarket(m);
   } catch {
     return { tokenIdUp: null, tokenIdDown: null };
   }
@@ -232,10 +229,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
           const cid = m.conditionId ?? m.condition_id ?? ev.slug;
           if (seen.has(cid)) continue;
           seen.add(cid);
-          const ids = m.clobTokenIds ?? m.clob_token_ids;
-          const tokens = m.tokens;
-          const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
-          const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
+          const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(m);
           results.push({
             eventSlug: ev.slug,
             question: m.question ?? ev.title ?? ev.slug ?? '',
