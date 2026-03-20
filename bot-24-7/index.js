@@ -172,6 +172,20 @@ const CHAIN_ID = 137;
 const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.97;
 const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.975;
 const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.975;
+/**
+ * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.98 = 98¢.
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal 97–97,5 %).
+ */
+const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
+let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.98;
+marketWorstPriceP = Math.min(0.99, Math.max(0.01, marketWorstPriceP));
+/**
+ * Comportement à l’envoi (doc Polymarket CLOB) :
+ * - FOK : tout le montant doit être rempli immédiatement, sinon annulé.
+ * - FAK : remplir immédiatement tout ce qui est possible au worst price, annuler le reste (partiel OK).
+ */
+const marketOrderTif = (process.env.MARKET_ORDER_TIF || 'FAK').trim().toUpperCase();
+const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
@@ -216,19 +230,50 @@ const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
 const useBalanceAsSize = process.env.USE_BALANCE_AS_SIZE !== 'false';
 const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
+/**
+ * Plafond fixe de taille d'ordre (USDC), appliqué après solde / liquidité.
+ * Remplace l'intérêt de la « mise max » carnet si USE_LIQUIDITY_CAP / USE_AVG_PRICE_SIZING sont désactivés.
+ * Désactivé si absent, NaN ou ≤ 0.
+ */
+const maxStakeUsd = Number(process.env.MAX_STAKE_USD);
+const hasMaxStakeUsd = Number.isFinite(maxStakeUsd) && maxStakeUsd > 0;
+/** Enregistrer liquidity-history.json (dashboard « mise max »). true = activer (désactivé par défaut avec FAK / sans plafond carnet). */
+const recordLiquidityHistory = process.env.RECORD_LIQUIDITY_HISTORY === 'true';
+
+function applyMaxStakeUsd(amountUsd) {
+  const x = Number(amountUsd);
+  if (!Number.isFinite(x) || x <= 0) return x;
+  if (!hasMaxStakeUsd) return x;
+  return Math.min(x, maxStakeUsd);
+}
 /** Ordre au marché par défaut (exécution immédiate, latence min). USE_MARKET_ORDER=false pour ordre limite. */
 const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
+/**
+ * Si FAK ne remplit qu’une partie du stake, ré-envoyer uniquement le reliquat (même worst price / FAK),
+ * avec délai entre envois et plafond de tentatives / fenêtre temps. PARTIAL_FILL_RETRY=false pour désactiver.
+ * Inactif si ordre limite ou FOK.
+ */
+const partialFillRetryEnabled =
+  useMarketOrder &&
+  marketOrderType === OrderType.FAK &&
+  process.env.PARTIAL_FILL_RETRY !== 'false';
+const PARTIAL_FILL_RETRY_MAX_EXTRA = Math.max(0, Math.min(50, Number(process.env.PARTIAL_FILL_RETRY_MAX_EXTRA) || 5));
+const PARTIAL_FILL_RETRY_DELAY_MS = Math.max(0, Number(process.env.PARTIAL_FILL_RETRY_DELAY_MS) || 400);
+const PARTIAL_FILL_RETRY_MAX_WINDOW_MS = Math.max(500, Number(process.env.PARTIAL_FILL_RETRY_MAX_WINDOW_MS) || 15000);
+const PARTIAL_FILL_RETRY_MIN_REMAINING_USD = Math.max(0.01, Number(process.env.PARTIAL_FILL_RETRY_MIN_REMAINING_USD) || 0.5);
+/** Si true : entre deux compléments, vérifie que le best ask CLOB est encore dans [MIN_P, MAX_P] (sinon arrêt). */
+const partialFillRetryRevalidatePrice = process.env.PARTIAL_FILL_RETRY_REVALIDATE_PRICE === 'true';
 const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
-/** Si true : quand le solde (ou la mise) dépasse la mise max au prix du marché, plafonner à la mise max pour que l'avg price reste égal au prix du marché et ne pas dégrader les gains. USE_LIQUIDITY_CAP=false pour désactiver. */
-const useLiquidityCap = process.env.USE_LIQUIDITY_CAP !== 'false';
+/** Si true : plafonner la taille d’ordre sur la liquidité 97–97,5c (désactivé par défaut ; avec FAK + worst price, inutile en général). */
+const useLiquidityCap = process.env.USE_LIQUIDITY_CAP === 'true';
 /**
  * Si true (défaut), refuse l'ordre si le scénario « victoire » ne rapporte pas strictement plus USDC que la mise
  * (marché binaire : encaissement ≈ mise / prix, donc exiger prix < 1 $). Protège contre prix corrompu / MAX_P=1.
- * Ordre marché : prix conservateur = MAX_P (pire exécution dans la plage). Ordre limite : prix signal clamp [MIN_P, MAX_P].
+ * Ordre marché : prix conservateur = MARKET_WORST_PRICE_P (pire exécution acceptée, ex. 98¢). Ordre limite : prix signal clamp [MIN_P, MAX_P].
  * REQUIRE_WIN_GROSS_GAIN_GUARD=false pour désactiver.
  */
 const requireWinGrossGainGuard = process.env.REQUIRE_WIN_GROSS_GAIN_GUARD !== 'false';
@@ -238,17 +283,16 @@ const minWinGrossProfitUsd = Number(process.env.MIN_WIN_GROSS_PROFIT_USD) || 0;
 // pas via le relevé périodique des créneaux actifs.
 const recordMiseMaxOnSignalOnly = process.env.RECORD_MISE_MAX_ON_SIGNAL_ONLY !== 'false';
 /**
- * Sizing “avg constrained” (recommandé pour coller à ton objectif):
- * - on calcule une taille max (USD) telle que le prix moyen de remplissage reste <= bestAsk_live + tol
- * - tout en gardant worstPrice = MAX_P (plafond d'exécution à 97,5c)
- *
- * Mettre USE_AVG_PRICE_SIZING=false pour revenir au sizing basé uniquement sur la liquidité [97c..97,5c].
+ * Sizing « avg constrained » (désactivé par défaut). Si true : taille max pour garder un avg <= bestAsk + tol.
+ * USE_AVG_PRICE_SIZING=true pour réactiver (legacy).
  */
-const useAvgPriceSizing = process.env.USE_AVG_PRICE_SIZING !== 'false';
+const useAvgPriceSizing = process.env.USE_AVG_PRICE_SIZING === 'true';
 /** Tolérance en delta de prix (ex: 0.0005 = 0,05c) pour éviter que l'avg devienne trop strict. */
 const avgPriceTolP = Number(process.env.AVG_PRICE_TOL_P) || 0.0005;
 /** Nombre d'itérations de binary search pour trouver la taille max (USD). */
 const avgPriceBinIters = Number(process.env.AVG_PRICE_BIN_ITERS) || 25;
+/** Appels carnet / liquidité « mise max » : seulement si historique ou plafonds legacy activés (évite la latence sinon). */
+const needLiquidityBook = recordLiquidityHistory || useLiquidityCap || useAvgPriceSizing;
 /** Réagir en temps réel aux changements de prix via WebSocket CLOB (best_bid_ask). USE_WEBSOCKET=false pour ne faire que du polling. */
 const useWebSocket = process.env.USE_WEBSOCKET !== 'false';
 const walletConfigured = !!privateKey;
@@ -317,7 +361,10 @@ function getPreSignCacheKey(signal, amountUsd) {
   const key = getSignalKey(signal);
   const tokenId = signal?.tokenIdToBuy ?? '';
   const amount = Number(amountUsd);
-  return `${key}|${tokenId}|${Number.isFinite(amount) ? amount.toFixed(2) : '0'}`;
+  const amt = Number.isFinite(amount) ? amount.toFixed(2) : '0';
+  const wp = Number.isFinite(marketWorstPriceP) ? marketWorstPriceP.toFixed(4) : '0';
+  const tif = marketOrderType === OrderType.FOK ? 'FOK' : 'FAK';
+  return `${key}|${tokenId}|${amt}|${wp}|${tif}`;
 }
 
 /** Purge les entrées expirées du cache de pré-signature. */
@@ -334,6 +381,78 @@ function purgeExpiredPreSignCache() {
  */
 async function createSignedMarketOrder(client, userMarketOrder) {
   return client.createMarketOrder(userMarketOrder, { negRisk: false });
+}
+
+/**
+ * Parse la réponse POST /order (SendOrderResponse Polymarket).
+ * makingAmount / takingAmount : fixed-point 6 décimales (chaîne ou nombre).
+ * Pour un BUY : maker paie USDC → makingAmount = USDC ; takingAmount = tokens outcome.
+ */
+function parsePolymarketPostOrderFill(responseBody, { orderSide = Side.BUY, requestedUsd = null } = {}) {
+  const out = {
+    clobStatus: null,
+    filledUsdc: null,
+    filledOutcomeTokens: null,
+    fillRatio: null,
+    tradeIDs: undefined,
+    transactionsHashes: undefined,
+    clobErrorMsg: null,
+  };
+  if (!responseBody || typeof responseBody !== 'object') return out;
+
+  const raw6ToFloat = (v) => {
+    if (v == null || v === '') return null;
+    const s = typeof v === 'bigint' ? v.toString() : String(v);
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return n / 1e6;
+  };
+
+  const rawMake = responseBody.makingAmount ?? responseBody.making_amount;
+  const rawTake = responseBody.takingAmount ?? responseBody.taking_amount;
+  if (orderSide === Side.BUY) {
+    out.filledUsdc = raw6ToFloat(rawMake);
+    out.filledOutcomeTokens = raw6ToFloat(rawTake);
+  } else {
+    out.filledOutcomeTokens = raw6ToFloat(rawMake);
+    out.filledUsdc = raw6ToFloat(rawTake);
+  }
+
+  if (requestedUsd != null && requestedUsd > 0 && out.filledUsdc != null && out.filledUsdc >= 0) {
+    out.fillRatio = Math.min(2, out.filledUsdc / requestedUsd);
+    out.fillRatio = Math.round(out.fillRatio * 10000) / 10000;
+  }
+
+  out.clobStatus = typeof responseBody.status === 'string' ? responseBody.status : null;
+  out.clobErrorMsg = responseBody.errorMsg || responseBody.error_msg || null;
+  if (Array.isArray(responseBody.tradeIDs)) out.tradeIDs = responseBody.tradeIDs;
+  else if (Array.isArray(responseBody.trade_ids)) out.tradeIDs = responseBody.trade_ids;
+  if (Array.isArray(responseBody.transactionsHashes)) out.transactionsHashes = responseBody.transactionsHashes;
+  else if (Array.isArray(responseBody.transactions_hashes)) out.transactionsHashes = responseBody.transactions_hashes;
+
+  return out;
+}
+
+/** Champs remplissage à fusionner dans order log / JSON (évite les undefined). */
+function pickFillFieldsForLog(fill) {
+  if (!fill) return {};
+  const o = {};
+  if (fill.clobStatus != null) o.clobStatus = fill.clobStatus;
+  if (fill.filledUsdc != null) o.filledUsdc = fill.filledUsdc;
+  if (fill.filledOutcomeTokens != null) o.filledOutcomeTokens = fill.filledOutcomeTokens;
+  if (fill.fillRatio != null) o.fillRatio = fill.fillRatio;
+  if (fill.tradeIDs?.length) o.tradeIDs = fill.tradeIDs;
+  if (fill.transactionsHashes?.length) o.transactionsHashes = fill.transactionsHashes;
+  if (fill.clobErrorMsg) o.clobErrorMsg = fill.clobErrorMsg;
+  return o;
+}
+
+function formatFillConsoleSuffix(placeResult) {
+  if (!placeResult?.ok) return '';
+  if (placeResult.filledUsdc == null) return '';
+  const pct = placeResult.fillRatio != null ? ` (${(placeResult.fillRatio * 100).toFixed(1)} % du montant demandé)` : '';
+  const st = placeResult.clobStatus ? ` [CLOB: ${placeResult.clobStatus}]` : '';
+  return ` — exécuté ~${placeResult.filledUsdc.toFixed(2)} USDC${pct}${st}`;
 }
 
 function parsePrices(market) {
@@ -469,6 +588,7 @@ async function tryRedeemResolvedPositions() {
  * @param {number|{ liquidityUsd: number, takeSide?: 'Up'|'Down', source?: string, signalPriceP?: number }} payload
  */
 function appendLiquidityHistory(payload) {
+  if (!recordLiquidityHistory) return;
   const obj = typeof payload === 'number' ? { liquidityUsd: payload } : payload;
   const liquidityUsd = Number(obj?.liquidityUsd);
   if (!Number.isFinite(liquidityUsd) || liquidityUsd <= 0) return;
@@ -1228,9 +1348,9 @@ function validateWinPayoutExceedsStake(stakeUsd, effectivePriceP) {
   return { ok: true, payoutIfWin, grossGain };
 }
 
-/** Prix conservateur pour la garde : marché = MAX_P ; limite = prix signal clamp stratégie. */
+/** Prix conservateur pour la garde : marché = worst price plafond ; limite = prix signal clamp stratégie. */
 function getConservativePriceForGainGuard(signal, marketOrder) {
-  if (marketOrder) return MAX_P;
+  if (marketOrder) return marketWorstPriceP;
   const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
   const p = Number(raw);
   if (!Number.isFinite(p)) return null;
@@ -1242,7 +1362,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   if (!walletConfigured || !wallet) {
     return { ok: false, error: 'Wallet non configuré. Ajoute PRIVATE_KEY dans .env puis redémarre.' };
   }
-  const size = Number(amountUsd) || orderSizeUsd;
+  let size = applyMaxStakeUsd(Number(amountUsd) || orderSizeUsd);
   if (size < ABSOLUTE_MIN_USD) {
     return { ok: false, error: `Taille trop faible (${size.toFixed(2)} < ${ABSOLUTE_MIN_USD} USDC min).` };
   }
@@ -1292,7 +1412,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 
       if (useMarketOrder) {
         // Pré-signature : create + sign puis POST (réduit la latence perçue au moment du trade).
-        const worstPrice = MAX_P;
+        const worstPrice = marketWorstPriceP;
         const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
         const cacheKey = getPreSignCacheKey(signal, size);
         purgeExpiredPreSignCache();
@@ -1308,16 +1428,18 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
           signedOrder = await createSignedMarketOrder(client, userMarketOrder);
           preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
         }
-        const result = await client.postOrder(signedOrder, OrderType.FOK);
+        const result = await client.postOrder(signedOrder, marketOrderType);
+        const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
         consecutiveOrderErrors = 0;
-        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit };
+        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit, ...fill };
       }
       const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
       // Ordre limite : create + sign puis POST (même pattern que marché).
       const signedOrderLimit = await client.createOrder(userOrder, options);
       const result = await client.postOrder(signedOrderLimit, OrderType.GTC);
+      const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
       consecutiveOrderErrors = 0;
-      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false };
+      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false, ...fill };
     } catch (err) {
       lastError = err.message;
       const status = err.response?.status;
@@ -1350,6 +1472,113 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
     }
   }
   return { ok: false, error: lastError };
+}
+
+/**
+ * Ordre marché FAK : en cas de remplissage partiel, enchaîne des ordres sur le **reliquat uniquement**
+ * (même worst price / FAK / garde gain), avec délai, fenêtre temps max et nombre max de compléments.
+ * Si la réponse du 1er POST ne donne pas filledUsdc, pas de complément (évite un double plein stake).
+ */
+async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientOrNull = null, options = {}) {
+  if (!partialFillRetryEnabled) {
+    return placeOrder(signal, amountUsd, clientOrNull, options);
+  }
+
+  const targetUsd = Number(amountUsd) || 0;
+  if (!Number.isFinite(targetUsd) || targetUsd <= 0) {
+    return placeOrder(signal, amountUsd, clientOrNull, options);
+  }
+
+  const first = await placeOrder(signal, amountUsd, clientOrNull, options);
+  if (!first.ok) return first;
+  // Sans montant exécuté > 0, pas de reliquat fiable — évite de renvoyer tout le stake (doublon si l’API est ambiguë).
+  if (first.filledUsdc == null || first.filledUsdc <= 0) return first;
+
+  let totalFilled = first.filledUsdc;
+  const orderIDs = first.orderID != null ? [first.orderID] : [];
+  let anyPreSignHit = !!first.preSignCacheHit;
+  const epsUsd = Math.max(0.05, targetUsd * 0.002);
+
+  if (totalFilled >= targetUsd - epsUsd) {
+    return { ...first, partialFillRetries: 0 };
+  }
+
+  const tWindow0 = Date.now();
+  let lastOk = first;
+
+  for (let extra = 0; extra < PARTIAL_FILL_RETRY_MAX_EXTRA; extra++) {
+    if (Date.now() - tWindow0 > PARTIAL_FILL_RETRY_MAX_WINDOW_MS) {
+      logJson('info', 'Complément FAK: fenêtre temps épuisée', { totalFilled, targetUsd, extra });
+      break;
+    }
+    if (PARTIAL_FILL_RETRY_DELAY_MS > 0) {
+      await new Promise((r) => setTimeout(r, PARTIAL_FILL_RETRY_DELAY_MS));
+    }
+
+    if (partialFillRetryRevalidatePrice && signal?.tokenIdToBuy) {
+      try {
+        const ask = await getBestAsk(signal.tokenIdToBuy);
+        if (ask == null || ask < MIN_P || ask > MAX_P) {
+          logJson('info', 'Complément FAK: best ask hors fenêtre signal, arrêt', { ask, extra });
+          break;
+        }
+      } catch (e) {
+        logJson('warn', 'Complément FAK: revalidation prix échouée', { error: e?.message, extra });
+      }
+    }
+
+    const remaining = targetUsd - totalFilled;
+    if (remaining < PARTIAL_FILL_RETRY_MIN_REMAINING_USD) break;
+
+    let requestUsd = applyMaxStakeUsd(remaining);
+    if (useBalanceAsSize) {
+      let client = clientOrNull;
+      if (!client) {
+        try {
+          client = await buildClobClientCachedCreds();
+        } catch (_) {}
+      }
+      if (client) {
+        const bal = await getUsdcBalanceViaClob(client) ?? (await getUsdcBalanceRpc());
+        if (bal != null && Number.isFinite(bal)) {
+          requestUsd = Math.min(requestUsd, Math.max(0, bal));
+        }
+      }
+    }
+
+    if (requestUsd < ABSOLUTE_MIN_USD) break;
+
+    const allowBelowMin = !!options.allowBelowMin || requestUsd < orderSizeMinUsd;
+    const next = await placeOrder(signal, requestUsd, clientOrNull, { ...options, allowBelowMin });
+    lastOk = next;
+    anyPreSignHit = anyPreSignHit || !!next.preSignCacheHit;
+
+    if (!next.ok) {
+      logJson('warn', 'Complément FAK: échec ordre', { error: next.error, extra, totalFilled });
+      break;
+    }
+    if (next.orderID != null) orderIDs.push(next.orderID);
+
+    if (next.filledUsdc == null) break;
+    totalFilled += next.filledUsdc;
+
+    if (totalFilled >= targetUsd - epsUsd) break;
+  }
+
+  const aggregateFillRatio =
+    targetUsd > 0 ? Math.min(2, Math.round((totalFilled / targetUsd) * 10000) / 10000) : null;
+  const baseLog = pickFillFieldsForLog(lastOk);
+
+  return {
+    ok: true,
+    orderID: orderIDs.length ? orderIDs[orderIDs.length - 1] : first.orderID,
+    orderIDs: orderIDs.length > 1 ? orderIDs : undefined,
+    partialFillRetries: Math.max(0, orderIDs.length - 1),
+    preSignCacheHit: anyPreSignHit,
+    ...baseLog,
+    filledUsdc: totalFilled,
+    fillRatio: aggregateFillRatio,
+  };
 }
 
 /** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
@@ -1390,20 +1619,24 @@ async function tryPlaceOrderForSignal(signal) {
       priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
     };
   }
-  // Carnet + mise max : avant credentials CLOB. Sinon « Could not create api key » fait return sans aucun relevé WS.
-  const tBook0 = Date.now();
-  const liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
-  timingsMs.book = Math.max(1, Date.now() - tBook0);
+  // Carnet : seulement si relevé historique ou plafonds legacy (sinon inutile avec FAK + worst price).
+  let liquidity = null;
   let maxUsdAvg = null;
-  if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
-    maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
-  }
-  const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
-  // Enregistrer la mise max (avg constrained si activé) dès qu'on a un montant valide, même sans ordre / sans API key.
-  if (miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
-    appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
-    const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
-    recordedLiquidityWindows.set(key, endMs);
+  if (needLiquidityBook) {
+    const tBook0 = Date.now();
+    liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+    timingsMs.book = Math.max(1, Date.now() - tBook0);
+    if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
+      maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
+    }
+    const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
+    if (recordLiquidityHistory && miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
+      appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
+      const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
+      recordedLiquidityWindows.set(key, endMs);
+    }
+  } else {
+    timingsMs.book = 1;
   }
 
   let clobClient = null;
@@ -1430,7 +1663,9 @@ async function tryPlaceOrderForSignal(signal) {
     amountUsd = maxUsdAvg;
     cappedBy = true;
   }
+  amountUsd = applyMaxStakeUsd(amountUsd);
   if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
+  if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
   // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
   // Permet d'avoir un breakdown même sans trade réel.
@@ -1456,7 +1691,7 @@ async function tryPlaceOrderForSignal(signal) {
   // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
   if (useMarketOrder && clobClient) {
     try {
-      const worstPrice = MAX_P;
+      const worstPrice = marketWorstPriceP;
       const userMarketOrder = { tokenID: signalWithPrice.tokenIdToBuy, amount: amountUsd, side: Side.BUY, price: worstPrice };
       const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
       const cacheKey = getPreSignCacheKey(signalWithPrice, amountUsd);
@@ -1467,16 +1702,37 @@ async function tryPlaceOrderForSignal(signal) {
   }
   placedKeys.add(key);
   const tPlace0 = Date.now();
-  const result = await placeOrder(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
+  const result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
   timingsMs.placeOrder = Date.now() - tPlace0;
   const time = new Date().toISOString();
   if (result.ok) {
     const latencyMs = Date.now() - t0;
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
-    const orderData = { at: time, takeSide: signalWithPrice.takeSide, amountUsd, conditionId: key, orderID: result.orderID, preSignCacheHit: result.preSignCacheHit };
+    const fillLog = pickFillFieldsForLog(result);
+    const orderData = {
+      at: time,
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      conditionId: key,
+      orderID: result.orderID,
+      preSignCacheHit: result.preSignCacheHit,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      ...fillLog,
+    };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    logJson('info', 'Ordre placé (WS)', { takeSide: signalWithPrice.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs, preSignCacheHit: result.preSignCacheHit });
+    logJson('info', 'Ordre placé (WS)', {
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      orderID: result.orderID,
+      latencyMs,
+      timingsMs,
+      preSignCacheHit: result.preSignCacheHit,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      ...fillLog,
+    });
     appendTradeLatencyHistory({
       source: 'ws',
       latencyMs,
@@ -1487,11 +1743,17 @@ async function tryPlaceOrderForSignal(signal) {
       tokenId: signalWithPrice.tokenIdToBuy,
       orderID: result.orderID,
       preSignCacheHit: result.preSignCacheHit ?? false,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      ...fillLog,
     });
-    const miseMaxInfoUsd = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
-    const miseMaxInfo = miseMaxInfoUsd != null && miseMaxInfoUsd > 0 ? ` | Mise max: ${miseMaxInfoUsd.toFixed(0)} $` : '';
     const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
-    console.log(`[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
+    const fillConsole = formatFillConsoleSuffix(result);
+    const retryInfo =
+      (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+    console.log(
+      `[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
+    );
   } else {
     placedKeys.delete(key);
     logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
@@ -1668,8 +1930,8 @@ async function run() {
     for (const [key, endMs] of recordedLiquidityWindows) {
       if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
-    // Option legacy: relever la mise max périodiquement sur les créneaux actifs (peut arriver tard dans la fenêtre).
-    if (!recordMiseMaxOnSignalOnly) {
+    // Option legacy: relever la mise max périodiquement (uniquement si RECORD_LIQUIDITY_HISTORY=true).
+    if (!recordMiseMaxOnSignalOnly && recordLiquidityHistory) {
       await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
         try {
           const activeWindows = await fetchActiveWindows();
@@ -1728,8 +1990,9 @@ async function run() {
         }
       });
     }
-    // B) "signal -> décision" (max 3 par cycle pour éviter le spam)
+    // B) "signal -> décision" + relevé liquidité (uniquement si RECORD_LIQUIDITY_HISTORY=true)
     let decisionLogged = 0;
+    if (recordLiquidityHistory) {
     await profiler.measure('signal_decision_liquidity', async () => {
     for (const s of signals) {
       if (!s.tokenIdToBuy) continue;
@@ -1791,6 +2054,7 @@ async function run() {
       await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
     }
     });
+    }
 
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
 
@@ -1857,9 +2121,13 @@ async function run() {
         timingsMs.balance = Math.max(1, Date.now() - tBal0);
         attemptAmountUsd = balance != null ? balance : orderSizeUsd;
       }
-      const tBook0 = Date.now();
-      await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-      timingsMs.book = Math.max(1, Date.now() - tBook0);
+      if (needLiquidityBook) {
+        const tBook0 = Date.now();
+        await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+        timingsMs.book = Math.max(1, Date.now() - tBook0);
+      } else {
+        timingsMs.book = 1;
+      }
 
       if (shouldLogTradeLatencyAttempt(key)) {
         logJson('info', 'Trade latency attempt (poll, last-minute no order)', {
@@ -1885,22 +2153,24 @@ async function run() {
       timingsMs.balance = Math.max(1, Date.now() - tBal0);
       amountUsd = balance != null ? balance : orderSizeUsd;
       if (amountUsd < orderSizeMinUsd) {
-        // Pas de placement d'ordre, mais on mesure quand même book/liquidité et on loggue pour le breakdown.
-        const tBook0 = Date.now();
-        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-        timingsMs.book = Math.max(1, Date.now() - tBook0);
-
-        if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
-          appendLiquidityHistory({
-            liquidityUsd: liquidity,
-            takeSide: s.takeSide,
-            source: 'poll',
-            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
-          });
-          const endMs = s.endDate
-            ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime())
-            : Date.now();
-          recordedLiquidityWindows.set(key, endMs);
+        if (recordLiquidityHistory) {
+          const tBook0 = Date.now();
+          const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+          timingsMs.book = Math.max(1, Date.now() - tBook0);
+          if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
+            appendLiquidityHistory({
+              liquidityUsd: liquidity,
+              takeSide: s.takeSide,
+              source: 'poll',
+              signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+            });
+            const endMs = s.endDate
+              ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime())
+              : Date.now();
+            recordedLiquidityWindows.set(key, endMs);
+          }
+        } else {
+          timingsMs.book = 1;
         }
 
         if (shouldLogTradeLatencyAttempt(key)) {
@@ -1923,42 +2193,70 @@ async function run() {
     }
 
     let allowBelowMin = false;
-    const tBook0 = Date.now();
-    const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
-    timingsMs.book = Math.max(1, Date.now() - tBook0);
-    if (liquidity != null && liquidity > 0) {
-      if (!recordedLiquidityWindows.has(key)) {
-        appendLiquidityHistory({
-          liquidityUsd: liquidity,
-          takeSide: s.takeSide,
-          source: 'poll',
-          signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
-        });
-        const endMs = s.endDate ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime()) : Date.now();
-        recordedLiquidityWindows.set(key, endMs);
+    if (needLiquidityBook) {
+      const tBook0 = Date.now();
+      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+      timingsMs.book = Math.max(1, Date.now() - tBook0);
+      if (liquidity != null && liquidity > 0) {
+        if (recordLiquidityHistory && !recordedLiquidityWindows.has(key)) {
+          appendLiquidityHistory({
+            liquidityUsd: liquidity,
+            takeSide: s.takeSide,
+            source: 'poll',
+            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+          });
+          const endMs = s.endDate ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime()) : Date.now();
+          recordedLiquidityWindows.set(key, endMs);
+        }
+        lastLiquidityRecordTime = Date.now();
+        if (useLiquidityCap && amountUsd > liquidity) {
+          amountUsd = liquidity;
+          allowBelowMin = amountUsd < orderSizeMinUsd;
+          console.log(`Mise plafonnée à ${amountUsd.toFixed(2)} $ (USE_LIQUIDITY_CAP, liquidité carnet)${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
+        }
+      } else if (useLiquidityCap && (liquidity === null || liquidity === 0)) {
+        console.warn('USE_LIQUIDITY_CAP: liquidité 97–97,5c indisponible pour ce créneau (book CLOB ou erreur API)');
       }
-      lastLiquidityRecordTime = Date.now();
-      if (useLiquidityCap && amountUsd > liquidity) {
-        amountUsd = liquidity;
-        allowBelowMin = amountUsd < orderSizeMinUsd;
-        console.log(`Mise plafonnée à ${amountUsd.toFixed(2)} $ (mise max au prix du marché) pour garder avg price = prix du marché${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
-      }
-    } else if (liquidity === null || liquidity === 0) {
-      console.warn('Mise max au prix du marché non disponible pour ce créneau (book CLOB ou erreur API)');
+    } else {
+      timingsMs.book = 1;
     }
+
+    amountUsd = applyMaxStakeUsd(amountUsd);
+    if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
     placedKeys.add(key);
     const tPlace0 = Date.now();
-    const result = await placeOrder(s, amountUsd, clobClient, { allowBelowMin });
+    const result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, { allowBelowMin });
     timingsMs.placeOrder = Date.now() - tPlace0;
     const time = new Date().toISOString();
     if (result.ok) {
       const latencyMs = Date.now() - t0;
       writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
-      const orderData = { at: time, takeSide: s.takeSide, amountUsd, conditionId: key, orderID: result.orderID, preSignCacheHit: result.preSignCacheHit };
+      const fillLog = pickFillFieldsForLog(result);
+      const orderData = {
+        at: time,
+        takeSide: s.takeSide,
+        amountUsd,
+        conditionId: key,
+        orderID: result.orderID,
+        preSignCacheHit: result.preSignCacheHit,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        ...fillLog,
+      };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
-      logJson('info', 'Ordre placé', { takeSide: s.takeSide, amountUsd, orderID: result.orderID, latencyMs, timingsMs, preSignCacheHit: result.preSignCacheHit ?? false });
+      logJson('info', 'Ordre placé', {
+        takeSide: s.takeSide,
+        amountUsd,
+        orderID: result.orderID,
+        latencyMs,
+        timingsMs,
+        preSignCacheHit: result.preSignCacheHit ?? false,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        ...fillLog,
+      });
       appendTradeLatencyHistory({
         source: 'poll',
         latencyMs,
@@ -1969,10 +2267,17 @@ async function run() {
         tokenId: s.tokenIdToBuy,
         orderID: result.orderID,
         preSignCacheHit: result.preSignCacheHit ?? false,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        ...fillLog,
       });
-      const miseMaxInfo = liquidity != null && liquidity > 0 ? ` | Mise max au prix du marché : ${liquidity.toFixed(0)} $` : '';
       const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
-      console.log(`[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC${miseMaxInfo} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`);
+      const fillConsole = formatFillConsoleSuffix(result);
+      const retryInfoPoll =
+        (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+      console.log(
+        `[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfoPoll} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
+      );
     } else {
       placedKeys.delete(key);
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
@@ -2008,8 +2313,24 @@ async function main() {
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
+    if (useMarketOrder) {
+      const tifHint = marketOrderType === OrderType.FOK ? 'FOK (tout ou rien)' : 'FAK (partiel OK si carnet insuffisant)';
+      console.log(
+        `Ordre marché CLOB: worst price ≤ ${(marketWorstPriceP * 100).toFixed(2)}¢ | ${tifHint} — MARKET_ORDER_TIF=${marketOrderTif} MARKET_WORST_PRICE_P=${marketWorstPriceP}`
+      );
+      if (partialFillRetryEnabled) {
+        console.log(
+          `Complément FAK (reliquat): jusqu’à ${PARTIAL_FILL_RETRY_MAX_EXTRA} ordre(s) suppl. | pause ${PARTIAL_FILL_RETRY_DELAY_MS} ms | fenêtre ${PARTIAL_FILL_RETRY_MAX_WINDOW_MS} ms | reliquat min ${PARTIAL_FILL_RETRY_MIN_REMAINING_USD} USDC — PARTIAL_FILL_RETRY=false pour désactiver`
+        );
+        if (partialFillRetryRevalidatePrice) {
+          console.log('Complément FAK: revalidation best ask CLOB entre chaque envoi (PARTIAL_FILL_RETRY_REVALIDATE_PRICE=true).');
+        }
+      }
+    }
     if (useWebSocket) console.log('WebSocket CLOB activé (best_bid_ask) — réaction en temps réel aux changements de prix.');
-    if (useLiquidityCap) console.log('Règle : si solde > mise max au prix du marché, ordre plafonné à la mise max pour conserver avg price = prix du marché (USE_LIQUIDITY_CAP=true).');
+    if (useLiquidityCap) console.log('USE_LIQUIDITY_CAP=true : taille d’ordre plafonnée par la liquidité 97–97,5c (legacy).');
+    if (useAvgPriceSizing) console.log('USE_AVG_PRICE_SIZING=true : taille limitée pour avg ≤ bestAsk + tol (legacy).');
+    if (recordLiquidityHistory) console.log('RECORD_LIQUIDITY_HISTORY=true : écriture liquidity-history.json + relevés signal/créneaux.');
   } else {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
   }
