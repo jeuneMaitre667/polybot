@@ -111,13 +111,16 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setSampleSize(0);
       setSlotsAttempted(0);
       setCurrentSlotMiseMaxUsd(null);
+      setSeriesBySlot([]);
       setError(null);
       return;
     }
     setLoading(true);
     setError(null);
+    setSeriesBySlot([]);
     const slotEnds = get15mSlotEndSecs(slotCount);
     const values = [];
+    const seriesPoints = [];
     let firstSlotMise = null;
     let attempted = 0;
 
@@ -144,6 +147,7 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
 
       setSlotsAttempted(attempted);
       setCurrentSlotMiseMaxUsd(firstSlotMise);
+      setSeriesBySlot(seriesPoints);
 
       if (values.length === 0) {
         setAvgUsd(null);
@@ -172,6 +176,7 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setMaxUsd(null);
       setMedianUsd(null);
       setSampleSize(0);
+      setSeriesBySlot([]);
     } finally {
       if (mounted.current) setLoading(false);
     }
