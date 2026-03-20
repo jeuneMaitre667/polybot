@@ -15,11 +15,12 @@ export function liquidityUsdFromAsks(
   if (!Array.isArray(asks)) return 0;
   let totalUsd = 0;
   for (const level of asks) {
-    const p = parseFloat(level?.price ?? level?.[0] ?? 0);
-    const s = parseFloat(level?.size ?? level?.[1] ?? 0);
-    if (p >= minP && p <= maxP && s > 0) {
-      totalUsd += p * s;
-    }
+    // Réponse CLOB peut varier : { price, size } ou { p, s } / { p, q } ou tuple [price, size].
+    const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? 0);
+    const s = parseFloat(level?.size ?? level?.s ?? level?.q ?? level?.qty ?? level?.[1] ?? 0);
+
+    if (!Number.isFinite(p) || !Number.isFinite(s)) continue;
+    if (p >= minP && p <= maxP && s > 0) totalUsd += p * s;
   }
   return Math.round(totalUsd * 100) / 100;
 }

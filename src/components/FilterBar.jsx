@@ -1,9 +1,17 @@
-import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 
-const selectClass =
-  'flex h-9 min-w-[180px] rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+const selectStyle = {
+  height: 36,
+  minWidth: 180,
+  borderRadius: 10,
+  border: '1px solid var(--border)',
+  background: 'transparent',
+  padding: '0 12px',
+  color: 'var(--text-1)',
+  fontSize: 13,
+  fontFamily: 'JetBrains Mono, monospace',
+};
 
 export function FilterBar({
   sortBy,
@@ -21,86 +29,104 @@ export function FilterBar({
   onShowRecommendationsChange,
 }) {
   return (
-    <Card className="relative overflow-hidden border-border/50 bg-card/80 backdrop-blur-sm">
+    <div className="card relative overflow-hidden">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
+        style={{
+          pointerEvents: 'none',
+          position: 'absolute',
+          inset: 0,
+          background:
+            'linear-gradient(90deg, rgba(167,139,250,0.12) 0%, rgba(56,189,248,0.00) 45%, rgba(34,197,94,0.10) 100%)',
+        }}
       />
-      <CardContent className="relative z-10 p-5 sm:p-6">
-        <div className="flex flex-col gap-6 sm:flex-row sm:flex-wrap sm:items-end">
+      <div className="card-content relative z-10" style={{ padding: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24, alignItems: 'flex-start' }}>
           {/* Options — groupe distinct */}
-          <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 sm:py-2.5 sm:gap-6">
-            <div className="flex items-center gap-3">
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 18,
+              borderRadius: 12,
+              border: '1px solid var(--border)',
+              background: 'rgba(255,255,255,0.04)',
+              padding: '12px 16px',
+              width: '100%',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Checkbox
                 id="ratio-90"
                 checked={ratioMin90}
                 onCheckedChange={(checked) => onRatioMin90Change(checked === true)}
               />
-              <Label htmlFor="ratio-90" className="cursor-pointer text-sm font-medium text-foreground">
+              <Label htmlFor="ratio-90" style={{ cursor: 'pointer' }}>
                 Ratio min 90/10
               </Label>
             </div>
-            <div className="flex items-center gap-3">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Checkbox
                 id="hide-sports"
                 checked={hideSports}
                 onCheckedChange={(checked) => onHideSportsChange(checked === true)}
               />
-              <Label htmlFor="hide-sports" className="cursor-pointer text-sm font-medium text-foreground">
+              <Label htmlFor="hide-sports" style={{ cursor: 'pointer' }}>
                 Masquer les sports
               </Label>
             </div>
-            <div className="flex items-center gap-3">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Checkbox
                 id="hide-weather"
                 checked={hideWeather}
                 onCheckedChange={(checked) => onHideWeatherChange(checked === true)}
               />
-              <Label htmlFor="hide-weather" className="cursor-pointer text-sm font-medium text-foreground">
+              <Label htmlFor="hide-weather" style={{ cursor: 'pointer' }}>
                 Masquer les météos
               </Label>
             </div>
-            <div className="flex items-center gap-3">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Checkbox
                 id="recommendations"
                 checked={showRecommendations}
                 onCheckedChange={(checked) => onShowRecommendationsChange(checked === true)}
               />
-              <Label htmlFor="recommendations" className="cursor-pointer text-sm font-medium text-foreground">
+              <Label htmlFor="recommendations" style={{ cursor: 'pointer' }}>
                 Recommandations (Oui ou Non ≤ 10 %, tri chronologique)
               </Label>
             </div>
           </div>
 
           {/* Séparateur visuel sur desktop */}
-          <div className="hidden h-9 w-px bg-border sm:block" aria-hidden />
+          <div className="filter-bar-divider" aria-hidden />
 
           {/* Tri et Catégorie — champs alignés */}
-          <div className="flex flex-wrap items-end gap-4 sm:gap-6">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="sort" className="text-xs font-medium text-muted-foreground">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-end' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label htmlFor="sort" style={{ fontSize: 11 }}>
                 Tri
               </Label>
               <select
                 id="sort"
                 value={sortBy}
                 onChange={(e) => onSortChange(e.target.value)}
-                className={selectClass}
+                style={selectStyle}
               >
                 <option value="endDate">Date de fin (proche → lointain)</option>
                 <option value="volume">Volume (décroissant)</option>
                 <option value="odds">Cote Oui (incertain → certain)</option>
               </select>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="category" className="text-xs font-medium text-muted-foreground">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label htmlFor="category" style={{ fontSize: 11 }}>
                 Catégorie
               </Label>
               <select
                 id="category"
                 value={tagFilter}
                 onChange={(e) => onTagFilterChange(e.target.value)}
-                className={selectClass}
+                style={selectStyle}
               >
                 <option value="">Toutes</option>
                 {tags.map((t) => (
@@ -112,7 +138,7 @@ export function FilterBar({
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

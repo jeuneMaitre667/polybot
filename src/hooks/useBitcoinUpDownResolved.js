@@ -209,28 +209,59 @@ const NO_TRADE_LAST_SEC_HOURLY = 5 * 60;
  * (règle : côté à 97–97,5 %) et si ça aurait gagné. Retourne aussi l'heure et le type d'ordre (Limit).
  * Règle : pas d'entrée dans les 5 dernières minutes avant la fin de l'événement (aligné avec le bot live).
  */
-function computeBotSimulation(history, winner, endDateStr) {
+function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
   const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
-  if (!history.length) return empty;
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  if (up.length === 0 && down.length === 0) return empty;
+
   let endTsSec = null;
   if (endDateStr) {
     const raw = endDateStr;
     const endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
     if (Number.isFinite(endMs)) endTsSec = Math.floor(endMs / 1000);
   }
-  for (let i = history.length - 1; i >= 0; i--) {
-    const pt = history[i];
+  const endCutSec = endTsSec != null ? endTsSec - NO_TRADE_LAST_SEC_HOURLY : null;
+
+  // Déterministe : on prend le plus tôt entre (tokenUp entre en bande) et (tokenDown entre en bande).
+  // Quand l'historique Down est absent, on retombe sur le complément (1 - pUp) pour garder un comportement robuste.
+  const candidates = [];
+
+  for (const pt of up) {
     const p = pt?.p ?? pt?.price;
-    if (p == null) continue;
     const pUp = Number(p);
-    const pDown = 1 - pUp;
     const ts = toSeconds(pt?.t ?? pt?.timestamp);
-    if (ts == null) continue;
-    if (endTsSec != null && ts >= endTsSec - NO_TRADE_LAST_SEC_HOURLY) continue;
-    if (pUp >= MIN_P && pUp <= MAX_P) return { botWouldTake: 'Up', botWon: winner === 'Up', botEntryPrice: pUp, botEntryTimestamp: ts, botOrderType: 'Marché' };
-    if (pDown >= MIN_P && pDown <= MAX_P) return { botWouldTake: 'Down', botWon: winner === 'Down', botEntryPrice: pDown, botEntryTimestamp: ts, botOrderType: 'Marché' };
+    if (!Number.isFinite(pUp) || ts == null) continue;
+    if (endCutSec != null && ts >= endCutSec) continue;
+    if (pUp >= MIN_P && pUp <= MAX_P) candidates.push({ side: 'Up', price: pUp, ts });
+    if (down.length === 0) {
+      const pDown = 1 - pUp;
+      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
+    }
   }
-  return empty;
+
+  if (down.length > 0) {
+    for (const pt of down) {
+      const p = pt?.p ?? pt?.price;
+      const pDown = Number(p);
+      const ts = toSeconds(pt?.t ?? pt?.timestamp);
+      if (!Number.isFinite(pDown) || ts == null) continue;
+      if (endCutSec != null && ts >= endCutSec) continue;
+      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
+    }
+  }
+
+  if (candidates.length === 0) return empty;
+  // Tie-breaker : Up avant Down si ts identique.
+  candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
+  const first = candidates[0];
+  return {
+    botWouldTake: first.side,
+    botWon: winner === first.side,
+    botEntryPrice: first.price,
+    botEntryTimestamp: first.ts,
+    botOrderType: 'Marché',
+  };
 }
 
 /**
@@ -311,14 +342,14 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
           page.forEach(processEvent);
           if (page.length < 100) break;
         }
-      } catch (err) {
-        if (err.response?.status === 422 || err.response?.status === 400) {
-          const [closedRes] = await Promise.all([
-            axios.get(GAMMA_EVENTS_URL, { params: { closed: true, limit: 500 }, timeout: 15000 }),
-          ]);
+      } catch {
+        try {
+          const closedRes = await axios.get(GAMMA_EVENTS_URL, { params: { closed: true, limit: 500 }, timeout: 15000 });
           const closedEvents = Array.isArray(closedRes.data) ? closedRes.data : closedRes.data?.data ?? closedRes.data?.results ?? [];
           closedEvents.forEach(processEvent);
-        } else throw err;
+        } catch {
+          /* garder ce qui a déjà été chargé (slugs / pages précédentes) */
+        }
       }
 
       // 2) Événements actifs
@@ -370,10 +401,19 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
       // Enrichir avec la simulation bot : CLOB prices-history, puis secours API Data (trades)
       const enriched = [];
       for (const r of results) {
-        let history = [];
-        if (r.tokenIdUp) history = await fetchPriceHistory(r.tokenIdUp, r.endDate);
-        if (history.length === 0 && r.conditionId) history = await fetchPriceHistoryFromTrades(r.conditionId, r.endDate);
-        const sim = history.length > 0 ? computeBotSimulation(history, r.winner, r.endDate) : { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
+        let historyUp = [];
+        let historyDown = [];
+        if (r.tokenIdUp) historyUp = await fetchPriceHistory(r.tokenIdUp, r.endDate);
+        if (r.tokenIdDown) historyDown = await fetchPriceHistory(r.tokenIdDown, r.endDate);
+
+        if (historyUp.length === 0 && r.conditionId) {
+          // Secours API Data (trades) : fournit un historique Up, on retombe ensuite sur le complément si besoin.
+          historyUp = await fetchPriceHistoryFromTrades(r.conditionId, r.endDate);
+          historyDown = [];
+        }
+
+        const haveAny = historyUp.length > 0 || historyDown.length > 0;
+        const sim = haveAny ? computeBotSimulation(historyUp, historyDown, r.winner, r.endDate) : { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
         enriched.push({ ...r, ...sim });
       }
       setResolved(enriched);

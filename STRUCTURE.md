@@ -70,7 +70,7 @@ Arborescence classée et décrite. Fichiers à ne pas committer : `.env`, `*.pem
 | Fichier | Rôle |
 |--------|------|
 | `button.tsx` | Bouton. |
-| `card.tsx` | Card, CardHeader, CardContent, CardTitle. |
+| *(supprimé)* `card.tsx` | Remplacé par des `<div className="card">` + `.card-content` dans `index.css`. |
 | `badge.tsx` | Badge. |
 | `checkbox.tsx` | Case à cocher. |
 | `label.tsx` | Label. |

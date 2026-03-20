@@ -189,7 +189,8 @@ const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
-const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000; // 4 min pour le marché 15m
+/** 15m : temporairement 0 (pas d’exclusion fin de créneau). Remettre 4 * 60 * 1000 pour la règle des 4 min. */
+const NO_TRADE_LAST_MS_15M = 0;
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
 const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
@@ -988,7 +989,11 @@ async function getOutcomePricesForSignal(market) {
   return [priceUp, priceDown];
 }
 
-/** Pas de trade si l'événement se termine dans moins de X ms (5 min horaire, 4 min 15m). */
+/**
+ * Pas de trade si l'événement se termine dans moins de X ms (5 min horaire ; 15m selon NO_TRADE_LAST_MS_15M).
+ * Si le seuil 15m est 0, ne pas bloquer : avec seuil 0, `now >= endMs` couperait tout le créneau quand Gamma met
+ * un endDate en avance sur la vraie fin du slug (~15 min).
+ */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
@@ -1000,6 +1005,7 @@ function isInLastMinute(signal) {
   }
   if (Number.isNaN(endMs)) return false;
   const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : NO_TRADE_LAST_MS_HOURLY;
+  if (thresholdMs <= 0) return false;
   return Date.now() >= endMs - thresholdMs;
 }
 
@@ -2306,7 +2312,9 @@ async function run() {
 
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
-  console.log(`Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '4 min avant fin' : '5 min avant fin'}`);
+  console.log(
+  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'désactivé (15m, temporaire)' : '5 min avant fin'}`
+);
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
   );

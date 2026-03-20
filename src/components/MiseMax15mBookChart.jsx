@@ -3,6 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -40,37 +41,46 @@ export function MiseMax15mBookChart({ series }) {
   const maxVal = Math.max(...data.map((d) => d.miseMaxUsd), 1);
 
   return (
-    <div className="mt-4 w-full" style={{ height: 220 }}>
-      <p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+    <div style={{ marginTop: 16, width: '100%', height: 220 }}>
+      <p style={{ marginBottom: 8, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-3)', fontFamily: 'JetBrains Mono, monospace' }}>
         Historique par créneau (fin UTC → mise max $ en 97–97,5 %)
       </p>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 32 }}>
-          <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis
             dataKey="label"
-            tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
+            tick={{ fontSize: 9, fill: 'var(--text-2)' }}
             interval="preserveStartEnd"
             angle={-35}
             textAnchor="end"
             height={48}
+            axisLine={{ stroke: 'transparent' }}
+            tickLine={false}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+            tick={{ fontSize: 10, fill: 'var(--text-2)' }}
             width={44}
             domain={[0, Math.ceil(maxVal * 1.1)]}
             tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${v}`)}
+            axisLine={{ stroke: 'transparent' }}
+            tickLine={false}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: 'hsl(var(--card))',
-              border: '1px solid hsl(var(--border))',
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border)',
               borderRadius: 8,
               fontSize: 12,
+              color: 'var(--text-1)',
             }}
             formatter={(value) => [`${Number(value).toFixed(2)} $`, 'Mise max']}
           />
-          <Bar dataKey="miseMaxUsd" fill="rgb(245 158 11 / 0.75)" radius={[4, 4, 0, 0]} maxBarSize={14} />
+          <Bar dataKey="miseMaxUsd" radius={[4, 4, 0, 0]} maxBarSize={14}>
+            {data.map((d, idx) => (
+              <Cell key={idx} fill={d.miseMaxUsd > 0 ? 'var(--green)' : 'var(--red)'} />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>

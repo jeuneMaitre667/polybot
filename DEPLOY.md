@@ -67,7 +67,7 @@ npm run build
 npm run preview
 ```
 
-En production : servir le dossier `dist/` derrière **HTTPS** (recommandé). Les appels Gamma/CLOB depuis le navigateur fonctionnent en direct ; en **dev**, Vite proxy `/api` et `/api-clob` vers Gamma/CLOB.
+En production : servir le dossier `dist/` derrière **HTTPS** (recommandé). Les appels Gamma/CLOB depuis le navigateur fonctionnent en direct ; en **dev**, Vite proxy `/api` et `/apiClob` vers Gamma/CLOB.
 
 ---
 

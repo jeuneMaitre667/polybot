@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '@/hooks/useBotStatus.js';
 
 function uptimeStrFrom(uptimeMs) {
@@ -61,58 +60,21 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
         : null;
 
   return (
-    <div className="w-full min-w-0 rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 shadow-inner">
-      {label && <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">{label}</div>}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-flex h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-offset-2 ring-offset-slate-900 ${
-              loading ? 'animate-pulse bg-slate-500 ring-slate-600' : isOnline ? 'bg-emerald-500 ring-emerald-500/30' : 'bg-red-500 ring-red-500/30'
-            }`}
-            title={isOnline ? 'En ligne' : 'Hors ligne'}
-          />
-          <span className="text-sm font-medium text-slate-200">
-            {loading ? '…' : isOnline ? 'En ligne' : error || 'Hors ligne'}
-          </span>
-          {uptimeStr && isOnline && (
-            <span className="text-xs text-slate-500">({uptimeStr})</span>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {isOnline && !loading && (
-            <span
-              className="text-[11px] text-slate-500 font-medium tabular-nums"
-              title={[signalPollHint, 'Ordre au marché ou limite, intervalle poll'].filter(Boolean).join(' · ')}
-            >
-              {orderLabel} · {pollSec}s
-              {signalPriceSource === 'clob' && (
-                <span className="text-cyan-400/90"> · sig. CLOB</span>
-              )}
-              {signalPriceSource === 'gamma' && (
-                <span className="text-slate-400"> · sig. Gamma</span>
-              )}
-            </span>
-          )}
-          {isOnline && !loading && wsLabel && (
-            <span
-              className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${
-                wsAlert ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-              }`}
-              title={wsAlert ? 'WebSocket CLOB déconnecté depuis trop longtemps (polling continue).' : 'WebSocket CLOB connecté.'}
-            >
-              {wsLabel}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={loading}
-            className="rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors"
-          >
-            Rafraîchir
-          </button>
-        </div>
-      </div>
+    <div className="bot-pill" title={[signalPollHint, 'Ordre au marché ou limite, intervalle poll'].filter(Boolean).join(' · ')}>
+      <span
+        className={`dot ${loading ? 'status-dot--loading' : ''} ${isOnline ? 'status-dot--online' : ''}`}
+        title={isOnline ? 'En ligne' : 'Hors ligne'}
+      />
+      <span className="name">{label || 'BOT'}</span>
+      <span className="uptime">{uptimeStr && isOnline ? uptimeStr : loading ? '…' : 'offline'}</span>
+      <span className="tag-sep">·</span>
+      <span className="tag tag-sig">
+        sig. {signalPriceSource === 'clob' ? 'CLOB' : signalPriceSource === 'gamma' ? 'Gamma' : orderLabel}
+      </span>
+      {wsLabel && <span className={`tag ${wsAlert ? 'tag-ws-ko' : 'tag-ws'}`}>{wsLabel}</span>}
+      <button type="button" onClick={refresh} disabled={loading} className="bot-pill-refresh" aria-label="Rafraîchir">
+        ↻
+      </button>
     </div>
   );
 }
@@ -127,8 +89,9 @@ const PERIODS = [
 export function BotBalanceChart() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const { data, loading } = useBotStatus(statusUrl);
-  const [periodIndex, setPeriodIndex] = useState(2); // 7j par défaut
+  const [periodIndex, setPeriodIndex] = useState(2);
   const [now, setChartNow] = useState(() => Date.now());
+
   useEffect(() => {
     const id = setInterval(() => setChartNow(Date.now()), 60 * 1000);
     return () => clearInterval(id);
@@ -150,8 +113,11 @@ export function BotBalanceChart() {
   const chartData = fullChartData.filter((d) => d.atMs >= cutoff);
 
   const firstBalance = chartData.length > 0 ? chartData[0].balance : null;
-  const lastBalance = data?.balanceUsd != null ? Number(data.balanceUsd) : (chartData.length > 0 ? chartData[chartData.length - 1].balance : null);
-  const pnl = firstBalance != null && lastBalance != null && firstBalance > 0 ? lastBalance - firstBalance : null;
+  const lastBalance = data?.balanceUsd != null
+    ? Number(data.balanceUsd)
+    : chartData.length > 0 ? chartData[chartData.length - 1].balance : null;
+  const pnl = firstBalance != null && lastBalance != null && firstBalance > 0
+    ? lastBalance - firstBalance : null;
 
   const exportCsv = () => {
     if (fullChartData.length === 0) return;
@@ -169,60 +135,92 @@ export function BotBalanceChart() {
   if (loading && fullChartData.length === 0) return null;
 
   return (
-    <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md rounded-2xl overflow-hidden">
+    <div className="card" style={{ position: 'relative', overflow: 'hidden' }}>
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
+        style={{
+          pointerEvents: 'none',
+          position: 'absolute',
+          inset: 0,
+          background: 'linear-gradient(135deg, rgba(139,92,246,0.08) 0%, rgba(0,255,136,0.04) 100%)',
+        }}
       />
-      <CardHeader className="relative z-10 pb-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
           <div>
-            <CardTitle className="text-lg">Solde bot (évolution)</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Derniers points enregistrés par le bot. {pnl != null && <span>PnL sur la période : <strong className={pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $</strong></span>}
-            </p>
+            <div className="card-label">Solde bot (évolution)</div>
+            {pnl != null && (
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>
+                PnL sur la période :{' '}
+                <strong style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $
+                </strong>
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Période :</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'JetBrains Mono, monospace' }}>Période :</span>
             {PERIODS.map((p, i) => (
               <button
                 key={p.label}
                 type="button"
                 onClick={() => setPeriodIndex(i)}
-                className={`rounded px-2 py-1 text-xs font-medium transition-colors ${periodIndex === i ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                className="btn btn--xs"
+                style={periodIndex === i
+                  ? { background: 'var(--green)', borderColor: 'var(--green)', color: 'var(--bg-base)' }
+                  : {}}
               >
                 {p.label}
               </button>
             ))}
             {fullChartData.length > 0 && (
-              <button
-                type="button"
-                onClick={exportCsv}
-                className="rounded px-2 py-1 text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 transition-colors"
-              >
-                Export CSV
+              <button type="button" onClick={exportCsv} className="btn btn--xs btn--outline">
+                CSV
               </button>
             )}
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="relative z-10">
+
         {chartData.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Aucune donnée sur cette période.</p>
+          <p style={{ fontSize: 12, color: 'var(--text-2)' }}>Aucune donnée sur cette période.</p>
         ) : (
-          <div className="h-[220px] w-full">
+          <div style={{ height: 220, width: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v, i) => chartData[i]?.time ?? v} />
-                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toFixed(0)} $`} />
-                <Tooltip content={({ payload }) => (payload?.[0] ? <span className="text-sm">{payload[0].value?.toFixed(2)} $</span> : null)} />
-                <Line type="monotone" dataKey="balance" stroke="rgb(52 211 153)" strokeWidth={2} dot={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: 'var(--text-2)' }}
+                  tickFormatter={(v, i) => chartData[i]?.time ?? v}
+                  axisLine={{ stroke: 'transparent' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#7b849a' }}
+                  tickFormatter={(v) => `${v.toFixed(0)} $`}
+                  axisLine={{ stroke: 'transparent' }}
+                  tickLine={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    color: 'var(--text-1)',
+                  }}
+                  content={({ payload }) =>
+                    payload?.[0]
+                      ? <span style={{ fontSize: 12, color: 'var(--text-1)' }}>{payload[0].value?.toFixed(2)} $</span>
+                      : null
+                  }
+                />
+                <Line type="monotone" dataKey="balance" stroke="var(--green)" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

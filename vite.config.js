@@ -24,15 +24,20 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': {
+      '/api/': {
         target: 'https://gamma-api.polymarket.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        rewrite: (path) => String(path).replace(/^\/api\//, ''),
       },
-      '/api-clob': {
+      '/apiClob': {
         target: 'https://clob.polymarket.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api-clob/, ''),
+        rewrite: (path) => String(path).replace(/^\/apiClob/, '').replace(/^apiClob/, ''),
+      },
+      '/apiData': {
+        target: 'https://data-api.polymarket.com',
+        changeOrigin: true,
+        rewrite: (path) => String(path).replace(/^\/apiData/, '').replace(/^apiData/, ''),
       },
     },
   },

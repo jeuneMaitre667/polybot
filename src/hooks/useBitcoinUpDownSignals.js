@@ -2,11 +2,23 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
+const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
 const MIN_PRICE = 0.97;
 const MAX_PRICE = 0.975;
 
 // Uniquement les événements "Bitcoin Up or Down - Hourly" (slug du type bitcoin-up-or-down-march-14-6pm-et)
 const BITCOIN_UP_DOWN_HOURLY_SLUG = 'bitcoin-up-or-down';
+const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
+
+/** Fin de créneau UTC (ms) depuis le slug btc-updown-15m-{unixSec} — aligné bot / Polymarket. */
+function slotEndMsFrom15mSlug(slug) {
+  if (!slug || typeof slug !== 'string') return null;
+  const m = slug.match(/btc-updown-15m-(\d+)$/i);
+  if (!m) return null;
+  const ts = parseInt(m[1], 10);
+  if (!Number.isFinite(ts)) return null;
+  return ts < 1e12 ? ts * 1000 : ts;
+}
 
 function parsePrices(market) {
   try {
@@ -31,11 +43,51 @@ function getTokenIdToBuy(market, takeSide) {
   return null;
 }
 
+/** Charge les events 15m actifs (liste Gamma + secours slug courant, comme le bot). */
+async function fetchActive15mEvents() {
+  const slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
+  let events = [];
+  try {
+    const { data } = await axios.get(GAMMA_EVENTS_URL, {
+      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
+      timeout: 15000,
+    });
+    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 400) {
+      const { data } = await axios.get(GAMMA_EVENTS_URL, {
+        params: { active: true, closed: false, limit: 200 },
+        timeout: 15000,
+      });
+      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) =>
+        (ev.slug ?? '').toLowerCase().includes(slugMatch)
+      );
+    } else {
+      throw err;
+    }
+  }
+  const hasMatch = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
+  if (!hasMatch) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const slotEnd = Math.ceil(nowSec / 900) * 900;
+    const currentSlug = `${BITCOIN_UP_DOWN_15M_SLUG}-${slotEnd}`;
+    try {
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(currentSlug)}`, {
+        timeout: 8000,
+      });
+      if (ev && (ev.slug ?? '').toLowerCase().includes(slugMatch)) events = [ev];
+    } catch {
+      /* 404 ou réseau */
+    }
+  }
+  return events;
+}
+
 /**
- * Détecte les marchés Bitcoin Up or Down - Hourly où un des deux prix est entre 97 % et 97,5 %.
- * Cible: https://polymarket.com/event/bitcoin-up-or-down-...
+ * Signaux 97–97,5 % pour le marché horaire ou 15 min.
+ * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, même logique que le bot (slug_contains + secours slug).
  */
-export function useBitcoinUpDownSignals() {
+export function useBitcoinUpDownSignals(marketMode = 'hourly') {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -43,18 +95,28 @@ export function useBitcoinUpDownSignals() {
   const fetchSignals = useCallback(async () => {
     setError(null);
     try {
-      const { data } = await axios.get(GAMMA_EVENTS_URL, {
-        params: { active: true, closed: false, limit: 150 },
-        timeout: 15000,
-      });
-      const events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+      let events = [];
+      if (marketMode === '15m') {
+        events = await fetchActive15mEvents();
+      } else {
+        const { data } = await axios.get(GAMMA_EVENTS_URL, {
+          params: { active: true, closed: false, limit: 150 },
+          timeout: 15000,
+        });
+        events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
+      }
+
       const results = [];
       for (const ev of events) {
         if (!ev?.markets?.length) continue;
         const eventSlug = (ev.slug ?? '').toLowerCase();
-        // Uniquement Bitcoin Up or Down - Hourly (slug du type bitcoin-up-or-down-march-14-6pm-et)
-        if (!eventSlug.includes(BITCOIN_UP_DOWN_HOURLY_SLUG)) continue;
+        if (marketMode === '15m') {
+          if (!eventSlug.includes(BITCOIN_UP_DOWN_15M_SLUG)) continue;
+        } else if (!eventSlug.includes(BITCOIN_UP_DOWN_HOURLY_SLUG)) continue;
+
         const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+        const slotEndMs = marketMode === '15m' ? slotEndMsFrom15mSlug(ev.slug ?? '') : null;
+
         for (const m of ev.markets) {
           const prices = parsePrices(m);
           if (!prices) continue;
@@ -62,6 +124,10 @@ export function useBitcoinUpDownSignals() {
           const upInRange = priceUp >= MIN_PRICE && priceUp <= MAX_PRICE;
           const downInRange = priceDown >= MIN_PRICE && priceDown <= MAX_PRICE;
           const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+          /** Pour 15m : fin de créneau depuis le slug (Gamma `endDate` souvent décalé). */
+          const endDateForSignal =
+            slotEndMs != null && Number.isFinite(slotEndMs) ? new Date(slotEndMs).toISOString() : marketEndDate;
+
           if (upInRange) {
             const takeSide = 'Up';
             results.push({
@@ -74,7 +140,7 @@ export function useBitcoinUpDownSignals() {
               priceDown,
               tokenIdToBuy: getTokenIdToBuy(m, takeSide),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
-              endDate: marketEndDate,
+              endDate: endDateForSignal,
             });
           } else if (downInRange) {
             const takeSide = 'Down';
@@ -88,7 +154,7 @@ export function useBitcoinUpDownSignals() {
               priceDown,
               tokenIdToBuy: getTokenIdToBuy(m, takeSide),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
-              endDate: marketEndDate,
+              endDate: endDateForSignal,
             });
           }
         }
@@ -100,7 +166,7 @@ export function useBitcoinUpDownSignals() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [marketMode]);
 
   useEffect(() => {
     fetchSignals();

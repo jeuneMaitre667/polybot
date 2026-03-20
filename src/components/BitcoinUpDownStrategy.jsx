@@ -1,16 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Label } from './ui/label';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
 import { useBitcoinUpDownResolved15m } from '../hooks/useBitcoinUpDownResolved15m';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
-import { useBotStatus, DEFAULT_BOT_STATUS_URL } from '../hooks/useBotStatus';
+import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
-
-const inputClass =
-  'flex h-10 w-full rounded-xl border border-input bg-background/50 px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -51,7 +46,7 @@ function UpDownDot({ side, title = true }) {
   const isUp = side === 'Up';
   return (
     <span
-      className={`inline-block w-3 h-3 rounded-full shrink-0 shadow-sm ring-2 ring-white/10 dark:ring-black/20 ${isUp ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-rose-500 dark:bg-rose-400'}`}
+      className={`updown-dot ${isUp ? 'updown-dot--up' : 'updown-dot--down'}`}
       title={title ? (isUp ? 'Up' : 'Down') : undefined}
       aria-label={isUp ? 'Up' : 'Down'}
     />
@@ -67,19 +62,45 @@ function signalBucketLabelFromPrice(priceP) {
 }
 
 export function BitcoinUpDownStrategy() {
-  const { address, signer, status, errorMessage, isPolygon, connect, disconnect, switchToPolygon, address2, status2, errorMessage2, connect2, disconnect2 } = useWallet();
-  const { signals } = useBitcoinUpDownSignals();
+  const { address, signer, isPolygon } = useWallet();
+  const [resultMode, setResultMode] = useState('hourly'); // 'hourly' | '15m' — avant les signaux (mode fetch)
+  const { signals } = useBitcoinUpDownSignals(resultMode === '15m' ? '15m' : 'hourly');
   const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
+  const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
   const liquidityStats = botStatusData?.liquidityStats ?? null;
+
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
   const { resolved: resolved15m, loading: resolved15mLoading, error: resolved15mError, refresh: refreshResolved15m } = useBitcoinUpDownResolved15m(resolvedWindowHours);
-  const [resultMode, setResultMode] = useState('hourly'); // 'hourly' | '15m'
+
+  const decisionReasonCounts = useMemo(() => {
+    const stats =
+      resultMode === '15m' && DEFAULT_BOT_STATUS_URL_15M
+        ? botStatusData15m?.signalDecisionLatencyStats
+        : botStatusData?.signalDecisionLatencyStats;
+    return stats?.reasonCounts ?? null;
+  }, [resultMode, botStatusData, botStatusData15m]);
+
+  const decisionBarPercents = useMemo(() => {
+    const rc = decisionReasonCounts;
+    if (!rc) return { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, hasData: false };
+    const total =
+      (rc.no_signal ?? 0) + (rc.liquidity_ok ?? 0) + (rc.liquidity_null ?? 0) + (rc.other ?? 0);
+    if (total <= 0) return { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, hasData: false };
+    const pct = (n) => Math.round(((n ?? 0) / total) * 1000) / 10;
+    return {
+      no_signal: pct(rc.no_signal),
+      liquidity_ok: pct(rc.liquidity_ok),
+      liquidity_null: pct(rc.liquidity_null),
+      hasData: true,
+    };
+  }, [decisionReasonCounts]);
+
   const [orderSizeUsd] = useState(10);
   const [useMarketOrder] = useState(true);
   const [autoPlaceEnabled] = useState(true);
@@ -205,6 +226,27 @@ export function BitcoinUpDownStrategy() {
     };
   }, [resolved15m, initialBalance, includeFees]);
 
+  const activeBacktest = resultMode === 'hourly' ? backtestResult : backtestResult15m;
+
+  const entryTiming = useMemo(() => {
+    const rows = resultMode === 'hourly' ? resolvedHours : resolved15m;
+    const sessionDurationSec = resultMode === 'hourly' ? 3600 : 15 * 60;
+    const last24h = rows.filter(
+      (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
+    );
+    const total24 = last24h.length;
+    const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
+    const pctFilled24 = total24 > 0 ? ((withTrade24 / total24) * 100).toFixed(1) : '0';
+    const withEntry = rows.filter((r) => r.botEntryTimestamp != null && r.endDate);
+    const minutesList = withEntry.map((r) => {
+      const sessionEndSec = new Date(r.endDate).getTime() / 1000;
+      const sessionStartSec = sessionEndSec - sessionDurationSec;
+      return (r.botEntryTimestamp - sessionStartSec) / 60;
+    });
+    const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
+    return { avgMinutes, pctFilled24, withTrade24, total24, withEntryCount: withEntry.length };
+  }, [resultMode, resolvedHours, resolved15m]);
+
   const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
 
   /** Règle : pas de trade si l’événement se termine dans moins d’une minute (ex. fin 18h → plus de trade à partir de 17h59). */
@@ -285,99 +327,258 @@ export function BitcoinUpDownStrategy() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isInLastMinute/placeOrderForSignal stables
   }, [autoPlaceEnabled, signer, address, isPolygon, signals, orderSizeUsd, useMarketOrder]);
 
+  const bt = activeBacktest;
+  const winRatePct =
+    bt.withSimul.length > 0 ? Math.round((bt.won / bt.withSimul.length) * 1000) / 10 : null;
+  const totalNetPnl = initialBalance > 0 ? bt.capital - initialBalance : null;
+  const pnlPct =
+    initialBalance > 0 && totalNetPnl != null
+      ? ((totalNetPnl / initialBalance) * 100).toFixed(1)
+      : null;
+
   return (
-    <div className="mx-auto max-w-2xl space-y-8 pb-12">
-      <Card className="relative border border-border/60 bg-card/90 backdrop-blur-md shadow-xl shadow-black/10 rounded-2xl overflow-hidden">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/40 via-cyan-500/18 to-emerald-500/40 opacity-100"
-        />
-        <CardHeader className="relative z-10 pb-2">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <CardTitle className="text-xl font-semibold tracking-tight">Stratégie Bitcoin Up or Down</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                Signal 97–97,5 % sur les créneaux Bitcoin Up or Down (Polymarket), horaires ou 15 min. Un pari par créneau, ordre au marché (FOK), réinvestissement du solde — objectif environ 3 % par créneau.
-              </p>
-              <div className="flex flex-wrap items-center gap-3 mt-3">
+    <div className="strat-page">
+      <div className="card strat-card-wrap">
+        <div className="strat-hero-inner">
+          <div className="strat-hero-grid">
+            <div className="strat-hero-left">
+              <h2 className="strat-hero-title">Bitcoin Up or Down</h2>
+              <p className="strat-hero-sub">Signal 97–97,5 % · Horaires &amp; 15 min · FOK</p>
+              <div className="strat-hero-links">
                 <a
                   href={`https://polymarket.com/event/${getCurrentBitcoinUpDownEventSlug()}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
+                  className="strat-hero-link"
                 >
-                  Créneau horaire actuel
-                  <span className="text-muted-foreground">→</span>
+                  Créneau horaire actuel <span className="strat-hero-link-arr">→</span>
                 </a>
                 <a
                   href={`https://polymarket.com/event/${getCurrent15mEventSlug()}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/90 hover:underline transition-colors"
+                  className="strat-hero-link"
                 >
-                  Créneau 15 min actuel
-                  <span className="text-muted-foreground">→</span>
+                  Créneau 15 min actuel <span className="strat-hero-link-arr">→</span>
                 </a>
               </div>
+              <ul className="strat-rule-list">
+                <li>
+                  <span className="strat-rule-chevron" aria-hidden>
+                    &gt;
+                  </span>
+                  Un seul pari par créneau (bougie 1h BTC/USDT Binance)
+                </li>
+                <li>
+                  <span className="strat-rule-chevron" aria-hidden>
+                    &gt;
+                  </span>
+                  Up ou Down selon la tendance, support/résistance ou cotes
+                </li>
+                <li>
+                  <span className="strat-rule-chevron" aria-hidden>
+                    &gt;
+                  </span>
+                  Mise 80–100 % du solde, réinvestissement total à chaque créneau
+                </li>
+                <li>
+                  <span className="strat-rule-chevron" aria-hidden>
+                    &gt;
+                  </span>
+                  Résolution → capital + gains réinvestis sur le créneau suivant
+                </li>
+                <li>
+                  <span className="strat-rule-chevron" aria-hidden>
+                    &gt;
+                  </span>
+                  Signaux 97–97,5 % visent ≥ 4 % de gain par trade (achat à 95¢, gain 5¢)
+                </li>
+              </ul>
+              <div className="strat-reason-bars">
+                <p className="strat-reason-bars__hint">
+                  Répartition des décisions bot (24 h){' '}
+                  {resultMode === '15m' ? '(15 min)' : '(horaire)'}
+                  {!decisionBarPercents.hasData && ' — connecte le statut bot pour afficher les barres.'}
+                </p>
+                {[
+                  { key: 'no_signal', label: 'no_signal' },
+                  { key: 'liquidity_ok', label: 'liq_ok' },
+                  { key: 'liquidity_null', label: 'liq_null' },
+                ].map(({ key, label }) => (
+                  <div key={key} className="strat-reason-row">
+                    <span className="strat-reason-row__label">{label}</span>
+                    <div className="strat-reason-row__track">
+                      <div
+                        className="strat-reason-row__fill"
+                        style={{ width: `${Math.min(100, decisionBarPercents[key] ?? 0)}%` }}
+                      />
+                    </div>
+                    <span className="strat-reason-row__pct">
+                      {decisionBarPercents.hasData ? `${(decisionBarPercents[key] ?? 0).toFixed(1)}%` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="relative z-10 space-y-8 pt-2">
-          <div className="rounded-xl border border-border/40 bg-muted/5 p-5">
-            <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-primary/80" aria-hidden />
-              Règles de la stratégie
-            </h3>
-            <ul className="text-sm text-muted-foreground space-y-2 list-none pl-0">
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Un seul pari par créneau horaire (bougie 1h BTC/USDT Binance).</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Choisir Up ou Down selon ta lecture (tendance, support/résistance, ou valeur des cotes).</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Miser une fraction du solde (ex. 80–100 % si tu veux « tout réinvestir »).</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Après résolution : réinvestir tout le solde (capital + gains) sur le créneau suivant.</li>
-              <li className="flex gap-2.5"><span className="text-muted-foreground/60">•</span> Signaux 97–97,5 % : on achète le <strong>favori</strong> (le côté à 97–97,5 %) pour viser au moins ~4 % de gain par trade (ex. achat à 95¢, gain 5¢ si ça gagne).</li>
-            </ul>
-            <div className="mt-3 pt-3 border-t border-border/40 flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">Afficher la taille max suggérée (liquidité à 97–97,5 %) :</span>
-              <button
-                type="button"
-                onClick={toggleShowLiquiditySuggestion}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${showLiquiditySuggestion ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
-              >
-                {showLiquiditySuggestion ? 'Activé' : 'Désactivé'}
-              </button>
+
+            <div className="strat-hero-right">
+              <div className="strat-mode-toggle strat-mode-toggle--hero" role="group" aria-label="Période backtest">
+                <button
+                  type="button"
+                  className={resultMode === 'hourly' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
+                  onClick={() => setResultMode('hourly')}
+                >
+                  Horaires
+                </button>
+                <button
+                  type="button"
+                  className={resultMode === '15m' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
+                  onClick={() => setResultMode('15m')}
+                >
+                  15 min
+                </button>
+              </div>
+
+              <div className="strat-metric-card">
+                <p className="strat-metric-card__kicker">
+                  Backtest · {resolvedDaysCount} derniers jours
+                </p>
+                <div className="strat-metric-card__row3">
+                  <div>
+                    <span className="strat-metric-card__lbl">Win rate</span>
+                    <span className="strat-metric-card__val strat-metric-card__val--green">
+                      {winRatePct != null ? `${winRatePct}%` : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="strat-metric-card__lbl">Sessions</span>
+                    <span className="strat-metric-card__val">
+                      {bt.withSimul.length > 0 ? `${bt.won} / ${bt.withSimul.length}` : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="strat-metric-card__lbl">Capital final</span>
+                    <span className="strat-metric-card__val strat-metric-card__val--green">
+                      {initialBalance > 0 && bt.withSimul.length > 0 ? formatMoney(bt.capital) : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="strat-metric-card">
+                <p className="strat-metric-card__kicker">PnL net total (départ {formatMoney(initialBalance)})</p>
+                <p className="strat-metric-card__pnl">
+                  {totalNetPnl != null && bt.withSimul.length > 0 ? (
+                    <>
+                      <span className={totalNetPnl >= 0 ? 'strat-text-green' : 'strat-text-red'}>
+                        {totalNetPnl >= 0 ? '+' : ''}
+                        {formatMoney(totalNetPnl)}
+                      </span>
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </p>
+                {pnlPct != null && bt.withSimul.length > 0 && (
+                  <p className="strat-metric-card__sub">
+                    <span className={Number(pnlPct) >= 0 ? 'strat-text-green' : 'strat-text-red'}>
+                      {Number(pnlPct) >= 0 ? '+' : ''}
+                      {pnlPct}%
+                    </span>
+                    {includeFees && bt.feesPaid > 0 && (
+                      <span>
+                        {' '}
+                        · frais estimés {formatMoney(bt.feesPaid)}
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
+
+              <div className="strat-metric-card">
+                <p className="strat-metric-card__kicker">Entrée moyenne après début créneau</p>
+                <p className="strat-metric-card__time">
+                  {entryTiming.withEntryCount > 0 ? `${entryTiming.avgMinutes.toFixed(1)} min` : '—'}
+                </p>
+                <p className="strat-metric-card__sub">
+                  {entryTiming.total24 > 0
+                    ? `${entryTiming.pctFilled24}% des créneaux avec position (24h)`
+                    : '—'}
+                </p>
+              </div>
+
+              <div className="strat-hero-controls">
+                <button
+                  type="button"
+                  onClick={() => setIncludeFees((v) => !v)}
+                  className={`btn btn--xs ${includeFees ? 'btn--toggle-on' : 'btn--toggle-off'}`}
+                  title="Frais taker (modèle simplifié)"
+                >
+                  {includeFees ? 'Frais ON' : 'Frais OFF'}
+                </button>
+                <label className="strat-label-inline">
+                  <span>Solde départ (€)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={initialBalance}
+                    onChange={(e) => setInitialBalance(Number(e.target.value) || 0)}
+                    className="input-strat-compact"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={toggleShowLiquiditySuggestion}
+                  className={`btn btn--xs ${showLiquiditySuggestion ? 'btn--toggle-on' : 'btn--toggle-off'}`}
+                  title="Afficher le panneau liquidité 97–97,5 % sous la stratégie"
+                >
+                  Liquidité {showLiquiditySuggestion ? 'ON' : 'OFF'}
+                </button>
+              </div>
             </div>
           </div>
 
           {showLiquiditySuggestion && (currentSignalTokenId || liquidityAtTargetUsd != null) && (
-            <div className="rounded-xl border border-border/50 bg-muted/10 p-4">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-2">
-                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
+            <div className="strat-data-window strat-data-window--nested">
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <span style={{ width: 2, height: 16, borderRadius: 999, background: 'rgba(0,255,136,0.6)' }} aria-hidden />
                 Taille max suggérée (FOK ≤ 97,5c)
               </h3>
-              <p className="text-xs text-muted-foreground mb-2">
+              <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8, lineHeight: 1.5 }}>
                 Liquidité disponible à 97–97,5 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour ne pas dépasser 97,5c.
               </p>
               {liquidityLoading ? (
-                <span className="text-sm text-muted-foreground">Chargement du carnet…</span>
+                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Chargement du carnet…</span>
               ) : liquidityError ? (
-                <span className="text-sm text-amber-600 dark:text-amber-400">{liquidityError}</span>
+                <span style={{ fontSize: 13, color: 'var(--amber)' }}>{liquidityError}</span>
               ) : liquidityAtTargetUsd != null && liquidityAtTargetUsd > 0 ? (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">
+                <div className="strat-stack-sm">
+                  <div className="strat-flex-gap">
+                    <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)' }}>
                       ~{liquidityAtTargetUsd.toFixed(0)} $
                     </span>
-                    <span className="text-sm text-muted-foreground">(taille max conseillée pour ce créneau)</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-2)' }}>(taille max conseillée pour ce créneau)</span>
                     <button
                       type="button"
                       onClick={refreshLiquidity}
-                      className="rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+                      style={{
+                        borderRadius: 10,
+                        border: '1px solid var(--border)',
+                        background: 'rgba(255,255,255,0.03)',
+                        color: 'var(--text-2)',
+                        padding: '6px 10px',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        fontFamily: 'JetBrains Mono, monospace',
+                      }}
                     >
                       Rafraîchir
                     </button>
                   </div>
                   {liquidityStats?.count > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Moyenne sur les 3 derniers jours (relevés bot) : <strong className="text-foreground">~{Math.round(liquidityStats.avg)} $</strong>
+                    <p style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+                      Moyenne sur les 3 derniers jours (relevés bot) : <strong className="strat-strong">~{Math.round(liquidityStats.avg)} $</strong>
                       {liquidityStats.min != null && liquidityStats.max != null && (
                         <span> (min {Math.round(liquidityStats.min)} $, max {Math.round(liquidityStats.max)} $)</span>
                       )}
@@ -395,219 +596,122 @@ export function BitcoinUpDownStrategy() {
                   )}
                 </div>
               ) : currentSignalTokenId ? (
-                <span className="text-sm text-muted-foreground">Aucune liquidité à 97–97,5 % pour l’instant.</span>
+                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Aucune liquidité à 97–97,5 % pour l’instant.</span>
               ) : null}
             </div>
           )}
+        </div>
+      </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                Connexion wallet 1
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Connecte ton wallet <strong>Phantom</strong> (ou MetaMask, etc.) sur <strong>Polygon</strong> pour placer des ordres. Les fonds restent chez toi.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                {!address ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); connect(); }}
-                      disabled={status === 'connecting'}
-                      className="rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
-                    >
-                      {status === 'connecting' ? 'Connexion…' : 'Connecter le wallet'}
-                    </button>
-                    {errorMessage && (
-                      <p className="w-full text-sm text-rose-500 dark:text-rose-400 mt-2" role="alert">
-                        {errorMessage}
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <span className="text-sm text-muted-foreground">
-                      {address.slice(0, 6)}…{address.slice(-4)}
-                    </span>
-                    {!isPolygon && (
-                      <button
-                        type="button"
-                        onClick={() => switchToPolygon()}
-                        className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
-                      >
-                        Passer sur Polygon
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={disconnect}
-                      className="rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
-                    >
-                      Déconnecter
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                Connexion wallet 2
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Connecte un second wallet (change de compte dans Phantom puis clique ici). Utile pour gérer deux comptes.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                {!address2 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); connect2(); }}
-                      disabled={status2 === 'connecting'}
-                      className="rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
-                    >
-                      {status2 === 'connecting' ? 'Connexion…' : 'Connecter le wallet'}
-                    </button>
-                    {errorMessage2 && (
-                      <p className="w-full text-sm text-rose-500 dark:text-rose-400 mt-2" role="alert">
-                        {errorMessage2}
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <span className="text-sm text-muted-foreground">
-                      {address2.slice(0, 6)}…{address2.slice(-4)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={disconnect2}
-                      className="rounded-xl border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
-                    >
-                      Déconnecter
-                    </button>
-                  </>
-                )}
-              </div>
+      <div className="section-title">
+        <h2>Résultats passés</h2>
+        <div className="line" />
+      </div>
+
+      <div className="card strat-card-wrap">
+        <div className="strat-results-inner">
+          <div className="strat-results-toolbar">
+            <span className="strat-results-mode-label">
+              Période : <strong>{resultMode === 'hourly' ? 'Horaires' : '15 min'}</strong>
+            </span>
+            <div className="strat-mode-toggle strat-mode-toggle--results" role="group" aria-label="Période tableau">
+              <button
+                type="button"
+                className={resultMode === 'hourly' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
+                onClick={() => setResultMode('hourly')}
+              >
+                Horaires
+              </button>
+              <button
+                type="button"
+                className={resultMode === '15m' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
+                onClick={() => setResultMode('15m')}
+              >
+                15 min
+              </button>
             </div>
           </div>
-
-          <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                  Résultats passés
-                </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Créneaux Bitcoin Up or Down déjà résolus. Simulation alignée sur le bot : fenêtre 97–97,5 %, ordre au marché, pas de trade dans les 5 dernières min (horaires) ou 4 min (15 min). Données via l’historique CLOB.
-                </p>
-              </div>
-              <div className="flex rounded-lg border border-border/60 p-0.5 bg-muted/30">
-                <button
-                  type="button"
-                  onClick={() => setResultMode('hourly')}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${resultMode === 'hourly' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  Horaires
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setResultMode('15m')}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${resultMode === '15m' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  15 min
-                </button>
-              </div>
-            </div>
+          <p className="strat-results-desc">
+            Simulation alignée sur le bot (97–97,5 %, marché){' '}
+            {resultMode === 'hourly'
+              ? '— pas d’entrée dans les 5 dernières minutes du créneau.'
+              : '— 15 min : exclusion des dernières minutes avant la fin désactivée pour l’instant (comme le bot).'}{' '}
+            Données historiques CLOB.
+          </p>
 
             {resultMode === 'hourly' && (
               <>
                 {/* Fenêtre de données Horaires : toujours visible au-dessus du tableau */}
-                <div className="rounded-xl border border-border/50 bg-muted/10 p-4 space-y-2 mb-4">
-                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <div className="strat-data-window">
+                  <h4 className="strat-data-window__title">
                     Fenêtre de données (Horaires)
                   </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Période : <strong className="text-foreground">{resolvedDaysCount} derniers jours</strong>
+                  <p className="strat-data-window__body">
+                    Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
                     {' '}({Math.ceil(resolvedWindowHours)} créneaux horaires).
                     {resolvedLoading && ' Chargement en cours…'}
                     {!resolvedLoading && resolvedHours.length === 0 && !resolvedError && (
-                      <span className="block mt-1 text-amber-600 dark:text-amber-400">Aucun créneau résolu récupéré pour cette période.</span>
+                      <span className="strat-block-msg strat-text-amber">Aucun créneau résolu récupéré pour cette période.</span>
                     )}
                     {resolvedError && (
-                      <span className="block mt-1 text-red-500 dark:text-red-400">{resolvedError}</span>
+                      <span className="strat-block-msg strat-text-red">{resolvedError}</span>
                     )}
                     {!resolvedLoading && resolvedHours.length > 0 && (
-                      <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
+                      <span className="strat-block-msg strat-text-green">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
                     )}
-                    <span className="block mt-2 text-xs text-muted-foreground/90">
+                    <span className="strat-muted-tight">
                       Même règles que le bot : prix dans 97–97,5 % et pas d&apos;entrée dans les 5 dernières minutes du créneau. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
                     </span>
                   </p>
                 </div>
-                {resolvedError && <p className="text-sm text-red-500 dark:text-red-400">{resolvedError}</p>}
+                {resolvedError && <p className="strat-data-window__body strat-text-red">{resolvedError}</p>}
                 {resolvedLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement…</p>
+                  <p className="strat-data-window__body">Chargement…</p>
                 ) : resolvedHours.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
+                  <p className="strat-data-window__body">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
                 ) : (
-                  <div className="overflow-x-auto rounded-lg border border-border/50">
-                    <table className="w-full text-sm border-collapse">
+                  <div className="strat-table-wrap">
+                    <table className="strat-table">
                       <thead>
-                        <tr className="border-b border-border bg-muted/30">
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Signal</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
-                          <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
-                          <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
+                        <tr>
+                          <th className="strat-th">Résultat</th>
+                          <th className="strat-th">Bot aurait pris</th>
+                          <th className="strat-th">Prix d&apos;entrée</th>
+                          <th className="strat-th">Signal</th>
+                          <th className="strat-th">Heure trade</th>
+                          <th className="strat-th">Type</th>
+                          <th className="strat-th">Simul.</th>
                         </tr>
                       </thead>
                       <tbody>
                         {resolvedHours.map((r, i) => {
-                          const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
-                          const netPnl = r.botWon !== null ? backtestResult.netPnlMap.get(rowKey) : undefined;
                           const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
                           return (
-                            <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
-                              <td className="py-3 px-3 font-medium">
-                                {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
+                            <tr key={`${r.eventSlug}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                              <td className="strat-td strat-td--strong">
+                                {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
                               </td>
-                              <td className="py-3 px-3 text-muted-foreground">
+                              <td className="strat-td strat-td--muted">
                                 {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
                               </td>
-                              <td className="py-3 px-3">
+                              <td className="strat-td">
                                 {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
                               </td>
-                              <td className="py-3 px-3">
+                              <td className="strat-td strat-td--signal">
                                 {signalLabel ?? '—'}
                               </td>
-                              <td className="py-3 px-3">
+                              <td className="strat-td">
                                 {r.botEntryTimestamp != null
                                   ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                                   : '—'}
                               </td>
-                              <td className="py-3 px-3">
+                              <td className="strat-td">
                                 {r.botOrderType ?? '—'}
                               </td>
-                              <td className="py-3 px-3">
-                                {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
-                                {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
-                                {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
-                              </td>
-                              <td className="py-3 px-3 text-right font-medium tabular-nums">
-                                {netPnl !== undefined
-                                  ? (
-                                      <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                                        {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
-                                      </span>
-                                    )
-                                  : '—'}
+                              <td className="strat-td">
+                                {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
+                                {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
+                                {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
                               </td>
                             </tr>
                           );
@@ -617,79 +721,37 @@ export function BitcoinUpDownStrategy() {
                   </div>
                 )}
                 {resolvedHours.length > 0 && (() => {
-                  const { capital, feesPaid, maxDrawdown, withSimul, won } = backtestResult;
-                  const totalNetPnl = initialBalance > 0 ? capital - initialBalance : null;
+                  const { withSimul, won } = backtestResult;
                   if (withSimul.length > 0) {
                     return (
-                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                        <p>
-                          Simulation : <strong>{won}</strong> gagnés / <strong>{withSimul.length}</strong> créneaux avec signal 97–97,5 %.
-                        </p>
-                        {initialBalance > 0 && (
-                          <p>
-                            Backtest avec solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final{' '}
-                            <strong>{formatMoney(capital)}</strong>{' '}
-                            {capital > 0 && initialBalance > 0 && (
-                              <span>
-                                (<span className={capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
-                                  {(((capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
-                                </span>)
-                              </span>
-                            )}
-                            {totalNetPnl != null && (
-                              <> · PnL net total <strong className={totalNetPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalNetPnl >= 0 ? '+' : ''}{formatMoney(totalNetPnl)}</strong></>
-                            )}
-                            {maxDrawdown > 0 && <> · drawdown max env. {(maxDrawdown * 100).toFixed(1)} %</>}
-                            {includeFees && feesPaid > 0 && <> · frais estimés {formatMoney(feesPaid)}</>}
-                          </p>
-                        )}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] text-muted-foreground">Backtest :</span>
-                          <button
-                            type="button"
-                            onClick={() => setIncludeFees((v) => !v)}
-                            className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
-                            title="Modèle simplifié de taker fees (crypto) basé sur la doc Polymarket"
-                          >
-                            {includeFees ? 'Frais ON' : 'Frais OFF'}
-                          </button>
-                          <label className="flex items-center gap-1.5 text-[11px]">
-                            <span>Solde départ</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="10"
-                              value={initialBalance}
-                              onChange={(e) => setInitialBalance(Number(e.target.value) || 0)}
-                              className="w-20 rounded border border-border bg-background/50 px-2 py-1 text-xs"
-                            />
-                          </label>
-                        </div>
-                      </div>
+                      <p className="strat-results-foot">
+                        Simulation : <strong className="strat-text-green">{won}</strong> gagnés /{' '}
+                        <strong>{withSimul.length}</strong> créneaux avec signal 97–97,5 % · Données historiques CLOB.
+                      </p>
                     );
                   }
                   return (
-                    <p className="text-xs text-muted-foreground mt-2">
+                    <p className="strat-help-text-xs strat-mt-xs">
                       Bot / Simul. : historique des prix CLOB indisponible pour ces créneaux. Réessayer plus tard.
                     </p>
                   );
                 })()}
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <span className="text-xs text-muted-foreground mr-1">Affichage : {resolvedDaysCount} derniers jours</span>
-                  <button type="button" onClick={refreshResolved} disabled={resolvedLoading} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                <div className="strat-actions-row">
+                  <span className="strat-help-text">Affichage : {resolvedDaysCount} derniers jours</span>
+                  <button type="button" onClick={refreshResolved} disabled={resolvedLoading} className="btn btn--default btn--outline">
                     Rafraîchir
                   </button>
-                  <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolvedLoading || extraDays >= 4} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                  <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolvedLoading || extraDays >= 4} className="btn btn--default btn--outline">
                     Un jour de plus
                   </button>
-                  <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolvedLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                  <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolvedLoading || extraDays <= 0} className="btn btn--default btn--outline">
                     Un jour de moins
                   </button>
                   <button
                     type="button"
                     onClick={() => setExtraDays(0)}
                     disabled={resolvedLoading || extraDays <= 0}
-                    className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+                    className="btn btn--default btn--outline"
                     title="Revenir directement aux 3 derniers jours (extraDays = 0)"
                   >
                     3 jours
@@ -701,87 +763,77 @@ export function BitcoinUpDownStrategy() {
             {resultMode === '15m' && (
               <>
                 {/* Fenêtre de données 15m : toujours visible pour indiquer la période et le statut */}
-                <div className="rounded-xl border border-border/50 bg-muted/10 p-4 space-y-2 mb-4">
-                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <div className="strat-data-window">
+                  <h4 className="strat-data-window__title">
                     Fenêtre de données (15 min)
                   </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Période : <strong className="text-foreground">{resolvedDaysCount} derniers jours</strong>
+                  <p className="strat-data-window__body">
+                    Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
                     {' '}({Math.min(672, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
                     {resolved15mLoading && ' Chargement en cours…'}
                     {!resolved15mLoading && resolved15m.length === 0 && !resolved15mError && (
-                      <span className="block mt-1 text-amber-600 dark:text-amber-400">Aucun créneau résolu récupéré pour cette période.</span>
+                      <span className="strat-block-msg strat-text-amber">Aucun créneau résolu récupéré pour cette période.</span>
                     )}
                     {resolved15mError && (
-                      <span className="block mt-1 text-red-500 dark:text-red-400">{resolved15mError}</span>
+                      <span className="strat-block-msg strat-text-red">{resolved15mError}</span>
                     )}
                     {!resolved15mLoading && resolved15m.length > 0 && (
-                      <span className="block mt-1 text-emerald-600 dark:text-emerald-400">{resolved15m.length} créneau{resolved15m.length !== 1 ? 'x' : ''} chargé{resolved15m.length !== 1 ? 's' : ''} (résolus).</span>
+                      <span className="strat-block-msg strat-text-green">{resolved15m.length} créneau{resolved15m.length !== 1 ? 'x' : ''} chargé{resolved15m.length !== 1 ? 's' : ''} (résolus).</span>
                     )}
-                    <span className="block mt-2 text-xs text-muted-foreground/90">
-                      Même règles que le bot : prix dans 97–97,5 % et pas d&apos;entrée dans les 4 dernières minutes du créneau 15 min. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
+                    <span className="strat-muted-tight">
+                      Même règles que le bot : prix dans 97–97,5 % ; fin de créneau 15 min non exclue pour l’instant (règle des 4 min réactivable plus tard). Fenêtre d’historique alignée sur la fin de créneau du slug Polymarket. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
                     </span>
                   </p>
                 </div>
-                {resolved15mError && <p className="text-sm text-red-500 dark:text-red-400">{resolved15mError}</p>}
+                {resolved15mError && <p className="strat-data-window__body strat-text-red">{resolved15mError}</p>}
                 {resolved15mLoading ? (
-                  <p className="text-sm text-muted-foreground">Chargement…</p>
+                  <p className="strat-data-window__body">Chargement…</p>
                 ) : resolved15m.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
+                  <p className="strat-data-window__body">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
                 ) : (
                   <>
-                    <div className="overflow-x-auto rounded-lg border border-border/50 max-h-[400px] overflow-y-auto">
-                      <table className="w-full text-sm border-collapse">
-                        <thead className="sticky top-0 bg-muted/30 z-10">
-                          <tr className="border-b border-border">
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Résultat</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bot aurait pris</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Prix d&apos;entrée</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Signal</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Heure trade</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</th>
-                            <th className="text-left py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Simul.</th>
-                            <th className="text-right py-3 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">PnL net</th>
+                    <div className="strat-table-wrap strat-table-wrap--scroll">
+                      <table className="strat-table">
+                        <thead>
+                          <tr>
+                            <th className="strat-th">Résultat</th>
+                            <th className="strat-th">Bot aurait pris</th>
+                            <th className="strat-th">Prix d&apos;entrée</th>
+                            <th className="strat-th">Signal</th>
+                            <th className="strat-th">Heure trade</th>
+                            <th className="strat-th">Type</th>
+                            <th className="strat-th">Simul.</th>
                           </tr>
                         </thead>
                         <tbody>
                           {resolved15m.map((r, i) => {
-                            const rowKey = `${r.eventSlug}-${r.endDate ?? ''}`;
-                            const netPnl = r.botWon !== null ? backtestResult15m.netPnlMap.get(rowKey) : undefined;
                             const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
                             return (
-                              <tr key={`${r.eventSlug}-${i}`} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${i % 2 === 1 ? 'bg-muted/5' : ''}`}>
-                                <td className="py-3 px-3 font-medium">
-                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="text-muted-foreground">En attente</span> : r.winner ?? '—'}
+                              <tr key={`${r.eventSlug}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                                <td className="strat-td strat-td--strong">
+                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
                                 </td>
-                                <td className="py-3 px-3 text-muted-foreground">
+                                <td className="strat-td strat-td--muted">
                                   {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
                                 </td>
-                                <td className="py-3 px-3">
+                                <td className="strat-td">
                                   {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
                                 </td>
-                                <td className="py-3 px-3">
+                                <td className="strat-td strat-td--signal">
                                   {signalLabel ?? '—'}
                                 </td>
-                                <td className="py-3 px-3">
+                                <td className="strat-td">
                                   {r.botEntryTimestamp != null
                                     ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                                     : '—'}
                                 </td>
-                                <td className="py-3 px-3">
+                                <td className="strat-td">
                                   {r.botOrderType ?? '—'}
                                 </td>
-                                <td className="py-3 px-3">
-                                  {r.botWon === true && <span className="font-medium text-emerald-600 dark:text-emerald-400">Gagné</span>}
-                                  {r.botWon === false && <span className="font-medium text-rose-600 dark:text-rose-400">Perdu</span>}
-                                  {r.botWon == null && (r.winner === null ? <span className="text-muted-foreground">En attente</span> : <span className="text-muted-foreground">Données indisponibles</span>)}
-                                </td>
-                                <td className="py-3 px-3 text-right font-medium tabular-nums">
-                                  {netPnl !== undefined ? (
-                                    <span className={netPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                                      {netPnl >= 0 ? '+' : ''}{formatMoney(netPnl)}
-                                    </span>
-                                  ) : '—'}
+                                <td className="strat-td">
+                                  {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
+                                  {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
+                                  {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
                                 </td>
                               </tr>
                             );
@@ -790,57 +842,27 @@ export function BitcoinUpDownStrategy() {
                       </table>
                     </div>
                     {backtestResult15m.withSimul.length > 0 && (
-                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                        <p>
-                          Simulation : <strong>{backtestResult15m.won}</strong> gagnés / <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 97–97,5 %.
-                        </p>
-                        {initialBalance > 0 && (
-                          <p>
-                            Backtest solde initial <strong>{formatMoney(initialBalance)}</strong> : capital final <strong>{formatMoney(backtestResult15m.capital)}</strong>
-                            {backtestResult15m.capital > 0 && (
-                              <span>
-                                {' '}(<span className={backtestResult15m.capital >= initialBalance ? 'text-emerald-500' : 'text-rose-500'}>
-                                  {(((backtestResult15m.capital - initialBalance) / initialBalance) * 100).toFixed(1)} %
-                                </span>)
-                              </span>
-                            )}
-                            {backtestResult15m.capital > 0 && (
-                              <> · PnL net total <strong className={(backtestResult15m.capital - initialBalance) >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
-                                {(backtestResult15m.capital - initialBalance) >= 0 ? '+' : ''}{formatMoney(backtestResult15m.capital - initialBalance)}
-                              </strong></>
-                            )}
-                            {backtestResult15m.maxDrawdown > 0 && <> · drawdown max env. {(backtestResult15m.maxDrawdown * 100).toFixed(1)} %</>}
-                            {includeFees && backtestResult15m.feesPaid > 0 && <> · frais estimés {formatMoney(backtestResult15m.feesPaid)}</>}
-                          </p>
-                        )}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] text-muted-foreground">Backtest :</span>
-                          <button type="button" onClick={() => setIncludeFees((v) => !v)} className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${includeFees ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-                            {includeFees ? 'Frais ON' : 'Frais OFF'}
-                          </button>
-                          <label className="flex items-center gap-1.5 text-[11px]">
-                            <span>Solde départ</span>
-                            <input type="number" min="0" step="10" value={initialBalance} onChange={(e) => setInitialBalance(Number(e.target.value) || 0)} className="w-20 rounded border border-border bg-background/50 px-2 py-1 text-xs" />
-                          </label>
-                        </div>
-                      </div>
+                      <p className="strat-results-foot">
+                        Simulation : <strong className="strat-text-green">{backtestResult15m.won}</strong> gagnés /{' '}
+                        <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 97–97,5 % · Données historiques CLOB.
+                      </p>
                     )}
-                    <div className="flex flex-wrap items-center gap-2 mt-3">
-                      <span className="text-xs text-muted-foreground mr-1">Affichage : {resolvedDaysCount} derniers jours</span>
-                      <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                    <div className="strat-actions-row">
+                      <span className="strat-help-text">Affichage : {resolvedDaysCount} derniers jours</span>
+                      <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--default btn--outline">
                         Rafraîchir
                       </button>
-                      <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolved15mLoading || extraDays >= 4} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                      <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolved15mLoading || extraDays >= 4} className="btn btn--default btn--outline">
                         Un jour de plus
                       </button>
-                      <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolved15mLoading || extraDays <= 0} className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50">
+                      <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolved15mLoading || extraDays <= 0} className="btn btn--default btn--outline">
                         Un jour de moins
                       </button>
                       <button
                         type="button"
                         onClick={() => setExtraDays(0)}
                         disabled={resolved15mLoading || extraDays <= 0}
-                        className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+                        className="btn btn--default btn--outline"
                         title="Revenir directement aux 3 derniers jours (extraDays = 0)"
                       >
                         3 jours
@@ -850,102 +872,8 @@ export function BitcoinUpDownStrategy() {
                 )}
               </>
             )}
-          </div>
-
-          {resultMode === 'hourly' && resolvedHours.length > 0 && (() => {
-            const last24h = resolvedHours.filter(
-              (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
-            );
-            const total24 = last24h.length;
-            const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
-            const pctFilled24 = total24 > 0 ? ((withTrade24 / total24) * 100).toFixed(1) : '0';
-            const withEntry = resolvedHours.filter((r) => r.botEntryTimestamp != null && r.endDate);
-            const sessionDurationSec = 3600;
-            const minutesList = withEntry.map((r) => {
-              const sessionEndSec = new Date(r.endDate).getTime() / 1000;
-              const sessionStartSec = sessionEndSec - sessionDurationSec;
-              return (r.botEntryTimestamp - sessionStartSec) / 60;
-            });
-            const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
-            return (
-              <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-2">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                  Moyenne d&apos;entrée des trades
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Sur les <strong className="text-foreground">24 dernières heures</strong> : <strong className="text-primary">{pctFilled24} %</strong> des créneaux ont une position prise (<strong>{withTrade24}</strong> / {total24} créneaux). Le reste en données indisponibles.
-                </p>
-                {withEntry.length > 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Sur les <strong className="text-foreground">{withEntry.length}</strong> sessions affichées avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau horaire.
-                  </p>
-                )}
-              </div>
-            );
-          })()}
-
-          {resultMode === '15m' && resolved15m.length > 0 && (() => {
-            const last24h = resolved15m.filter(
-              (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
-            );
-            const total24 = last24h.length;
-            const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
-            const pctFilled24 = total24 > 0 ? ((withTrade24 / total24) * 100).toFixed(1) : '0';
-            const withEntry = resolved15m.filter((r) => r.botEntryTimestamp != null && r.endDate);
-            const sessionDurationSec = 15 * 60;
-            const minutesList = withEntry.map((r) => {
-              const sessionEndSec = new Date(r.endDate).getTime() / 1000;
-              const sessionStartSec = sessionEndSec - sessionDurationSec;
-              return (r.botEntryTimestamp - sessionStartSec) / 60;
-            });
-            const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
-            return (
-              <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-2">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-                  Moyenne d&apos;entrée des trades
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Sur les <strong className="text-foreground">24 dernières heures</strong> : <strong className="text-primary">{pctFilled24} %</strong> des créneaux 15 min ont une position prise (<strong>{withTrade24}</strong> / {total24} créneaux). Le reste en données indisponibles.
-                </p>
-                {withEntry.length > 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Sur les <strong className="text-foreground">{withEntry.length}</strong> créneaux affichés avec heure d&apos;entrée : le bot entre en moyenne à <strong className="text-primary">{avgMinutes.toFixed(1)} min</strong> après le début du créneau de 15 min.
-                  </p>
-                )}
-              </div>
-            );
-          })()}
-
-          <div className="rounded-xl border border-border/50 bg-muted/10 p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-primary/60" aria-hidden />
-              Paramètres de session
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Objectif : <strong className="text-primary">environ 3 % par créneau</strong> (réinvestissement du solde à chaque créneau ; horaire ou 15 min selon le bot).
-            </p>
-            <div className="flex flex-wrap items-end gap-4">
-              <div className="space-y-1 min-w-[140px]">
-                <Label htmlFor="strat-initial">Mise de départ (€)</Label>
-                <input
-                  id="strat-initial"
-                  type="number"
-                  min="0"
-                  step="10"
-                  value={initialBalance}
-                  onChange={(e) => setInitialBalance(Number(e.target.value) || 0)}
-                  className={`${inputClass} bg-white text-slate-900 placeholder:text-slate-500 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-400`}
-                />
-              </div>
-              <p className="text-sm text-muted-foreground pb-2">
-                Solde de départ : <strong className="text-primary">{formatMoney(initialBalance)}</strong>
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,4 @@
 import { formatVolume, formatPercent, formatTimeUntil, getOpportunityCategory, getMarketEndDate } from '../utils/formatters';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -44,55 +43,69 @@ export function MarketCard({ market }) {
       : '#';
 
   return (
-    <a href={polymarketUrl} target="_blank" rel="noopener noreferrer" className="group block">
-      <Card className="relative h-full overflow-hidden border-border/50 bg-card/80 transition hover:border-primary/30 hover:bg-card">
+    <a href={polymarketUrl} target="_blank" rel="noopener noreferrer" className="market-card-link">
+      <Card className="relative h-full overflow-hidden market-card-surface">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-500/10 via-cyan-500/0 to-emerald-500/10"
+          style={{
+            pointerEvents: 'none',
+            position: 'absolute',
+            inset: 0,
+            background:
+              'linear-gradient(135deg, rgba(167,139,250,0.12) 0%, rgba(56,189,248,0.00) 45%, rgba(34,197,94,0.10) 100%)',
+          }}
         />
-        <CardContent className="relative z-10 p-5">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <Badge variant={OPPORTUNITY_VARIANTS[category]} className={cn(category === 'soon' && 'bg-amber-500/15 text-amber-400 border-amber-500/30')}>
+        <CardContent className="relative z-10">
+          <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <Badge variant={OPPORTUNITY_VARIANTS[category]} className={cn(category === 'soon' && 'badge--secondary')}>
               {oppLabel}
             </Badge>
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
+              <svg style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               {formatTimeUntil(endDate)}
             </span>
           </div>
-          <h3 className="mb-4 line-clamp-2 text-base font-semibold leading-snug text-foreground">
+          <h3 style={{ marginBottom: 16, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontSize: 16, fontWeight: 700, lineHeight: 1.25 }}>
             {question}
           </h3>
-          <div className="mb-4 flex items-baseline gap-2">
-            <span className="text-sm text-muted-foreground">Volume</span>
-            <span className="text-lg font-bold text-primary">{formatVolume(volume)}</span>
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Volume</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--blue)' }}>{formatVolume(volume)}</span>
           </div>
-          <div className="space-y-2.5">
-            <div className="flex justify-between text-sm font-medium">
-              <span className="text-primary">{outcomes[0] ?? 'Yes'} {formatPercent(yesPct)}</span>
-              <span className="text-destructive">{outcomes[1] ?? 'No'} {formatPercent(noPct)}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}>
+              <span style={{ color: 'var(--blue)' }}>{outcomes[0] ?? 'Yes'} {formatPercent(yesPct)}</span>
+              <span style={{ color: 'var(--red)' }}>{outcomes[1] ?? 'No'} {formatPercent(noPct)}</span>
             </div>
-            <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+            <div style={{ display: 'flex', height: 10, overflow: 'hidden', borderRadius: 999, background: 'rgba(255,255,255,0.06)' }}>
               <div
-                className="rounded-l-full bg-primary transition-all duration-300"
-                style={{ width: `${yesPct * 100}%` }}
+                style={{
+                  borderRadius: '999px 0 0 999px',
+                  background: 'var(--blue-muted)',
+                  transition: 'width 300ms ease',
+                  width: `${yesPct * 100}%`,
+                }}
               />
               <div
-                className="rounded-r-full bg-destructive transition-all duration-300"
-                style={{ width: `${noPct * 100}%` }}
+                style={{
+                  borderRadius: '0 999px 999px 0',
+                  background: 'var(--red-muted)',
+                  transition: 'width 300ms ease',
+                  width: `${noPct * 100}%`,
+                }}
               />
             </div>
           </div>
-          <div className="mt-4 flex items-center justify-end gap-1.5 text-xs text-muted-foreground group-hover:text-primary">
+          <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
             <span>Ouvrir sur Polymarket</span>
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg style={{ width: 16, height: 16 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </a>
   );
 }

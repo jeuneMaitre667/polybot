@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
-import { MiseMax15mBookChart } from '@/components/MiseMax15mBookChart.jsx';
+import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
+import { TradeHistory } from '@/components/TradeHistory.jsx';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -17,57 +16,6 @@ function computePnl(balanceHistory, currentBalance) {
     currentBalance != null ? currentBalance : history.length > 0 ? Number(history[history.length - 1].balance) : null;
   if (firstBalance == null || lastBalance == null || firstBalance <= 0) return null;
   return ((lastBalance - firstBalance) / firstBalance) * 100;
-}
-
-/** Lignes texte pour fillRatio + compléments FAK (API status-server). */
-function FillExecutionLines({ fillStats }) {
-  if (!fillStats || typeof fillStats !== 'object') return null;
-  const fc = Number(fillStats.fillRatioCount) || 0;
-  const avg = fillStats.avgFillRatio;
-  const minF = fillStats.minFillRatio;
-  const maxF = fillStats.maxFillRatio;
-  const withRetry = Number(fillStats.ordersWithPartialRetries) || 0;
-  const legs = Number(fillStats.totalPartialRetryLegs) || 0;
-  const avgRetry = fillStats.avgPartialRetriesWhenUsed;
-
-  const parts = [];
-  if (fc > 0 && avg != null) {
-    const pct = (Number(avg) * 100).toFixed(1);
-    const range =
-      minF != null && maxF != null && (minF !== maxF || fc > 1)
-        ? ` (min ${(Number(minF) * 100).toFixed(1)} % · max ${(Number(maxF) * 100).toFixed(1)} %)`
-        : '';
-    parts.push(
-      <span key="fr">
-        Remplissage moy. <strong className="text-slate-100 tabular-nums">{pct} %</strong> du montant demandé (CLOB){range}
-        <span className="text-muted-foreground"> — {fc} ordre{fc !== 1 ? 's' : ''} avec donnée</span>
-      </span>
-    );
-  }
-  if (withRetry > 0) {
-    parts.push(
-      <span key="retry">
-        Compléments FAK : <strong className="text-slate-100">{withRetry}</strong> trade{withRetry !== 1 ? 's' : ''} avec reliquat
-        {legs > 0 && (
-          <>
-            {' '}
-            · <strong className="text-slate-100 tabular-nums">{legs}</strong> POST supplémentaire{legs !== 1 ? 's' : ''}
-          </>
-        )}
-        {avgRetry != null && (
-          <span className="text-muted-foreground"> (moy. {avgRetry} complément/trade concerné)</span>
-        )}
-      </span>
-    );
-  }
-  if (parts.length === 0) return null;
-  return (
-    <div className="space-y-1.5 text-[11px] text-slate-300/95 leading-relaxed">
-      {parts.map((p, i) => (
-        <div key={i}>{p}</div>
-      ))}
-    </div>
-  );
 }
 
 export function BotOverview() {
@@ -115,7 +63,9 @@ export function BotOverview() {
     error: miseMax15mError,
     lastAt: miseMax15mLastAt,
     refresh: refreshMiseMax15m,
-    seriesBySlot: miseMax15mSeries,
+    currentSlotBookAsksUp: miseMax15mBookAsksUp,
+    currentSlotBookAsksDown: miseMax15mBookAsksDown,
+    lastResolved15mSlot: miseMaxLastResolved15mSlot,
   } = use15mMiseMaxBookAvg({ enabled: show15m, slotCount: 36, staggerMs: 45 });
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
@@ -125,9 +75,6 @@ export function BotOverview() {
   const hasActiveCycleLatency = latencyMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
   const activeSignalDecisionLatency = latencyMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
   const hasActiveSignalDecisionLatency = latencyMode === '15m' ? hasSignalDecisionLatencyStats15m : hasSignalDecisionLatencyStats;
-
-  const cardBase = 'border border-border/60 bg-card/90 shadow-card rounded-xl min-h-[140px] flex flex-col';
-  const rowClass = 'flex items-center justify-between gap-3 py-2 first:pt-0 border-b border-border/40 last:border-0';
 
   const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
   const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
@@ -163,387 +110,347 @@ export function BotOverview() {
   if (!statusUrl) return null;
 
   return (
-    <div className="grid gap-6 sm:grid-cols-2">
-      {/* Ligne 1 : Solde + PnL (fusion) */}
-      <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-emerald-500/30 sm:col-span-2`}>
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-emerald-500/15 via-cyan-500/0 to-violet-500/10"
-        />
-        <CardHeader className="relative z-10 pb-2 flex flex-row items-center justify-between gap-2">
-          <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-            Solde, PnL &amp; Performance
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="relative z-10 pt-0 flex-1">
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div className="space-y-0">
-              <div className={rowClass}>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">Solde (horaire)</span>
-                <span className="text-xl font-semibold tabular-nums text-emerald-400">{balance != null ? formatUsd(balance) : '—'}</span>
-              </div>
-              {show15m && (
-                <div className={rowClass}>
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">Solde (15 min)</span>
-                  <span className="text-xl font-semibold tabular-nums text-emerald-400">{balance15m != null ? formatUsd(balance15m) : '—'}</span>
-                </div>
-              )}
-              <p className="mt-3 text-[11px] text-muted-foreground/80">
-                {data?.at && new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                {show15m && data15m?.at && ` · 15m ${new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
-              </p>
-            </div>
-
-            <div className="space-y-0">
-              <div className={rowClass}>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">PnL (horaire)</span>
-                <span className={`text-xl font-semibold tabular-nums ${pnl != null && pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)} %` : '—'}
-                </span>
-              </div>
-              {show15m && (
-                <div className={rowClass}>
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">PnL (15 min)</span>
-                  <span className={`text-xl font-semibold tabular-nums ${pnl15m != null && pnl15m >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {pnl15m != null ? `${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(1)} %` : '—'}
-                  </span>
-                </div>
-              )}
-              <p className="mt-3 text-[11px] text-muted-foreground/80">PnL calculé sur l’historique de solde (période graphique).</p>
-            </div>
+    <div className="bot-overview-grid">
+      <div className="grid-main">
+        <div className="card">
+          <div className="card-label">Solde Horaire</div>
+          <div className="card-value green">{balance != null ? formatUsd(balance) : '—'}</div>
+          <div className="card-sub">
+            {data?.at ? new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} · 1h
           </div>
+        </div>
+        <div className="card">
+          <div className="card-label">Solde 15 Min</div>
+          <div className="card-value green">{show15m && balance15m != null ? formatUsd(balance15m) : '—'}</div>
+          <div className="card-sub">
+            {show15m && data15m?.at ? new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} · 15m
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-label">Ordres actifs</div>
+          <div className="overview-two-lines">
+            <div>Horaire <span>{orders24h ?? '—'}</span></div>
+            <div>15 Min <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
+          </div>
+        </div>
+      </div>
 
-          {/* Performance 24h fusionnée dans la carte du haut */}
-          <div className="mt-4 pt-3 border-t border-border/40">
-            <div className={rowClass}>
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Horaire</span>
-              <span className="text-sm font-medium text-slate-200">
-                {orders24h != null ? `${orders24h} ordre${orders24h !== 1 ? 's' : ''}` : '—'}
-                {winRate != null && (
-                  <span
-                    className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[11px] ${
-                      winRate >= 50 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'
-                    }`}
-                  >
-                    Win {winRate.toFixed(1)} %
-                  </span>
-                )}
+      <div className="grid-main">
+        <div className="card">
+          <div className="card-label">PNL Horaire (24h)</div>
+          <div className={`card-value ${pnl != null ? (pnl >= 0 ? 'green' : 'red') : ''}`}>
+            {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)} %` : '—'}
+          </div>
+          <div className="card-sub">{orders24h ? `${orders24h} ordre(s)` : 'Aucun trade exécuté'}</div>
+        </div>
+        <div className="card">
+          <div className="card-label">PNL 15 Min (24h)</div>
+          <div className={`card-value ${pnl15m != null ? (pnl15m >= 0 ? 'green' : 'red') : ''}`}>
+            {show15m && pnl15m != null ? `${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(1)} %` : '—'}
+          </div>
+          <div className="card-sub">{show15m && orders24h15m ? `${orders24h15m} ordre(s)` : 'Aucun trade exécuté'}</div>
+        </div>
+        <div className="card">
+          <div className="card-label">Prix signal</div>
+          <div className="overview-two-lines">
+            <div>
+              Horaire :{' '}
+              <span
+                className={
+                  data?.signalPriceSource === 'clob'
+                    ? 'overview-signal-source--clob'
+                    : data?.signalPriceSource === 'gamma'
+                      ? 'overview-signal-source--gamma'
+                      : 'overview-signal-source--muted'
+                }
+              >
+                {data?.signalPriceSource === 'clob'
+                  ? 'CLOB best ask'
+                  : data?.signalPriceSource === 'gamma'
+                    ? 'Gamma'
+                    : '—'}
               </span>
             </div>
-            {show15m && (
-              <div className={rowClass}>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">15 min</span>
-                <span className="text-sm font-medium text-slate-200">
-                  {orders24h15m != null ? `${orders24h15m} ordre${orders24h15m !== 1 ? 's' : ''}` : '—'}
-                  {winRate15m != null && (
-                    <span
-                      className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[11px] ${
-                        winRate15m >= 50 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'
-                      }`}
-                    >
-                      Win {winRate15m.toFixed(1)} %
-                    </span>
-                  )}
-                </span>
-              </div>
-            )}
-            {(data?.fillExecutionStats24h != null || (show15m && data15m?.fillExecutionStats24h != null)) && (
-            <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
-              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Exécution marché (24 h · orders.log)
-              </div>
-              {data?.fillExecutionStats24h != null && (
-                <div>
-                  <div className="text-[10px] text-muted-foreground mb-1">Bot horaire</div>
-                  <FillExecutionLines fillStats={data.fillExecutionStats24h} />
-                  {(data.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
-                    (data.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
-                    (orders24h ?? 0) === 0 && (
-                      <p className="text-[11px] text-muted-foreground/90">Aucun ordre sur 24 h.</p>
-                    )}
-                  {(data.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
-                    (data.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
-                    (orders24h ?? 0) > 0 && (
-                      <p className="text-[10px] text-amber-600/90 dark:text-amber-400/90">
-                        Ordres présents sans fillRatio / compléments — redéploie le bot (version récente) + status-server.
-                      </p>
-                    )}
-                </div>
-              )}
-              {show15m && data15m?.fillExecutionStats24h != null && (
-                <div className="pt-2 border-t border-border/30">
-                  <div className="text-[10px] text-muted-foreground mb-1">Bot 15m</div>
-                  <FillExecutionLines fillStats={data15m.fillExecutionStats24h} />
-                  {(data15m.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
-                    (data15m.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
-                    (orders24h15m ?? 0) === 0 && (
-                      <p className="text-[11px] text-muted-foreground/90">Aucun ordre sur 24 h.</p>
-                    )}
-                  {(data15m.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
-                    (data15m.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
-                    (orders24h15m ?? 0) > 0 && (
-                      <p className="text-[10px] text-amber-600/90 dark:text-amber-400/90">
-                        Ordres sans métriques d’exécution — met à jour bot + status-server sur ce serveur.
-                      </p>
-                    )}
-                </div>
-              )}
+            <div>
+              15m :{' '}
+              <span
+                className={
+                  data15m?.signalPriceSource === 'clob'
+                    ? 'overview-signal-source--clob'
+                    : data15m?.signalPriceSource === 'gamma'
+                      ? 'overview-signal-source--gamma'
+                      : 'overview-signal-source--muted'
+                }
+              >
+                {data15m?.signalPriceSource === 'clob'
+                  ? 'CLOB best ask'
+                  : data15m?.signalPriceSource === 'gamma'
+                    ? 'Gamma'
+                    : '—'}
+              </span>
             </div>
-            )}
           </div>
-          {(data?.signalPriceSource || (show15m && data15m?.signalPriceSource)) && (
-            <p className="mt-3 text-[11px] text-muted-foreground/90 border-t border-border/40 pt-3 leading-relaxed">
-              <span className="font-medium text-muted-foreground">Prix signal (poll / fetchSignals)</span>
-              {' · '}
-              {data?.signalPriceSource && (
-                <span title={`MARKET_MODE lu sur ce serveur : ${data.marketMode ?? '?'}`}>
-                  Horaire : {data.signalPriceSource === 'clob' ? 'CLOB (best ask)' : 'Gamma'}
-                </span>
-              )}
-              {show15m && data15m?.signalPriceSource && (
+        </div>
+      </div>
+
+      {/* Latences : même grille / mêmes cartes que Solde & Performance */}
+      <div className="col-span-full overview-latency-section">
+        <div className="overview-latency-heading">
+          <div className="section-title overview-latency-section-title">
+            <h2>Latences</h2>
+            <div className="line" />
+          </div>
+          {show15m && (
+            <div className="overview-toggle" role="group" aria-label="Source latences">
+              <button
+                type="button"
+                onClick={() => setLatencyMode('1h')}
+                className={`overview-toggle-btn overview-toggle-btn--hour ${latencyMode === '1h' ? 'overview-toggle-btn--active' : ''}`}
+              >
+                Horaire
+              </button>
+              <button
+                type="button"
+                onClick={() => setLatencyMode('15m')}
+                className={`overview-toggle-btn overview-toggle-btn--15m ${latencyMode === '15m' ? 'overview-toggle-btn--active' : ''}`}
+              >
+                15m
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="grid-main overview-latency-grid-main">
+          {/* Trade */}
+          <div className="card latency-kpi-card">
+            <div className="card-label">Trade (24 h)</div>
+            <div
+              className={`card-value ${hasActiveLatency && activeLatency?.all?.avgMs != null ? 'green' : ''}`}
+            >
+              {hasActiveLatency && activeLatency?.all?.avgMs != null
+                ? `~${Math.round(activeLatency.all.avgMs / 1000)} s`
+                : '—'}
+            </div>
+            <div className="card-sub latency-kpi-card__body">
+              {hasActiveLatency && activeLatency?.all?.avgMs != null ? (
                 <>
-                  {data?.signalPriceSource ? ' · ' : null}
-                  <span title={`MARKET_MODE lu sur ce serveur : ${data15m.marketMode ?? '?'}`}>
-                    15m : {data15m.signalPriceSource === 'clob' ? 'CLOB (best ask)' : 'Gamma'}
-                  </span>
+                  <div>
+                    Moy {Math.round(activeLatency.all.avgMs)} ms · p95{' '}
+                    {activeLatency.all.p95Ms != null ? `${Math.round(activeLatency.all.p95Ms)} ms` : '—'}
+                  </div>
+                  <div className="latency-kpi-card__sub">
+                    {activeLatency.all.count} trade{activeLatency.all.count !== 1 ? 's' : ''}
+                    {((activeLatency.ws?.count ?? 0) > 0 || (activeLatency.poll?.count ?? 0) > 0) && (
+                      <>
+                        {' '}
+                        · WS ~{activeLatency.ws?.avgMs != null ? `${Math.round(activeLatency.ws.avgMs)} ms` : '—'} · Poll ~
+                        {activeLatency.poll?.avgMs != null ? `${Math.round(activeLatency.poll.avgMs)} ms` : '—'}
+                      </>
+                    )}
+                  </div>
+                  <div className="latency-kpi-card__sub">
+                    Détails placeOrder :{' '}
+                    <span className="overview-num-strong">{activeLatencyBreakdown?.all?.placeOrder?.count ?? 0}</span>{' '}
+                    mesures sur 24 h.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>Mesure seulement quand un ordre est placé.</div>
+                  <div className="latency-kpi-card__sub">
+                    placeOrder : <span className="overview-num-strong">{placeOrderCount}</span> mesures
+                  </div>
                 </>
               )}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+            </div>
+
+            <details className="overview-details latency-kpi-details">
+              <summary className="overview-details-summary">Détails (avg · p95)</summary>
+              {hasAnyTradeLatencyBreakdown ? (
+                <>
+                  <div className="overview-details-grid">
+                    <div className="overview-details-muted">Étape</div>
+                    <div className="overview-details-muted">Avg</div>
+                    <div className="overview-details-muted">p95</div>
+                    <div className="overview-details-muted">N</div>
+                    <div className="overview-details-muted">bestAsk</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.bestAsk?.avgMs)}</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.bestAsk?.p95Ms)}</div>
+                    <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.bestAsk?.count)}</div>
+                    <div className="overview-details-muted">creds</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.creds?.avgMs)}</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.creds?.p95Ms)}</div>
+                    <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.creds?.count)}</div>
+                    <div className="overview-details-muted">balance</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.balance?.avgMs)}</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.balance?.p95Ms)}</div>
+                    <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.balance?.count)}</div>
+                    <div className="overview-details-muted">book</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.book?.avgMs)}</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.book?.p95Ms)}</div>
+                    <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.book?.count)}</div>
+                    <div className="overview-details-muted">placeOrder</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.placeOrder?.avgMs)}</div>
+                    <div className="overview-num-strong">{formatMs(activeLatencyBreakdown?.all?.placeOrder?.p95Ms)}</div>
+                    <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.placeOrder?.count)}</div>
+                  </div>
+                  <div className="overview-last-update">
+                    Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
+                  </div>
+                </>
+              ) : (
+                <div className="overview-latency-note">
+                  Pas encore assez de données pour le breakdown (aucune mesure sur bestAsk/creds/balance/book) sur les
+                  24h.
+                </div>
+              )}
+            </details>
+
+            <span
+              className={`latency-card-pill ${hasActiveLatency && activeLatency?.all?.avgMs != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'}`}
+            >
+              {hasActiveLatency && activeLatency?.all?.avgMs != null ? 'Optimal' : 'En attente'}
+            </span>
+          </div>
+
+          {/* Cycle */}
+          <div className="card latency-kpi-card">
+            <div className="card-label">Cycle bot (24 h)</div>
+            <div
+              className={`card-value ${hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? 'green' : ''}`}
+            >
+              {hasActiveCycleLatency && activeCycleLatency?.avgMs != null
+                ? `~${Math.round(activeCycleLatency.avgMs)} ms`
+                : '—'}
+            </div>
+            <div className="card-sub">
+              {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? (
+                <>
+                  p95 {activeCycleLatency.p95Ms ?? '—'} ms · {activeCycleLatency.count} cycle
+                  {activeCycleLatency.count !== 1 ? 's' : ''}
+                </>
+              ) : (
+                'Mesure même sans trade.'
+              )}
+            </div>
+            <span
+              className={`latency-card-pill ${hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'}`}
+            >
+              {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? 'Optimal' : 'En attente'}
+            </span>
+          </div>
+
+          {/* Signal → décision */}
+          <div className="card latency-kpi-card">
+            <div className="card-label">Signal → décision (24 h)</div>
+            <div
+              className={`card-value ${hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? 'green' : ''}`}
+            >
+              {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null
+                ? `~${Math.round(activeSignalDecisionLatency.all.avgMs)} ms`
+                : '—'}
+            </div>
+            <div className="card-sub latency-kpi-card__body">
+              {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? (
+                <>
+                  <div>
+                    p95 {activeSignalDecisionLatency.all.p95Ms ?? '—'} ms · {activeSignalDecisionLatency.all.count}{' '}
+                    mesure{activeSignalDecisionLatency.all.count !== 1 ? 's' : ''}
+                  </div>
+                  {activeDecisionTotal > 0 && (
+                    <div className="latency-kpi-card__sub">
+                      no_signal {formatPct(activeDecisionReasons?.no_signal ?? 0, activeDecisionTotal)} · liquidity_ok{' '}
+                      {formatPct(activeDecisionReasons?.liquidity_ok ?? 0, activeDecisionTotal)} · liquidity_null{' '}
+                      {formatPct(activeDecisionReasons?.liquidity_null ?? 0, activeDecisionTotal)}
+                    </div>
+                  )}
+                </>
+              ) : (
+                'Mesure même sans solde (inclut no_signal).'
+              )}
+            </div>
+            <span
+              className={`latency-card-pill ${hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'}`}
+            >
+              {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? 'Optimal' : 'En attente'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-full trade-history-section">
+        <div className="overview-latency-heading">
+          <div className="section-title overview-latency-section-title">
+            <h2>Historique des trades</h2>
+            <div className="line" />
+          </div>
+        </div>
+        <TradeHistory hideCardTitle />
+      </div>
 
       {show15m && (
-        <Card className={`${cardBase} relative overflow-hidden border-t-2 border-t-amber-500/35 sm:col-span-2`}>
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 bg-gradient-to-r from-amber-500/12 via-orange-500/5 to-amber-500/10"
-          />
-          <CardHeader className="relative z-10 pb-2 flex flex-row items-start justify-between gap-3 flex-wrap">
-            <div>
-              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-                Mise max carnet (Bitcoin 15m)
-              </CardTitle>
-              <p className="mt-1 text-[11px] text-muted-foreground/90 max-w-2xl leading-relaxed">
-                Moyenne côté dashboard : pour chaque créneau <code className="text-[10px] opacity-90">btc-updown-15m-&lt;fin UTC&gt;</code> (même slug que Polymarket), Gamma <strong>events/slug</strong> puis <strong>markets/slug</strong>, puis carnet CLOB Up &amp; Down — liquidité asks entre{' '}
-                <strong>97 % et 97,5 %</strong>, <strong>max(Up, Down)</strong>, moyenne sur <strong>36</strong> créneaux (~9 h). Indépendant de{' '}
-                <code className="text-[10px] opacity-90">liquidity-history</code> du bot.
-              </p>
+        <div className="col-span-full mise-max-section">
+          <div className="mise-max-section-head">
+            <div className="section-title mise-max-section-title">
+              <h2>Mise max carnet · Bitcoin 15m</h2>
+              <div className="line" />
             </div>
             <button
               type="button"
               onClick={() => refreshMiseMax15m()}
               disabled={miseMax15mLoading}
-              className="shrink-0 rounded-lg border border-border/60 bg-background/80 px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-50"
+              className="btn btn--default btn--outline btn--sm"
             >
               Rafraîchir
             </button>
-          </CardHeader>
-          <CardContent className="relative z-10 pt-0 flex-1">
+          </div>
+
+          <div className="card mise-max-card">
             {miseMax15mLoading && (
-              <p className="text-sm text-muted-foreground">Analyse des carnets 15m… (~quelques secondes)</p>
+              <p className="overview-state mise-max-card-state">Analyse des carnets 15m… (~quelques secondes)</p>
             )}
             {!miseMax15mLoading && miseMax15mError && (
-              <p className="text-sm text-amber-600 dark:text-amber-400">{miseMax15mError}</p>
+              <p className="overview-state overview-state--amber mise-max-card-state">{miseMax15mError}</p>
             )}
             {!miseMax15mLoading && !miseMax15mError && miseMaxSample15m > 0 && (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Moyenne</div>
-                  <div className="text-2xl font-semibold tabular-nums text-amber-200">{formatUsd(miseMaxAvg15m)}</div>
-                </div>
-                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Créneau actuel</div>
-                  <div className="text-xl font-semibold tabular-nums text-slate-100">{formatUsd(miseMaxCurrent15m)}</div>
-                </div>
-                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Min · Max</div>
-                  <div className="text-sm font-medium tabular-nums text-slate-200">
-                    {formatUsd(miseMaxMin15m)} · {formatUsd(miseMaxMax15m)}
+              <>
+                <div className="mise-max-kpi-row">
+                  <div className="mise-max-kpi-cell">
+                    <div className="mise-max-kpi-label">Moyenne</div>
+                    <div className="mise-max-kpi-value mise-max-kpi-value--green">{formatUsd(miseMaxAvg15m)}</div>
                   </div>
-                  {miseMaxMedian15m != null && (
-                    <div className="mt-1 text-[11px] text-muted-foreground">Médiane {formatUsd(miseMaxMedian15m)}</div>
-                  )}
-                </div>
-                <div className="rounded-xl border border-border/50 bg-slate-900/25 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Échantillon</div>
-                  <div className="text-sm font-medium text-slate-200">
-                    {miseMaxSample15m} créneau{miseMaxSample15m !== 1 ? 'x' : ''} avec carnet
+                  <div className="mise-max-kpi-cell">
+                    <div className="mise-max-kpi-label">Créneau actuel</div>
+                    <div className="mise-max-kpi-value mise-max-kpi-value--white">{formatUsd(miseMaxCurrent15m)}</div>
                   </div>
-                  <div className="mt-1 text-[11px] text-muted-foreground">
-                    {miseMaxSlotsAttempted15m} slugs testés (Gamma + CLOB)
-                  </div>
-                </div>
-              </div>
-            )}
-            {!miseMax15mLoading && !miseMax15mError && miseMaxSample15m > 0 && miseMax15mSeries?.length > 0 && (
-              <MiseMax15mBookChart series={miseMax15mSeries} />
-            )}
-            {miseMax15mLastAt && (
-              <p className="mt-3 text-[10px] text-muted-foreground/80">
-                Dernière mise à jour : {new Date(miseMax15mLastAt).toLocaleString('fr-FR')}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className={`${cardBase} bg-card/70 relative overflow-hidden border-t-2 border-t-cyan-500/30 sm:col-span-2`}>
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-cyan-500/30 via-cyan-500/12 to-emerald-500/30 opacity-100"
-        />
-        <CardHeader className="relative z-10 pb-2 space-y-2">
-          <div className="flex flex-row items-center justify-between gap-2 flex-wrap">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-[0.16em]">
-              Latences (trade + bot)
-            </CardTitle>
-            {show15m && (
-              <div className="flex rounded-lg border border-slate-600 bg-slate-800/60 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setLatencyMode('1h')}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    latencyMode === '1h' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Horaire
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLatencyMode('15m')}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    latencyMode === '15m' ? 'bg-slate-600 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  15m
-                </button>
-              </div>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="relative z-10 pt-0 flex-1">
-          <div className="grid gap-6 sm:grid-cols-3">
-            {/* Trade */}
-            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider">Trade (24 h)</div>
-              <div className="text-lg font-semibold tabular-nums text-slate-50">
-                {hasActiveLatency && activeLatency?.all?.avgMs != null ? `~${Math.round(activeLatency.all.avgMs / 1000)} s` : '—'}
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {hasActiveLatency && activeLatency?.all?.avgMs != null ? (
-                  <>
-                    Moy {Math.round(activeLatency.all.avgMs)} ms · p95 {activeLatency.all.p95Ms != null ? `${Math.round(activeLatency.all.p95Ms)} ms` : '—'}
-                    <span className="block opacity-80">
-                      {activeLatency.all.count} trade{activeLatency.all.count !== 1 ? 's' : ''}{' '}
-                      {((activeLatency.ws?.count ?? 0) > 0 || (activeLatency.poll?.count ?? 0) > 0) && (
-                        <>
-                          · WS ~{activeLatency.ws?.avgMs != null ? `${Math.round(activeLatency.ws.avgMs)} ms` : '—'} · Poll ~{activeLatency.poll?.avgMs != null ? `${Math.round(activeLatency.poll.avgMs)} ms` : '—'}
-                        </>
-                      )}
-                    </span>
-                  </>
-                ) : (
-                  'Mesure seulement quand un ordre est placé.'
-                )}
-
-                <div className="mt-1 opacity-80">
-                  Détails placeOrder:{' '}
-                  <span className="tabular-nums text-slate-200">{activeLatencyBreakdown?.all?.placeOrder?.count ?? 0}</span> mesures sur 24 h.
-                </div>
-
-                <details className="mt-2 rounded-lg border border-border/40 bg-slate-900/30 px-2 py-1.5">
-                  <summary className="cursor-pointer select-none text-[11px] text-slate-300">
-                    Détails (avg · p95)
-                  </summary>
-
-                  {hasAnyTradeLatencyBreakdown ? (
-                    <>
-                      <div className="mt-2 grid grid-cols-4 gap-x-3 gap-y-1 text-[11px]">
-                        <div className="text-muted-foreground">Étape</div>
-                        <div className="text-muted-foreground">Avg</div>
-                        <div className="text-muted-foreground">p95</div>
-                        <div className="text-muted-foreground">N</div>
-
-                        <div className="text-muted-foreground">bestAsk</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.avgMs)}</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.bestAsk?.p95Ms)}</div>
-                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.bestAsk?.count)}</div>
-
-                        <div className="text-muted-foreground">creds</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.avgMs)}</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.creds?.p95Ms)}</div>
-                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.creds?.count)}</div>
-
-                        <div className="text-muted-foreground">balance</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.avgMs)}</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.balance?.p95Ms)}</div>
-                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.balance?.count)}</div>
-
-                        <div className="text-muted-foreground">book</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.avgMs)}</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.book?.p95Ms)}</div>
-                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.book?.count)}</div>
-
-                        <div className="text-muted-foreground">placeOrder</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.avgMs)}</div>
-                        <div className="tabular-nums text-slate-200">{formatMs(activeLatencyBreakdown.all.placeOrder?.p95Ms)}</div>
-                        <div className="tabular-nums text-slate-200">{formatCount(activeLatencyBreakdown.all.placeOrder?.count)}</div>
-                      </div>
-                      <div className="mt-1 text-[10px] text-muted-foreground/80">
-                        Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
-                      </div>
-                    </>
-                  ) : (
-                    <div className="mt-2 text-[11px] text-slate-300/90">
-                      Pas encore assez de données pour le breakdown (aucune mesure sur bestAsk/creds/balance/book) sur les 24h.
+                  <div className="mise-max-kpi-cell">
+                    <div className="mise-max-kpi-label">Min — Max</div>
+                    <div className="mise-max-kpi-mid">
+                      {formatUsd(miseMaxMin15m)} — {formatUsd(miseMaxMax15m)}
                     </div>
-                  )}
-                </details>
-              </div>
-            </div>
-
-            {/* Cycle */}
-            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider">Cycle bot (24 h)</div>
-              <div className="text-lg font-semibold tabular-nums text-slate-50">
-                {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? `~${Math.round(activeCycleLatency.avgMs)} ms` : '—'}
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {hasActiveCycleLatency && activeCycleLatency?.avgMs != null ? (
-                  <>
-                    p95 {activeCycleLatency.p95Ms ?? '—'} ms · {activeCycleLatency.count} cycle{activeCycleLatency.count !== 1 ? 's' : ''}
-                  </>
-                ) : (
-                  'Mesure même sans trade.'
-                )}
-              </div>
-            </div>
-
-            {/* Signal -> décision */}
-            <div className="space-y-1 rounded-xl border border-border/40 bg-slate-900/20 px-3 py-2">
-              <div className="text-xs text-muted-foreground uppercase tracking-wider">Signal → décision (24 h)</div>
-              <div className="text-lg font-semibold tabular-nums text-slate-50">
-                {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? `~${Math.round(activeSignalDecisionLatency.all.avgMs)} ms` : '—'}
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {hasActiveSignalDecisionLatency && activeSignalDecisionLatency?.all?.avgMs != null ? (
-                  <>
-                    p95 {activeSignalDecisionLatency.all.p95Ms ?? '—'} ms · {activeSignalDecisionLatency.all.count} mesure{activeSignalDecisionLatency.all.count !== 1 ? 's' : ''}
-                    {activeDecisionTotal > 0 && (
-                      <span className="block opacity-80">
-                        no_signal {formatPct(activeDecisionReasons?.no_signal ?? 0, activeDecisionTotal)} · liquidity_ok {formatPct(activeDecisionReasons?.liquidity_ok ?? 0, activeDecisionTotal)} · liquidity_null {formatPct(activeDecisionReasons?.liquidity_null ?? 0, activeDecisionTotal)}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  'Mesure même sans solde (inclut no_signal).'
-                )}
-              </div>
-            </div>
+                    <div className="mise-max-kpi-median">
+                      Médiane {miseMaxMedian15m != null ? formatUsd(miseMaxMedian15m) : '—'}
+                    </div>
+                  </div>
+                  <div className="mise-max-kpi-cell mise-max-kpi-cell--last">
+                    <div className="mise-max-kpi-label">Échantillon</div>
+                    <div className="mise-max-kpi-value mise-max-kpi-value--amber">
+                      {miseMaxSample15m} créneau{miseMaxSample15m !== 1 ? 'x' : ''}
+                    </div>
+                    <div className="mise-max-kpi-source">Gamma + CLOB</div>
+                  </div>
+                </div>
+                <MiseMax15mOrderBookDepth
+                  asksUp={miseMax15mBookAsksUp}
+                  asksDown={miseMax15mBookAsksDown}
+                  lastAt={miseMax15mLastAt}
+                  lastResolved15mSlot={miseMaxLastResolved15mSlot}
+                />
+              </>
+            )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </div>
   );
 }

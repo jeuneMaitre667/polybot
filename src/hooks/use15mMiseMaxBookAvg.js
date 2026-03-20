@@ -1,13 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { liquidityUsdFromAsks } from '@/lib/orderBookLiquidity.js';
+import {
+  liquidityUsdFromAsks,
+  ORDER_BOOK_SIGNAL_MAX_P,
+  ORDER_BOOK_SIGNAL_MIN_P,
+} from '@/lib/orderBookLiquidity.js';
 import { parseUpDownTokenIdsFromMarket } from '@/lib/gammaPolymarket.js';
+import {
+  format15mSlotEndFr,
+  getPrevious15mSlotEndSec,
+  getResolvedWinnerFromGammaMarket,
+} from '@/lib/btc15mLastSlotWinner.js';
 
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
 const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
-const CLOB_BOOK_URL = import.meta.env.DEV ? '/api-clob/book' : 'https://clob.polymarket.com/book';
+const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
+const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
 const BITCOIN_UP_DOWN_15M = 'btc-updown-15m';
 const SLOT_SEC = 15 * 60;
+/** Rafraîchissement léger : carnet créneau actuel + gagnant dernier créneau (sans rescanner les N créneaux). */
+const ORDERBOOK_SNAPSHOT_POLL_MS = 1000;
 
 /**
  * Fin du créneau 15m UTC (secondes) — même convention que getCurrent15mEventSlug (Polymarket / Gamma).
@@ -65,8 +77,59 @@ async function fetchAsks(tokenId) {
     const asks = data?.asks ?? [];
     return Array.isArray(asks) ? asks : [];
   } catch {
+    // En DEV, le proxy Vite peut parfois ne pas être pris en compte (ou nécessiter un redémarrage).
+    // En navigateur, l'appel direct à CLOB est généralement bloqué par CORS, donc on ne retente
+    // en direct que hors navigateur (ex: SSR / tests Node).
+    if (
+      import.meta.env.DEV &&
+      String(CLOB_BOOK_URL).startsWith('/') &&
+      typeof window === 'undefined'
+    ) {
+      try {
+        const { data } = await axios.get(CLOB_BOOK_DIRECT, {
+          params: { token_id: tokenId },
+          timeout: 12000,
+        });
+        const asks = data?.asks ?? [];
+        return Array.isArray(asks) ? asks : [];
+      } catch {
+        return [];
+      }
+    }
     return [];
   }
+}
+
+/** Dernier créneau **terminé** (pas l’actuel) : gagnant Up/Down via Gamma outcomePrices. */
+async function fetchPreviousSlotWinnerFromGamma() {
+  const slotEndSec = getPrevious15mSlotEndSec();
+  const slug = `${BITCOIN_UP_DOWN_15M}-${slotEndSec}`;
+  let winner = null;
+  try {
+    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, {
+      timeout: 10000,
+    });
+    winner = getResolvedWinnerFromGammaMarket(m);
+  } catch {
+    /* marché introuvable ou proxy */
+  }
+  if (winner == null) {
+    try {
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, {
+        timeout: 10000,
+      });
+      const markets = ev?.markets;
+      if (Array.isArray(markets)) {
+        for (const m of markets) {
+          winner = getResolvedWinnerFromGammaMarket(m);
+          if (winner) break;
+        }
+      }
+    } catch {
+      /* */
+    }
+  }
+  return { winner, slotEndSec, slug };
 }
 
 function medianSorted(arr) {
@@ -77,7 +140,12 @@ function medianSorted(arr) {
 }
 
 /**
- * Moyenne de la « mise max » carnet sur N créneaux 15m : max(liquidité Up, Down) dans 97–97,5 %.
+ * Moyenne de la « mise max » carnet sur N créneaux 15m :
+ * max(liquidité Up, Down) dans 97 % – 97,5 % (`ORDER_BOOK_SIGNAL_*`, aligné bot / `orderBookLiquidity`).
+ *
+ * Quand `enabled`, le **carnet du créneau ouvert** et le **gagnant du dernier créneau** sont aussi
+ * rafraîchis automatiquement toutes les ~1 s (sans refaire le scan complet des N créneaux).
+ *
  * @param {{ enabled?: boolean, slotCount?: number, staggerMs?: number }} opts
  */
 export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs = 45 } = {}) {
@@ -90,10 +158,18 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [currentSlotMiseMaxUsd, setCurrentSlotMiseMaxUsd] = useState(null);
   /** Série temporelle : un point par créneau où Gamma+CLOB ont répondu (même si mise = 0). */
   const [seriesBySlot, setSeriesBySlot] = useState([]);
+  /** @deprecated Utiliser currentSlotBookAsksUp / Down — carnet dominant (97–97,5 %). */
+  const [currentSlotBookAsks, setCurrentSlotBookAsks] = useState([]);
+  /** Asks CLOB créneau actuel : Up et Down (profondeur type Polymarket). */
+  const [currentSlotBookAsksUp, setCurrentSlotBookAsksUp] = useState([]);
+  const [currentSlotBookAsksDown, setCurrentSlotBookAsksDown] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastAt, setLastAt] = useState(null);
+  /** Dernier créneau résolu : { winner: 'Up'|'Down'|null, slotEndSec, label } */
+  const [lastResolved15mSlot, setLastResolved15mSlot] = useState(null);
   const mounted = useRef(true);
+  const snapshotInFlight = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -101,6 +177,54 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       mounted.current = false;
     };
   }, []);
+
+  /**
+   * Mise à jour « live » du carnet (créneau ouvert) et du bandeau (dernier clos) — rapide, pour polling.
+   * Ne recalcule pas moyenne / min / max / série sur N créneaux.
+   */
+  const refreshOrderBookSnapshot = useCallback(async () => {
+    if (!enabled || !mounted.current || snapshotInFlight.current) return;
+    snapshotInFlight.current = true;
+    try {
+      const end0 = getCurrent15mSlotEndSec();
+      const [prev, { tokenIdUp, tokenIdDown }] = await Promise.all([
+        fetchPreviousSlotWinnerFromGamma(),
+        fetchTokenIdsForSlotEnd(end0),
+      ]);
+      if (mounted.current) {
+        setLastResolved15mSlot({
+          winner: prev.winner,
+          slotEndSec: prev.slotEndSec,
+          label: format15mSlotEndFr(prev.slotEndSec),
+        });
+      }
+      if (!mounted.current) return;
+      if (!tokenIdUp && !tokenIdDown) return;
+      const [asksUp, asksDown] = await Promise.all([fetchAsks(tokenIdUp), fetchAsks(tokenIdDown)]);
+      if (!mounted.current) return;
+      const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+      const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+      const mise = Math.max(liqUp, liqDown);
+      const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
+      setCurrentSlotMiseMaxUsd(mise);
+      setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
+      setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
+      setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+      setLastAt(new Date().toISOString());
+    } catch {
+      /* conserver le dernier affichage */
+    } finally {
+      snapshotInFlight.current = false;
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const id = setInterval(() => {
+      refreshOrderBookSnapshot();
+    }, ORDERBOOK_SNAPSHOT_POLL_MS);
+    return () => clearInterval(id);
+  }, [enabled, refreshOrderBookSnapshot]);
 
   const refresh = useCallback(async () => {
     if (!enabled) {
@@ -112,12 +236,19 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setSlotsAttempted(0);
       setCurrentSlotMiseMaxUsd(null);
       setSeriesBySlot([]);
+      setCurrentSlotBookAsks([]);
+      setCurrentSlotBookAsksUp([]);
+      setCurrentSlotBookAsksDown([]);
+      setLastResolved15mSlot(null);
       setError(null);
       return;
     }
     setLoading(true);
     setError(null);
     setSeriesBySlot([]);
+    setCurrentSlotBookAsks([]);
+    setCurrentSlotBookAsksUp([]);
+    setCurrentSlotBookAsksDown([]);
     const slotEnds = get15mSlotEndSecs(slotCount);
     const values = [];
     const seriesPoints = [];
@@ -125,6 +256,15 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     let attempted = 0;
 
     try {
+      const prevSlot = await fetchPreviousSlotWinnerFromGamma();
+      if (mounted.current) {
+        setLastResolved15mSlot({
+          winner: prevSlot.winner,
+          slotEndSec: prevSlot.slotEndSec,
+          label: format15mSlotEndFr(prevSlot.slotEndSec),
+        });
+      }
+
       for (let i = 0; i < slotEnds.length; i++) {
         if (!mounted.current) break;
         const endSec = slotEnds[i];
@@ -135,11 +275,19 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           continue;
         }
         const [asksUp, asksDown] = await Promise.all([fetchAsks(tokenIdUp), fetchAsks(tokenIdDown)]);
-        const liqUp = liquidityUsdFromAsks(asksUp);
-        const liqDown = liquidityUsdFromAsks(asksDown);
+        const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+        const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
         const mise = Math.max(liqUp, liqDown);
         values.push(mise);
-        if (i === 0) firstSlotMise = mise;
+        // Pour le graphique : un point par créneau où Gamma+CLOB a répondu.
+        seriesPoints.push({ slotEndSec: endSec, miseMaxUsd: mise });
+        if (i === 0) {
+          firstSlotMise = mise;
+          const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
+          setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
+          setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
+          setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+        }
         if (staggerMs > 0 && i < slotEnds.length - 1) await new Promise((r) => setTimeout(r, staggerMs));
       }
 
@@ -156,7 +304,7 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         setMedianUsd(null);
         setSampleSize(0);
         setError(
-          'Aucun marché 15m trouvé (Gamma) ou carnets vides. En local : vérifie le proxy Vite (/api, /api-clob).'
+          'Aucun marché 15m trouvé (Gamma) ou carnets vides. En local : vérifie le proxy Vite (/api, /apiClob).'
         );
       } else {
         const sum = values.reduce((a, b) => a + b, 0);
@@ -177,6 +325,9 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setMedianUsd(null);
       setSampleSize(0);
       setSeriesBySlot([]);
+      setCurrentSlotBookAsks([]);
+      setCurrentSlotBookAsksUp([]);
+      setCurrentSlotBookAsksDown([]);
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -195,9 +346,13 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     slotsAttempted,
     currentSlotMiseMaxUsd,
     seriesBySlot,
+    currentSlotBookAsks,
+    currentSlotBookAsksUp,
+    currentSlotBookAsksDown,
     loading,
     error,
     lastAt,
+    lastResolved15mSlot,
     refresh,
   };
 }

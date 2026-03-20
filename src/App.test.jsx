@@ -16,10 +16,6 @@ vi.mock('./components/BitcoinUpDownStrategy', () => ({
   BitcoinUpDownStrategy: () => <div data-testid="bitcoin-strategy">BitcoinUpDownStrategy</div>,
 }));
 
-vi.mock('./components/TradeHistory', () => ({
-  TradeHistory: () => <div data-testid="trade-history">TradeHistory</div>,
-}));
-
 function TestWrapper({ children }) {
   return <WalletProvider>{children}</WalletProvider>;
 }

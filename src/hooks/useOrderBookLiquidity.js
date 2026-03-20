@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { liquidityUsdFromAsks, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P } from '@/lib/orderBookLiquidity.js';
 
-const CLOB_BOOK_URL = import.meta.env.DEV ? '/api-clob/book' : 'https://clob.polymarket.com/book';
+const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
 
 /**
  * Récupère le carnet d'ordres pour un token et calcule la liquidité (en USD) disponible
