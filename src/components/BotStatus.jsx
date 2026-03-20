@@ -60,7 +60,10 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
         : null;
 
   return (
-    <div className="bot-pill" title={[signalPollHint, 'Ordre au marché ou limite, intervalle poll'].filter(Boolean).join(' · ')}>
+    <div
+      className="bot-pill"
+      title={[signalPollHint, `Ordre au marché ou limite, poll ${pollSec}s`].filter(Boolean).join(' · ')}
+    >
       <span
         className={`dot ${loading ? 'status-dot--loading' : ''} ${isOnline ? 'status-dot--online' : ''}`}
         title={isOnline ? 'En ligne' : 'Hors ligne'}

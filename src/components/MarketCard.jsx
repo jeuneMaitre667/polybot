@@ -44,7 +44,7 @@ export function MarketCard({ market }) {
 
   return (
     <a href={polymarketUrl} target="_blank" rel="noopener noreferrer" className="market-card-link">
-      <Card className="relative h-full overflow-hidden market-card-surface">
+      <div className="relative h-full overflow-hidden market-card-surface rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-sm">
         <div
           aria-hidden
           style={{
@@ -55,7 +55,7 @@ export function MarketCard({ market }) {
               'linear-gradient(135deg, rgba(167,139,250,0.12) 0%, rgba(56,189,248,0.00) 45%, rgba(34,197,94,0.10) 100%)',
           }}
         />
-        <CardContent className="relative z-10">
+        <div className="relative z-10 p-5">
           <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <Badge variant={OPPORTUNITY_VARIANTS[category]} className={cn(category === 'soon' && 'badge--secondary')}>
               {oppLabel}

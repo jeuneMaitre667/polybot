@@ -29,9 +29,6 @@ export function BotOverview() {
   const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
   const orders24h = data?.ordersLast24h ?? null;
   const orders24h15m = data15m?.ordersLast24h ?? null;
-  const winRate = data?.winRate != null ? Number(data.winRate) * 100 : null;
-  const winRate15m = data15m?.winRate != null ? Number(data15m.winRate) * 100 : null;
-
   const pnl = computePnl(data?.balanceHistory, balance);
   const pnl15m = computePnl(data15m?.balanceHistory, balance15m);
 
@@ -57,7 +54,6 @@ export function BotOverview() {
     maxUsd: miseMaxMax15m,
     medianUsd: miseMaxMedian15m,
     sampleSize: miseMaxSample15m,
-    slotsAttempted: miseMaxSlotsAttempted15m,
     currentSlotMiseMaxUsd: miseMaxCurrent15m,
     loading: miseMax15mLoading,
     error: miseMax15mError,
