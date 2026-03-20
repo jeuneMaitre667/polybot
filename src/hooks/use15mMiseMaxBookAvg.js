@@ -88,6 +88,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [sampleSize, setSampleSize] = useState(0);
   const [slotsAttempted, setSlotsAttempted] = useState(0);
   const [currentSlotMiseMaxUsd, setCurrentSlotMiseMaxUsd] = useState(null);
+  /** Série temporelle : un point par créneau où Gamma+CLOB ont répondu (même si mise = 0). */
+  const [seriesBySlot, setSeriesBySlot] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastAt, setLastAt] = useState(null);
@@ -187,6 +189,7 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     sampleSize,
     slotsAttempted,
     currentSlotMiseMaxUsd,
+    seriesBySlot,
     loading,
     error,
     lastAt,

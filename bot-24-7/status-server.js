@@ -100,12 +100,21 @@ function getBalanceHistory(maxPoints = 500) {
   }
 }
 
-/** Compte les ordres dans orders.log sur les 24 dernières heures. Win rate = null (non calculé côté serveur pour l’instant). */
+/**
+ * Compte les ordres dans orders.log sur les 24 dernières heures + stats remplissage (fillRatio, compléments FAK).
+ * Win rate : toujours sur toutes les lignes avec champ `won` (comportement historique).
+ */
 function getStats24h() {
   const ordersPath = path.join(BOT_DIR, 'orders.log');
   let ordersLast24h = 0;
   let won = 0;
   let totalWithResult = 0;
+  let fillRatioCount = 0;
+  let fillRatioSum = 0;
+  let fillRatioMin = null;
+  let fillRatioMax = null;
+  let ordersWithPartialRetries = 0;
+  let partialRetriesSum = 0;
   try {
     const raw = fs.readFileSync(ordersPath, 'utf8');
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -114,7 +123,22 @@ function getStats24h() {
       try {
         const o = JSON.parse(line);
         const at = o.at ? new Date(o.at).getTime() : 0;
-        if (at >= cutoff) ordersLast24h++;
+        if (at >= cutoff) {
+          ordersLast24h++;
+          const fr = o.fillRatio;
+          if (fr != null && Number.isFinite(Number(fr))) {
+            const n = Number(fr);
+            fillRatioCount += 1;
+            fillRatioSum += n;
+            if (fillRatioMin == null || n < fillRatioMin) fillRatioMin = n;
+            if (fillRatioMax == null || n > fillRatioMax) fillRatioMax = n;
+          }
+          const pr = Number(o.partialFillRetries);
+          if (Number.isFinite(pr) && pr > 0) {
+            ordersWithPartialRetries += 1;
+            partialRetriesSum += pr;
+          }
+        }
         if (typeof o.won === 'boolean') {
           totalWithResult++;
           if (o.won) won++;
@@ -123,7 +147,23 @@ function getStats24h() {
     }
   } catch (_) {}
   const winRate = totalWithResult > 0 ? Math.round((won / totalWithResult) * 1000) / 1000 : null;
-  return { ordersLast24h, winRate };
+  return {
+    ordersLast24h,
+    winRate,
+    fillExecutionStats24h: {
+      fillRatioCount,
+      avgFillRatio:
+        fillRatioCount > 0 ? Math.round((fillRatioSum / fillRatioCount) * 10000) / 10000 : null,
+      minFillRatio: fillRatioMin != null ? Math.round(fillRatioMin * 10000) / 10000 : null,
+      maxFillRatio: fillRatioMax != null ? Math.round(fillRatioMax * 10000) / 10000 : null,
+      ordersWithPartialRetries,
+      totalPartialRetryLegs: partialRetriesSum,
+      avgPartialRetriesWhenUsed:
+        ordersWithPartialRetries > 0
+          ? Math.round((partialRetriesSum / ordersWithPartialRetries) * 100) / 100
+          : null,
+    },
+  };
 }
 
 /** Lit health.json (écrit par le bot : WS, dernier ordre, geoblock, kill switch). */
@@ -605,6 +645,7 @@ const server = http.createServer((req, res) => {
       signalPriceSource: config.signalPriceSource,
       ordersLast24h: stats.ordersLast24h,
       winRate: stats.winRate,
+      fillExecutionStats24h: stats.fillExecutionStats24h,
       health,
       alerts,
       liquidityStats,

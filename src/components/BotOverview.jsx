@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
+import { MiseMax15mBookChart } from '@/components/MiseMax15mBookChart.jsx';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -16,6 +17,57 @@ function computePnl(balanceHistory, currentBalance) {
     currentBalance != null ? currentBalance : history.length > 0 ? Number(history[history.length - 1].balance) : null;
   if (firstBalance == null || lastBalance == null || firstBalance <= 0) return null;
   return ((lastBalance - firstBalance) / firstBalance) * 100;
+}
+
+/** Lignes texte pour fillRatio + compléments FAK (API status-server). */
+function FillExecutionLines({ fillStats }) {
+  if (!fillStats || typeof fillStats !== 'object') return null;
+  const fc = Number(fillStats.fillRatioCount) || 0;
+  const avg = fillStats.avgFillRatio;
+  const minF = fillStats.minFillRatio;
+  const maxF = fillStats.maxFillRatio;
+  const withRetry = Number(fillStats.ordersWithPartialRetries) || 0;
+  const legs = Number(fillStats.totalPartialRetryLegs) || 0;
+  const avgRetry = fillStats.avgPartialRetriesWhenUsed;
+
+  const parts = [];
+  if (fc > 0 && avg != null) {
+    const pct = (Number(avg) * 100).toFixed(1);
+    const range =
+      minF != null && maxF != null && (minF !== maxF || fc > 1)
+        ? ` (min ${(Number(minF) * 100).toFixed(1)} % · max ${(Number(maxF) * 100).toFixed(1)} %)`
+        : '';
+    parts.push(
+      <span key="fr">
+        Remplissage moy. <strong className="text-slate-100 tabular-nums">{pct} %</strong> du montant demandé (CLOB){range}
+        <span className="text-muted-foreground"> — {fc} ordre{fc !== 1 ? 's' : ''} avec donnée</span>
+      </span>
+    );
+  }
+  if (withRetry > 0) {
+    parts.push(
+      <span key="retry">
+        Compléments FAK : <strong className="text-slate-100">{withRetry}</strong> trade{withRetry !== 1 ? 's' : ''} avec reliquat
+        {legs > 0 && (
+          <>
+            {' '}
+            · <strong className="text-slate-100 tabular-nums">{legs}</strong> POST supplémentaire{legs !== 1 ? 's' : ''}
+          </>
+        )}
+        {avgRetry != null && (
+          <span className="text-muted-foreground"> (moy. {avgRetry} complément/trade concerné)</span>
+        )}
+      </span>
+    );
+  }
+  if (parts.length === 0) return null;
+  return (
+    <div className="space-y-1.5 text-[11px] text-slate-300/95 leading-relaxed">
+      {parts.map((p, i) => (
+        <div key={i}>{p}</div>
+      ))}
+    </div>
+  );
 }
 
 export function BotOverview() {
@@ -63,6 +115,7 @@ export function BotOverview() {
     error: miseMax15mError,
     lastAt: miseMax15mLastAt,
     refresh: refreshMiseMax15m,
+    seriesBySlot: miseMax15mSeries,
   } = use15mMiseMaxBookAvg({ enabled: show15m, slotCount: 36, staggerMs: 45 });
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
@@ -194,6 +247,49 @@ export function BotOverview() {
                 </span>
               </div>
             )}
+            {(data?.fillExecutionStats24h != null || (show15m && data15m?.fillExecutionStats24h != null)) && (
+            <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Exécution marché (24 h · orders.log)
+              </div>
+              {data?.fillExecutionStats24h != null && (
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1">Bot horaire</div>
+                  <FillExecutionLines fillStats={data.fillExecutionStats24h} />
+                  {(data.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
+                    (data.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
+                    (orders24h ?? 0) === 0 && (
+                      <p className="text-[11px] text-muted-foreground/90">Aucun ordre sur 24 h.</p>
+                    )}
+                  {(data.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
+                    (data.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
+                    (orders24h ?? 0) > 0 && (
+                      <p className="text-[10px] text-amber-600/90 dark:text-amber-400/90">
+                        Ordres présents sans fillRatio / compléments — redéploie le bot (version récente) + status-server.
+                      </p>
+                    )}
+                </div>
+              )}
+              {show15m && data15m?.fillExecutionStats24h != null && (
+                <div className="pt-2 border-t border-border/30">
+                  <div className="text-[10px] text-muted-foreground mb-1">Bot 15m</div>
+                  <FillExecutionLines fillStats={data15m.fillExecutionStats24h} />
+                  {(data15m.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
+                    (data15m.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
+                    (orders24h15m ?? 0) === 0 && (
+                      <p className="text-[11px] text-muted-foreground/90">Aucun ordre sur 24 h.</p>
+                    )}
+                  {(data15m.fillExecutionStats24h?.fillRatioCount ?? 0) === 0 &&
+                    (data15m.fillExecutionStats24h?.ordersWithPartialRetries ?? 0) === 0 &&
+                    (orders24h15m ?? 0) > 0 && (
+                      <p className="text-[10px] text-amber-600/90 dark:text-amber-400/90">
+                        Ordres sans métriques d’exécution — met à jour bot + status-server sur ce serveur.
+                      </p>
+                    )}
+                </div>
+              )}
+            </div>
+            )}
           </div>
           {(data?.signalPriceSource || (show15m && data15m?.signalPriceSource)) && (
             <p className="mt-3 text-[11px] text-muted-foreground/90 border-t border-border/40 pt-3 leading-relaxed">
@@ -279,6 +375,9 @@ export function BotOverview() {
                   </div>
                 </div>
               </div>
+            )}
+            {!miseMax15mLoading && !miseMax15mError && miseMaxSample15m > 0 && miseMax15mSeries?.length > 0 && (
+              <MiseMax15mBookChart series={miseMax15mSeries} />
             )}
             {miseMax15mLastAt && (
               <p className="mt-3 text-[10px] text-muted-foreground/80">

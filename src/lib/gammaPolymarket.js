@@ -10,6 +10,9 @@ export function coalesceClobTokenIds(raw) {
   if (typeof raw === 'string') {
     const s = raw.trim();
     if (!s) return null;
+    // Avant JSON.parse : une chaîne uniquement numérique est un id CLOB (évite que JSON.parse
+    // la lise comme nombre et perde la précision sur les grands entiers).
+    if (/^\d+$/.test(s)) return [s];
     try {
       const p = JSON.parse(s);
       if (Array.isArray(p)) {
@@ -17,7 +20,7 @@ export function coalesceClobTokenIds(raw) {
         return out.length ? out : null;
       }
     } catch {
-      if (/^\d+$/.test(s)) return [s];
+      /* chaîne non-JSON : déjà couvert par le test /^\d+$/ ci-dessus */
     }
   }
   return null;
