@@ -150,7 +150,7 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
         if (marketMode === '15m' && slotEndMs != null && Number.isFinite(slotEndMs) && nowMs >= slotEndMs) {
           continue;
         }
-        if (marketMode === '15m' && isLive15mEntryForbiddenNow(nowMs, slotEndMs)) {
+        if (marketMode === '15m' && isLive15mEntryForbiddenNow(nowMs)) {
           continue;
         }
 

@@ -668,7 +668,7 @@ function collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSe
         lastBySide[side] = { t, price };
         continue;
       }
-      if (is15mSlotEntryTimeForbidden(tsUsed, endTsSec)) {
+      if (is15mSlotEntryTimeForbidden(tsUsed)) {
         lastBySide[side] = { t, price };
         continue;
       }
@@ -1008,7 +1008,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           sim.botWouldTake != null &&
           r.slotEndSec != null &&
           Number.isFinite(r.slotEndSec) &&
-          is15mSlotEntryTimeForbidden(sim.botEntryTimestamp, r.slotEndSec)
+          is15mSlotEntryTimeForbidden(sim.botEntryTimestamp)
         ) {
           sim = emptySim;
         }

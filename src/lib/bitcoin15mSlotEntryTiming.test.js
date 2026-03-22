@@ -24,11 +24,11 @@ describe('offsetSecondsInEtQuarterHour (ET)', () => {
 
 describe('is15mSlotEntryTimeForbidden (grille ET :00 / :15 / :30 / :45)', () => {
   it('interdit les ~3 premières minutes du quart (ex. 3:30:05 PM ET)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:30:05Z'), null)).toBe(true);
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:30:05Z'))).toBe(true);
   });
 
   it('interdit les ~4 dernières minutes (ex. 3:14:01 PM ET, fin du bloc 3:00–3:15)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:14:01Z'), null)).toBe(true);
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:14:01Z'))).toBe(true);
   });
 
   it('interdit fin de bloc 2:45–3:00 (ex. 2:59:11 PM ET)', () => {
@@ -36,21 +36,21 @@ describe('is15mSlotEntryTimeForbidden (grille ET :00 / :15 / :30 / :45)', () => 
   });
 
   it('autorise le milieu du quart (ex. 3:40 PM ET)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:40:00Z'), null)).toBe(false);
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:40:00Z'))).toBe(false);
   });
 
   it('autorise juste après les 3 premières minutes (ex. 3:33:00 PM ET)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:33:00Z'), null)).toBe(false);
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:33:00Z'))).toBe(false);
   });
 
-  it('ignore slotEndSec (paramètre de compat)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:30:05Z'), 9999999999)).toBe(true);
+  it('même résultat quel que soit l’ancien 2e argument (API simplifiée)', () => {
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:30:05Z'))).toBe(true);
   });
 });
 
 describe('isLive15mEntryForbiddenNow', () => {
   it('reflète la même grille sur nowMs', () => {
     const ms = Date.parse('2026-03-20T19:30:05Z');
-    expect(isLive15mEntryForbiddenNow(ms, null)).toBe(true);
+    expect(isLive15mEntryForbiddenNow(ms)).toBe(true);
   });
 });

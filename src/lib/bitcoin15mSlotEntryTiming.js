@@ -43,9 +43,8 @@ export function offsetSecondsInEtQuarterHour(tsSec) {
  * quel que soit le décalage slug Unix vs affichage (trades API après fin UTC, etc.).
  *
  * @param {number} tsSec
- * @param {number} [_slotEndSec] — ignoré (conservé pour compatibilité des appelants)
  */
-export function is15mSlotEntryTimeForbidden(tsSec, _slotEndSec = null) {
+export function is15mSlotEntryTimeForbidden(tsSec) {
   const o = offsetSecondsInEtQuarterHour(tsSec);
   if (o == null) return false;
   if (o < SLOT_15M_ENTRY_FORBID_FIRST_SEC) return true;
@@ -54,13 +53,12 @@ export function is15mSlotEntryTimeForbidden(tsSec, _slotEndSec = null) {
 }
 
 /**
- * Signaux live : même grille ET (plus besoin de `slotEndMs` pour cette règle).
+ * Signaux live : même grille ET.
  * @param {number} nowMs
- * @param {number} [_slotEndMs]
  */
-export function isLive15mEntryForbiddenNow(nowMs, _slotEndMs = null) {
+export function isLive15mEntryForbiddenNow(nowMs) {
   if (!Number.isFinite(nowMs)) return false;
-  return is15mSlotEntryTimeForbidden(Math.floor(nowMs / 1000), null);
+  return is15mSlotEntryTimeForbidden(Math.floor(nowMs / 1000));
 }
 
 export { POLYMARKET_DISPLAY_TZ as ENTRY_TIMING_ET_TIMEZONE };
