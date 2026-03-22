@@ -2644,6 +2644,48 @@ body::after {
   color: var(--bg-base);
 }
 
+.strat-autoplace-panel {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 200, 100, 0.22);
+  background: rgba(255, 180, 60, 0.06);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.strat-autoplace-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.strat-autoplace-panel__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: 0.02em;
+}
+
+.strat-autoplace-panel__hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.strat-balance-perf-heading {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  opacity: 0.92;
+}
+
 .strat-metric-card {
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2828,6 +2870,80 @@ body::after {
   line-height: 1.45;
   color: var(--text-2);
   opacity: 0.92;
+}
+
+/* Mode debug simulation 15m (BitcoinUpDownStrategy) */
+.strat-15m-debug-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.strat-15m-debug-toggle input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.strat-15m-debug-summary {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text-2);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.strat-th--debug {
+  min-width: 7rem;
+}
+
+.strat-td--debug {
+  vertical-align: top;
+  max-width: 10rem;
+}
+
+.strat-15m-debug-details {
+  font-size: 11px;
+}
+
+.strat-15m-debug-summary-btn {
+  cursor: pointer;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--amber);
+  list-style: none;
+}
+
+.strat-15m-debug-summary-btn::-webkit-details-marker {
+  display: none;
+}
+
+.strat-15m-debug-json {
+  margin: 8px 0 0;
+  padding: 8px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text-2);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 6px;
+  border: 1px solid var(--border);
 }
 
 .strat-block-msg {

@@ -34,6 +34,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => String(path).replace(/^\/apiClob/, '').replace(/^apiClob/, ''),
       },
+      // Certains navigateurs / extensions normalisent la casse → 404 sans proxy.
+      '/apiclob': {
+        target: 'https://clob.polymarket.com',
+        changeOrigin: true,
+        rewrite: (path) => String(path).replace(/^\/apiclob/i, ''),
+      },
       '/apiData': {
         target: 'https://data-api.polymarket.com',
         changeOrigin: true,

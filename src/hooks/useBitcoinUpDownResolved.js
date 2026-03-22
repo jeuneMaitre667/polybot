@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import {
+  getResolvedUpDownWinnerFromGammaMarket,
+  parseUpDownTokenIdsFromMarket,
+  resolveGammaMarketForBtcUpDown,
+} from '@/lib/gammaPolymarket.js';
+import { formatHourlyEventLabelFromSlug } from '@/lib/polymarketDisplayTime.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
@@ -9,49 +15,6 @@ const DATA_API_TRADES_URL = 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const MIN_P = 0.97;
 const MAX_P = 0.975;
-
-function parseOutcomePrices(market) {
-  try {
-    const raw = market.outcomePrices ?? market.outcome_prices;
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length < 2) return null;
-    return [parseFloat(arr[0]) ?? 0, parseFloat(arr[1]) ?? 0];
-  } catch {
-    return null;
-  }
-}
-
-/** Seuil pour considérer un outcome comme gagnant (résolu). */
-const RESOLVED_WIN_THRESHOLD = 0.98;
-
-/** Retourne le gagnant d'un marché résolu : 'Up' | 'Down' | null. */
-function getResolvedWinner(market) {
-  const prices = parseOutcomePrices(market);
-  if (!prices) return null;
-  if (prices[0] >= RESOLVED_WIN_THRESHOLD && prices[1] < 0.5) return 'Up';
-  if (prices[1] >= RESOLVED_WIN_THRESHOLD && prices[0] < 0.5) return 'Down';
-  return null;
-}
-
-/** Extrait un libellé heure du slug (ex. bitcoin-up-or-down-march-15-2026-4pm-et → 15 mars 16h). */
-function getHourLabelFromSlug(slug) {
-  if (!slug || typeof slug !== 'string') return slug || '—';
-  const withYear = slug.match(/march-(\d+)-(\d+)-(\d+)(am|pm)-et/i);
-  const noYear = slug.match(/march-(\d+)-(\d+)(am|pm)-et/i);
-  const m = withYear || noYear;
-  if (m) {
-    const day = m[1];
-    const hourGroup = withYear ? m[3] : m[2];
-    const ampmGroup = withYear ? m[4] : m[3];
-    let h = parseInt(hourGroup, 10) || 0;
-    if (ampmGroup?.toLowerCase() === 'pm' && h < 12) h += 12;
-    if (ampmGroup?.toLowerCase() === 'am' && h === 12) h = 0;
-    return `${day} mars ${h}h`;
-  }
-  const parts = slug.replace(/-et$/, '').split('-').filter(Boolean);
-  const tail = parts.slice(-4).join(' ');
-  return tail || slug;
-}
 
 /** Fenêtre par défaut (en heures). 72 = 3 jours. */
 const DEFAULT_WINDOW_HOURS = 72;
@@ -130,15 +93,12 @@ async function fetchPriceHistoryFromTrades(conditionId, endDateStr) {
 }
 
 /** Récupère les token IDs (Up, Down) depuis l'API Gamma marché par slug si l'event n'en avait pas. */
+/** GET /markets/slug/{slug} (doc Polymarket) + alignement Up/Down via outcomes / clobTokenIds. */
 async function fetchTokenIdsByMarketSlug(eventSlug) {
   if (!eventSlug) return { tokenIdUp: null, tokenIdDown: null };
   try {
     const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(eventSlug)}`, { timeout: 8000 });
-    const ids = m?.clobTokenIds ?? m?.clob_token_ids;
-    const tokens = m?.tokens;
-    const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
-    const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
-    return { tokenIdUp, tokenIdDown };
+    return parseUpDownTokenIdsFromMarket(m);
   } catch {
     return { tokenIdUp: null, tokenIdDown: null };
   }
@@ -281,24 +241,23 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
       const seen = new Set();
       const results = [];
 
-      const processEvent = (ev) => {
+      /** Données résultat : GET /events (+ marché complet via GET /markets/slug si besoin, doc Polymarket). */
+      const processEvent = async (ev) => {
         const eventSlug = (ev.slug ?? '').toLowerCase();
         if (!eventSlug.includes(BITCOIN_UP_DOWN_SLUG)) return;
         const endDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? ev.finishedTimestamp ?? '';
         if (!isWithinLastHours(endDate, windowHours)) return;
-        const hourLabel = getHourLabelFromSlug(ev.slug ?? '');
+        const hourLabel = formatHourlyEventLabelFromSlug(ev.slug ?? '');
         const endMs = endDate ? new Date(endDate).getTime() : NaN;
         const hourEndedAtLeast2MinAgo = Number.isFinite(endMs) && Date.now() >= endMs + 120000;
         for (const m of ev.markets ?? []) {
-          let winner = getResolvedWinner(m);
+          const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+          let winner = getResolvedUpDownWinnerFromGammaMarket(mm);
           if (!winner && !hourEndedAtLeast2MinAgo) continue;
           const cid = m.conditionId ?? m.condition_id ?? ev.slug;
           if (seen.has(cid)) continue;
           seen.add(cid);
-          const ids = m.clobTokenIds ?? m.clob_token_ids;
-          const tokens = m.tokens;
-          const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
-          const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
+          const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mm);
           results.push({
             eventSlug: ev.slug,
             question: m.question ?? ev.title ?? ev.slug ?? '',
@@ -321,7 +280,7 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
           try {
             const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
             if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-              processEvent(ev);
+              await processEvent(ev);
               break;
             }
           } catch {
@@ -331,40 +290,60 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
       }
 
       // 1) Récupérer en masse les événements fermés Bitcoin Up or Down (pagination)
+      /** Liste documentée : GET /events?closed=true&end_date_min=…&limit&offset (pas de slug_contains dans l’OpenAPI). */
+      const endDateMinIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
       const needed = Math.min(200, Math.ceil(windowHours) + 20);
       try {
         for (let offset = 0; offset < needed; offset += 100) {
           const { data: closedPage } = await axios.get(GAMMA_EVENTS_URL, {
-            params: { closed: true, slug_contains: BITCOIN_UP_DOWN_SLUG, limit: 100, offset },
+            params: {
+              closed: true,
+              end_date_min: endDateMinIso,
+              limit: 100,
+              offset,
+              order: 'end_date',
+              ascending: false,
+            },
             timeout: 15000,
           });
           const page = Array.isArray(closedPage) ? closedPage : closedPage?.data ?? closedPage?.results ?? [];
-          page.forEach(processEvent);
+          for (const ev of page) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) await processEvent(ev);
+          }
           if (page.length < 100) break;
         }
       } catch {
         try {
-          const closedRes = await axios.get(GAMMA_EVENTS_URL, { params: { closed: true, limit: 500 }, timeout: 15000 });
+          const closedRes = await axios.get(GAMMA_EVENTS_URL, {
+            params: { closed: true, end_date_min: endDateMinIso, limit: 500, order: 'end_date', ascending: false },
+            timeout: 15000,
+          });
           const closedEvents = Array.isArray(closedRes.data) ? closedRes.data : closedRes.data?.data ?? closedRes.data?.results ?? [];
-          closedEvents.forEach(processEvent);
+          for (const ev of closedEvents) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) await processEvent(ev);
+          }
         } catch {
           /* garder ce qui a déjà été chargé (slugs / pages précédentes) */
         }
       }
 
-      // 2) Événements actifs
+      // 2) Événements actifs (GET /events?active=true&closed=false — filtre slug côté client)
       try {
         const { data: activeRes } = await axios.get(GAMMA_EVENTS_URL, {
-          params: { active: true, closed: false, slug_contains: BITCOIN_UP_DOWN_SLUG, limit: 100 },
+          params: { active: true, closed: false, limit: 300 },
           timeout: 15000,
         });
         const activeEvents = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-        activeEvents.forEach(processEvent);
+        for (const ev of activeEvents) {
+          if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) await processEvent(ev);
+        }
       } catch (err) {
         if (err.response?.status === 422 || err.response?.status === 400) {
           const { data: activeRes } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 300 }, timeout: 15000 });
           const activeEvents = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-          activeEvents.forEach(processEvent);
+          for (const ev of activeEvents) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) await processEvent(ev);
+          }
         }
       }
 
@@ -380,7 +359,7 @@ export function useBitcoinUpDownResolved(windowHours = DEFAULT_WINDOW_HOURS) {
           try {
             const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 6000 });
             if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-              processEvent(ev);
+              await processEvent(ev);
               break; // trouvé, pas besoin d'essayer l'autre format
             }
           } catch {

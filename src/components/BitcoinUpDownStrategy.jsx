@@ -6,6 +6,13 @@ import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
+import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '../lib/orderBookLiquidity.js';
+import { build15mBacktestDisplayRows, SLOT_15M_SEC } from '../lib/bitcoin15mGridDisplay.js';
+import {
+  formatBitcoin15mSlotRangeEt,
+  formatTradeTimestampEt,
+  formatTimestampUtcTooltip,
+} from '../lib/polymarketDisplayTime.js';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -19,6 +26,26 @@ function formatMoney(value) {
 
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const STORAGE_KEY_LIQUIDITY_SUGGESTION = 'polymarket-dashboard.showLiquiditySuggestion';
+const STORAGE_KEY_AUTOTRADE = 'polymarket-dashboard.autoPlaceEnabled';
+const STORAGE_BACKTEST_15M_DEBUG = 'polymarket-dashboard.backtest15mDebug';
+
+function readAutoPlaceFromStorage() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(STORAGE_KEY_AUTOTRADE) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function readBacktest15mDebugFromStorage() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(STORAGE_BACKTEST_15M_DEBUG) === '1';
+  } catch {
+    return false;
+  }
+}
 
 /** Slug Polymarket du créneau Bitcoin Up or Down - Hourly pour l'heure actuelle (ET). */
 function getCurrentBitcoinUpDownEventSlug() {
@@ -36,7 +63,7 @@ function getCurrentBitcoinUpDownEventSlug() {
 /** Slug Polymarket du créneau 15 min actuel (btc-updown-15m-{timestamp} fin de créneau en s UTC). */
 function getCurrent15mEventSlug() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const slotEnd = Math.ceil(nowSec / 900) * 900;
+  const slotEnd = Math.ceil(nowSec / SLOT_15M_SEC) * SLOT_15M_SEC;
   return `btc-updown-15m-${slotEnd}`;
 }
 
@@ -73,10 +100,35 @@ export function BitcoinUpDownStrategy() {
 
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
+  const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
-  const { resolved: resolved15m, loading: resolved15mLoading, error: resolved15mError, refresh: refreshResolved15m } = useBitcoinUpDownResolved15m(resolvedWindowHours);
+  const {
+    resolved: resolved15m,
+    loading: resolved15mLoading,
+    error: resolved15mError,
+    refresh: refreshResolved15m,
+    debugSummary: resolved15mDebugSummary,
+  } = useBitcoinUpDownResolved15m(resolvedWindowHours, { debug: backtest15mDebug });
+
+  /** Grille complète : un créneau 15 min par ligne (placeholders pour les trous). */
+  const resolved15mDisplayRows = useMemo(
+    () => build15mBacktestDisplayRows(resolved15m, resolvedWindowHours),
+    [resolved15m, resolvedWindowHours]
+  );
+
+  const toggleBacktest15mDebug = () => {
+    setBacktest15mDebug((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(STORAGE_BACKTEST_15M_DEBUG, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   const decisionReasonCounts = useMemo(() => {
     const stats =
@@ -103,7 +155,19 @@ export function BitcoinUpDownStrategy() {
 
   const [orderSizeUsd] = useState(10);
   const [useMarketOrder] = useState(true);
-  const [autoPlaceEnabled] = useState(true);
+  const [autoPlaceEnabled, setAutoPlaceEnabled] = useState(() => readAutoPlaceFromStorage());
+
+  const toggleAutoPlaceEnabled = () => {
+    setAutoPlaceEnabled((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(STORAGE_KEY_AUTOTRADE, next ? '1' : '0');
+      } catch {
+        /* localStorage indisponible */
+      }
+      return next;
+    });
+  };
   const [, setPlacedOrderKeys] = useState(() => new Set());
   const placedOrderKeysRef = useRef(new Set());
   const [, setPlacingFor] = useState(null);
@@ -182,7 +246,10 @@ export function BitcoinUpDownStrategy() {
   }, [resolvedHours, initialBalance, includeFees]);
 
   const backtestResult15m = useMemo(() => {
-    const withSimul = resolved15m.filter((r) => r.botWon !== null);
+    /** Créneaux où la simu 15m a trouvé une entrée (≥ 97 %, plafond ~99,5 % sur timeseries CLOB ; bot réel ~97,5 %). */
+    const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
+    /** PnL uniquement sur marchés résolus (winner connu). */
+    const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
     const sortedSimul = [...withSimul].sort(
       (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
     );
@@ -222,6 +289,7 @@ export function BitcoinUpDownStrategy() {
       feesPaid,
       maxDrawdown,
       withSimul,
+      withSignal,
       won: withSimul.filter((r) => r.botWon === true).length,
     };
   }, [resolved15m, initialBalance, includeFees]);
@@ -273,7 +341,12 @@ export function BitcoinUpDownStrategy() {
     if (options.capUsd != null && options.capUsd > 0 && sizeUsd > options.capUsd) {
       sizeUsd = options.capUsd;
     }
-    const price = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
+    const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
+    /** Plafond 97,5¢ comme le backtest / carnet « signal », même si le best ask affiche 98–99¢. */
+    const n = Number(raw);
+    const price = Number.isFinite(n)
+      ? Math.min(Math.max(n, ORDER_BOOK_SIGNAL_MIN_P), ORDER_BOOK_SIGNAL_MAX_P)
+      : ORDER_BOOK_SIGNAL_MAX_P;
     return placePolymarketOrder(signer, {
       tokenIdToBuy: signal.tokenIdToBuy,
       price,
@@ -438,6 +511,36 @@ export function BitcoinUpDownStrategy() {
                   15 min
                 </button>
               </div>
+
+              <div className="strat-autoplace-panel">
+                <div className="strat-autoplace-panel__row">
+                  <span className="strat-autoplace-panel__label" id="autoplace-label">
+                    Ordres automatiques
+                  </span>
+                  <button
+                    type="button"
+                    onClick={toggleAutoPlaceEnabled}
+                    className={`btn btn--xs ${autoPlaceEnabled ? 'btn--toggle-on' : 'btn--toggle-off'}`}
+                    aria-pressed={autoPlaceEnabled}
+                    aria-labelledby="autoplace-label"
+                    title={
+                      autoPlaceEnabled
+                        ? 'Les ordres sont placés automatiquement au signal (tant que le wallet est connecté).'
+                        : 'Aucun ordre automatique : cliquez pour activer.'
+                    }
+                  >
+                    {autoPlaceEnabled ? 'ON — trade auto' : 'OFF — manuel'}
+                  </button>
+                </div>
+                <p className="strat-autoplace-panel__hint">
+                  <strong>ON</strong> = un ordre part tout seul dès qu’un signal 97–97,5 % apparaît (
+                  {resultMode === '15m' ? '15 min' : 'horaire'}
+                  ). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
+                  l’auto.
+                </p>
+              </div>
+
+              <h3 className="strat-balance-perf-heading">Solde &amp; performance</h3>
 
               <div className="strat-metric-card">
                 <p className="strat-metric-card__kicker">
@@ -635,7 +738,7 @@ export function BitcoinUpDownStrategy() {
             Simulation alignée sur le bot (97–97,5 %, marché){' '}
             {resultMode === 'hourly'
               ? '— pas d’entrée dans les 5 dernières minutes du créneau.'
-              : '— 15 min : exclusion des dernières minutes avant la fin désactivée pour l’instant (comme le bot).'}{' '}
+              : '— 15 min : pas d’entrée les 3 premières minutes UTC de chaque quart d’heure ni les 4 dernières avant la fin (aligné exécution prudente).'}{' '}
             Données historiques CLOB.
           </p>
 
@@ -678,7 +781,12 @@ export function BitcoinUpDownStrategy() {
                           <th className="strat-th">Bot aurait pris</th>
                           <th className="strat-th">Prix d&apos;entrée</th>
                           <th className="strat-th">Signal</th>
-                          <th className="strat-th">Heure trade</th>
+                          <th
+                            className="strat-th"
+                            title="Eastern Time (ET), comme sur polymarket.com — infobulle sur la cellule = UTC"
+                          >
+                            Heure trade (ET)
+                          </th>
                           <th className="strat-th">Type</th>
                           <th className="strat-th">Simul.</th>
                         </tr>
@@ -687,7 +795,7 @@ export function BitcoinUpDownStrategy() {
                         {resolvedHours.map((r, i) => {
                           const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
                           return (
-                            <tr key={`${r.eventSlug}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                            <tr key={r.eventSlug ?? `h-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
                               <td className="strat-td strat-td--strong">
                                 {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
                               </td>
@@ -700,10 +808,15 @@ export function BitcoinUpDownStrategy() {
                               <td className="strat-td strat-td--signal">
                                 {signalLabel ?? '—'}
                               </td>
-                              <td className="strat-td">
-                                {r.botEntryTimestamp != null
-                                  ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                                  : '—'}
+                              <td
+                                className="strat-td"
+                                title={
+                                  r.botEntryTimestamp != null
+                                    ? `UTC : ${formatTimestampUtcTooltip(r.botEntryTimestamp)}`
+                                    : undefined
+                                }
+                              >
+                                {formatTradeTimestampEt(r.botEntryTimestamp)}
                               </td>
                               <td className="strat-td">
                                 {r.botOrderType ?? '—'}
@@ -777,21 +890,43 @@ export function BitcoinUpDownStrategy() {
                     {resolved15mError && (
                       <span className="strat-block-msg strat-text-red">{resolved15mError}</span>
                     )}
-                    {!resolved15mLoading && resolved15m.length > 0 && (
-                      <span className="strat-block-msg strat-text-green">{resolved15m.length} créneau{resolved15m.length !== 1 ? 'x' : ''} chargé{resolved15m.length !== 1 ? 's' : ''} (résolus).</span>
+                    {!resolved15mLoading && !resolved15mError && (
+                      <span className="strat-block-msg strat-text-green">
+                        {resolved15m.length > 0
+                          ? `${resolved15m.length} marché${resolved15m.length !== 1 ? 's' : ''} résolu${resolved15m.length !== 1 ? 's' : ''}`
+                          : 'Aucun marché résolu'}
+                        {' · '}
+                        {resolved15mDisplayRows.length} ligne{resolved15mDisplayRows.length !== 1 ? 's' : ''} affichée
+                        {resolved15mDisplayRows.length !== 1 ? 's' : ''} (grille 15 min)
+                      </span>
                     )}
                     <span className="strat-muted-tight">
-                      Même règles que le bot : prix dans 97–97,5 % ; fin de créneau 15 min non exclue pour l’instant (règle des 4 min réactivable plus tard). Fenêtre d’historique alignée sur la fin de créneau du slug Polymarket. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
+                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites en <strong>UTC</strong> : <strong>3 premières minutes</strong> de chaque quart d’heure (<code>m % 15 ≤ 2</code>) et <strong>4 dernières minutes</strong> avant chaque :00 / :15 / :30 / :45. Conviction ≥ 97 % jusqu’à 1,00, complément <strong>1 − p</strong>. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
                     </span>
                   </p>
+                  <label className="strat-15m-debug-toggle">
+                    <input type="checkbox" checked={backtest15mDebug} onChange={toggleBacktest15mDebug} />
+                    <span>
+                      <strong>Mode debug</strong> simulation 15m (détails par créneau + console : CLOB, trades, filtre créneau, raison si pas de signal). Recharge les données au changement.
+                    </span>
+                  </label>
+                  {backtest15mDebug && resolved15mDebugSummary && !resolved15mLoading && (
+                    <pre className="strat-15m-debug-summary" title="Résumé dernier chargement">
+                      {JSON.stringify(resolved15mDebugSummary, null, 2)}
+                    </pre>
+                  )}
                 </div>
                 {resolved15mError && <p className="strat-data-window__body strat-text-red">{resolved15mError}</p>}
                 {resolved15mLoading ? (
                   <p className="strat-data-window__body">Chargement…</p>
-                ) : resolved15m.length === 0 ? (
-                  <p className="strat-data-window__body">Aucun créneau 15 min résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
-                ) : (
+                ) : resolved15mError ? null : (
                   <>
+                    {resolved15m.length === 0 && (
+                      <p className="strat-data-window__body strat-muted">
+                        Grille 15 min : chaque ligne correspond à un quart d’heure UTC ; les écarts indiquent l’absence de
+                        marché résolu ou de données dans la fenêtre chargée.
+                      </p>
+                    )}
                     <div className="strat-table-wrap strat-table-wrap--scroll">
                       <table className="strat-table">
                         <thead>
@@ -800,51 +935,99 @@ export function BitcoinUpDownStrategy() {
                             <th className="strat-th">Bot aurait pris</th>
                             <th className="strat-th">Prix d&apos;entrée</th>
                             <th className="strat-th">Signal</th>
-                            <th className="strat-th">Heure trade</th>
+                            <th
+                              className="strat-th"
+                              title="Eastern Time (ET), comme sur polymarket.com — infobulle sur la cellule = UTC"
+                            >
+                              Heure trade (ET)
+                            </th>
                             <th className="strat-th">Type</th>
                             <th className="strat-th">Simul.</th>
+                            {backtest15mDebug && <th className="strat-th strat-th--debug">Debug</th>}
                           </tr>
                         </thead>
                         <tbody>
-                          {resolved15m.map((r, i) => {
+                          {resolved15mDisplayRows.map((r, i) => {
+                            if (r.__placeholder15m) {
+                              return (
+                                <tr
+                                  key={`15m-placeholder-${r.slotEndSec}`}
+                                  className={`strat-tbody-row strat-tbody-row--15m-gap ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}
+                                >
+                                  <td className="strat-td strat-td--muted" colSpan={backtest15mDebug ? 8 : 7}>
+                                    <span
+                                      className="strat-muted"
+                                      title={
+                                        r.slotEndSec != null
+                                          ? `Fin créneau UTC : ${formatTimestampUtcTooltip(r.slotEndSec)}`
+                                          : undefined
+                                      }
+                                    >
+                                      Écart · créneau : {formatBitcoin15mSlotRangeEt(r.slotEndSec)}
+                                    </span>
+                                    <span className="strat-muted"> — pas de marché résolu dans les données chargées</span>
+                                  </td>
+                                </tr>
+                              );
+                            }
                             const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
+                            const dbg = r.simDebug;
+                            const dbgCode = dbg?.why?.code ?? '—';
                             return (
-                              <tr key={`${r.eventSlug}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
-                                <td className="strat-td strat-td--strong">
-                                  {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
-                                </td>
-                                <td className="strat-td strat-td--muted">
-                                  {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
-                                </td>
-                                <td className="strat-td">
-                                  {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
-                                </td>
-                                <td className="strat-td strat-td--signal">
-                                  {signalLabel ?? '—'}
-                                </td>
-                                <td className="strat-td">
-                                  {r.botEntryTimestamp != null
-                                    ? new Date(r.botEntryTimestamp * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                                    : '—'}
-                                </td>
-                                <td className="strat-td">
-                                  {r.botOrderType ?? '—'}
-                                </td>
-                                <td className="strat-td">
-                                  {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
-                                  {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
-                                  {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
-                                </td>
-                              </tr>
+                                <tr key={r.eventSlug ?? `15m-${r.slotEndSec ?? i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                                  <td className="strat-td strat-td--strong">
+                                    {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
+                                  </td>
+                                  <td className="strat-td strat-td--muted">
+                                    {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
+                                  </td>
+                                  <td className="strat-td">
+                                    {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
+                                  </td>
+                                  <td className="strat-td strat-td--signal">
+                                    {signalLabel ?? '—'}
+                                  </td>
+                                  <td
+                                    className="strat-td"
+                                    title={
+                                      r.botEntryTimestamp != null
+                                        ? `UTC : ${formatTimestampUtcTooltip(r.botEntryTimestamp)}`
+                                        : undefined
+                                    }
+                                  >
+                                    {formatTradeTimestampEt(r.botEntryTimestamp)}
+                                  </td>
+                                  <td className="strat-td">
+                                    {r.botOrderType ?? '—'}
+                                  </td>
+                                  <td className="strat-td">
+                                    {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
+                                    {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
+                                    {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
+                                  </td>
+                                  {backtest15mDebug && (
+                                    <td className="strat-td strat-td--debug">
+                                      <details className="strat-15m-debug-details">
+                                        <summary className="strat-15m-debug-summary-btn" title={dbg?.why?.detail}>
+                                          {dbgCode}
+                                        </summary>
+                                        {dbg && (
+                                          <pre className="strat-15m-debug-json">{JSON.stringify(dbg, null, 2)}</pre>
+                                        )}
+                                      </details>
+                                    </td>
+                                  )}
+                                </tr>
                             );
                           })}
                         </tbody>
                       </table>
                     </div>
-                    {backtestResult15m.withSimul.length > 0 && (
+                    {backtestResult15m.withSignal.length > 0 && (
                       <p className="strat-results-foot">
                         Simulation : <strong className="strat-text-green">{backtestResult15m.won}</strong> gagnés /{' '}
-                        <strong>{backtestResult15m.withSimul.length}</strong> créneaux avec signal 97–97,5 % · Données historiques CLOB.
+                        <strong>{backtestResult15m.withSimul.length}</strong> créneaux résolus avec entrée ·{' '}
+                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) ≥ 97 % (simu CLOB + trades + complément 1−p).
                       </p>
                     )}
                     <div className="strat-actions-row">

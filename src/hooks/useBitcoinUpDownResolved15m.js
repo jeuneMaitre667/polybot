@@ -1,16 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { parseUpDownTokenIdsFromMarket } from '@/lib/gammaPolymarket.js';
+import {
+  parseUpDownTokenIdsFromMarket,
+  getResolvedUpDownWinnerFromGammaMarket,
+  resolveGammaMarketForBtcUpDown,
+} from '@/lib/gammaPolymarket.js';
+import {
+  normalizeConditionId,
+  slotEndMsFrom15mSlug,
+  dedupeResultsOnePer15mSlot,
+  dedupeEnrichedOnePer15mTradeWindow,
+} from '@/lib/bitcoin15mBacktestDedupe.js';
+import { formatBitcoin15mSlotRangeEt } from '@/lib/polymarketDisplayTime.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
 const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
+/** En dev, proxy Vite évite CORS ; en prod, URL directe. */
 const CLOB_PRICES_HISTORY_URL = import.meta.env.DEV
   ? '/apiClob/prices-history'
   : 'https://clob.polymarket.com/prices-history';
+/**
+ * Data API : seuls `market` / `eventId` sont documentés (OpenAPI) — pas de `asset_id`/`after`/`before`.
+ * On fetch par `conditionId` puis on filtre le créneau côté client.
+ */
 const DATA_API_TRADES_URL = import.meta.env.DEV ? '/apiData/trades' : 'https://data-api.polymarket.com/trades';
-const CLOB_PRICES_HISTORY_DIRECT = 'https://clob.polymarket.com/prices-history';
-const DATA_API_TRADES_DIRECT = 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 
 function formatAxiosError(err) {
@@ -24,41 +38,78 @@ function formatAxiosError(err) {
   if (err?.code === 'ECONNABORTED') return 'Timeout';
   return err?.message || 'Erreur réseau';
 }
-const MIN_P = 0.97;
-const MAX_P = 0.975;
+/**
+ * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
+ * Seuil détection plus bas que le prix d’entrée cible : détecter dès ≥ 96,5¢, reporter l’entrée à **≥ 97¢** (plafond 97,5¢).
+ */
+const DETECT_MIN_P = 0.965;
+/** Prix d’entrée simulé : plancher 97¢ (même si la série a franchi à 96,5¢). */
+const SIM_ENTRY_MIN_P = 0.97;
+const SIM_ENTRY_MAX_P = 0.975;
 
-function parseOutcomePrices(market) {
-  try {
-    const raw = market.outcomePrices ?? market.outcome_prices;
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length < 2) return null;
-    return [parseFloat(arr[0]) ?? 0, parseFloat(arr[1]) ?? 0];
-  } catch {
-    return null;
+/** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
+function hasCrossedHighConviction(p) {
+  return Number.isFinite(p) && p >= DETECT_MIN_P && p <= 1;
+}
+
+/** Prix d’entrée reporté : plancher 97¢, plafond 97,5¢. */
+function clampEntryPrice(p) {
+  if (!Number.isFinite(p) || p < SIM_ENTRY_MIN_P) return SIM_ENTRY_MIN_P;
+  return Math.min(p, SIM_ENTRY_MAX_P);
+}
+
+/** Meilleur max(p, 1−p) sur une série token (conviction max d’un côté du binaire). */
+function maxBinaryConvictionInSeries(series) {
+  const arr = Array.isArray(series) ? series : [];
+  let m = -Infinity;
+  for (const pt of arr) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    if (!Number.isFinite(p)) continue;
+    m = Math.max(m, p, 1 - p);
   }
+  return Number.isFinite(m) ? Math.round(m * 10000) / 10000 : null;
 }
 
-const RESOLVED_WIN_THRESHOLD = 0.98;
-
-function getResolvedWinner(market) {
-  const prices = parseOutcomePrices(market);
-  if (!prices) return null;
-  if (prices[0] >= RESOLVED_WIN_THRESHOLD && prices[1] < 0.5) return 'Up';
-  if (prices[1] >= RESOLVED_WIN_THRESHOLD && prices[0] < 0.5) return 'Down';
-  return null;
+/** Max de max(p,1−p) sur les deux séries (même logique que la simu binaire). */
+function maxBinaryAcrossBothSeries(up, down) {
+  const a = maxBinaryConvictionInSeries(up);
+  const b = maxBinaryConvictionInSeries(down);
+  const vals = [a, b].filter((x) => x != null && Number.isFinite(x));
+  if (vals.length === 0) return null;
+  return Math.max(...vals);
 }
 
-/** Slug 15m = btc-updown-15m-{timestamp}. Extrait un libellé date/heure. */
+/**
+ * Prix outcome 0–1. Si l’API renvoie des centièmes (ex. 97 → 0,97), on normalise.
+ */
+function normalizeOutcomePrice(raw) {
+  if (raw == null) return NaN;
+  const p0 = typeof raw === 'string' ? parseFloat(String(raw).replace(',', '.')) : Number(raw);
+  if (!Number.isFinite(p0)) return NaN;
+  let p = p0;
+  if (p > 1 && p <= 100) p = p / 100;
+  if (p > 1) p = 1;
+  if (p < 0) p = 0;
+  return p;
+}
+
+/** Applique `normalizeOutcomePrice` sur chaque point (champ `p` écrasé pour la simu). */
+function normalizeHistorySeriesPoints(series) {
+  const arr = Array.isArray(series) ? series : [];
+  return arr.map((pt) => {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    return { ...pt, p };
+  });
+}
+
+/** Slug 15m = btc-updown-15m-{finUtcSec} — libellé type Polymarket (plage ET). */
 function get15mLabelFromSlug(slug) {
   if (!slug || typeof slug !== 'string') return slug || '—';
   const m = slug.match(/btc-updown-15m-(\d+)$/i);
   if (m) {
     const ts = parseInt(m[1], 10);
-    const ms = ts < 1e12 ? ts * 1000 : ts;
-    const d = new Date(ms);
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    }
+    const sec = ts < 1e12 ? ts : Math.floor(ts / 1000);
+    return formatBitcoin15mSlotRangeEt(sec);
   }
   return slug;
 }
@@ -83,16 +134,6 @@ function getRecent15mSlugs(slotCount) {
     slugs.push(`${BITCOIN_UP_DOWN_15M_SLUG}-${currentSlotEnd - i * slotSec}`);
   }
   return slugs;
-}
-
-/** Fin de créneau (ms UTC) depuis le slug Polymarket btc-updown-15m-{unixSec}. */
-function slotEndMsFrom15mSlug(slug) {
-  if (!slug || typeof slug !== 'string') return null;
-  const m = slug.match(/btc-updown-15m-(\d+)$/i);
-  if (!m) return null;
-  const ts = parseInt(m[1], 10);
-  if (!Number.isFinite(ts)) return null;
-  return ts < 1e12 ? ts * 1000 : ts;
 }
 
 /** Fenêtre temporelle basée sur une fin de créneau (ms). */
@@ -140,77 +181,46 @@ async function fetch15mEventsBySlugBatches(slugs, batchSize = 4) {
   return events;
 }
 
-function normalizeConditionId(cid) {
-  if (!cid) return null;
-  const s = String(cid).trim();
-  if (/^0x[a-fA-F0-9]{64}$/.test(s)) return s;
-  if (/^0x[a-fA-F0-9]+$/.test(s)) return '0x' + s.slice(2).padStart(64, '0');
-  if (/^[a-fA-F0-9]{64}$/.test(s)) return '0x' + s;
-  if (/^\d+$/.test(s)) {
-    const hex = BigInt(s).toString(16);
-    return '0x' + hex.padStart(64, '0');
-  }
-  return null;
-}
+/** Créneau 15m (s) + marge : filtre **après** fetch comme le 1h (4 h), pour ne simuler que pendant le slot. */
+const SLOT_15M_SEC = 15 * 60;
+/**
+ * Marge **avant** le début du créneau : le fetch Data API garde une fenêtre large ; le filtre simu exclut
+ * les points avant `slotStart` dans `collectSimEntryCandidates`.
+ */
+const SLOT_15M_MARGIN_SEC = 30 * 60;
+/**
+ * Fenêtre **après** la fin slug : `tradeHi` côté Data API **et** borne haute du filtre séries.
+ * Doit être **identique** : sinon on fetch des trades jusqu’à +45 min puis on les jette au `filterSeriesTo15mSlot`
+ * (pics ~97¢ souvent horodatés entre +15 et +45 min → `rowsMaxBinaryGeMinAfterSlotFilter: 0`).
+ */
+const SLOT_END_PADDING_SEC = 45 * 60;
+/**
+ * Borne **stricte** pour l’horodatage d’**entrée simulée** (évite signaux type « plusieurs min après clôture »).
+ */
+const SLOT_END_SIM_SLOP_SEC = 30;
+/**
+ * Ancien nom (retiré du filtre) — **alias** de `SLOT_END_PADDING_SEC` pour éviter erreurs « not defined »
+ * (cache Vite / onglet / copier-coller d’une vieille version).
+ */
+const SLOT_SERIES_HI_PADDING_SEC = SLOT_END_PADDING_SEC;
 
-async function fetchTradesHistoryAtBase(baseUrl, conditionId, endDateStr) {
-  const cid = normalizeConditionId(conditionId);
-  if (!cid) return { history: [], error: 'conditionId invalide' };
+/**
+ * Si `true`, rejette les entrées dont le `ts` tombe dans les minutes UTC d’ouverture / clôture (voir
+ * `BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC`). **Par défaut `false`** : avec `true`, les pics ~97¢ en fin de
+ * créneau tombent quasi toujours en minute :14/:29/:44/:59 → `excluded_by_15m_forbidden_minutes_utc` sur presque toutes les lignes.
+ */
+const APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC = false;
+
+/**
+ * Historique CLOB `prices-history` — souvent **prix mid** (~50¢), pas le best ask ; utile comme contexte,
+ * les **vrais** ~97¢ viennent surtout des trades Data API (`fetchDataApiTradePointsByToken`).
+ */
+async function fetchPriceHistory(tokenId, endDateStr) {
   const endMs = new Date(endDateStr).getTime();
-  if (!Number.isFinite(endMs)) return { history: [], error: 'endDate invalide' };
+  if (!Number.isFinite(endMs)) return { history: [], error: 'endDate invalide', meta: null };
   const endTs = Math.floor(endMs / 1000);
   const startTs = endTs - 14400;
-  try {
-    const { data: trades } = await axios.get(baseUrl, {
-      params: { market: cid, limit: 2000, takerOnly: true },
-      timeout: 12000,
-    });
-    if (!Array.isArray(trades) || trades.length === 0) return { history: [], error: null };
-    const points = [];
-    for (const tr of trades) {
-      const t = tr.timestamp != null ? (Number(tr.timestamp) < 1e12 ? Number(tr.timestamp) : Math.floor(Number(tr.timestamp) / 1000)) : null;
-      if (t == null || t < startTs || t > endTs) continue;
-      const price = tr.price != null ? Number(tr.price) : null;
-      if (price == null) continue;
-      const outcomeIndex = tr.outcomeIndex ?? 0;
-      const pUp = outcomeIndex === 0 ? price : 1 - price;
-      points.push({ t, p: pUp });
-    }
-    points.sort((a, b) => a.t - b.t);
-    return { history: points, error: null };
-  } catch (e) {
-    return { history: [], error: formatAxiosError(e) };
-  }
-}
-
-/** Secours URL directe en dev si le proxy `/apiData` échoue. */
-async function fetchPriceHistoryFromTrades(conditionId, endDateStr) {
-  const primary = await fetchTradesHistoryAtBase(DATA_API_TRADES_URL, conditionId, endDateStr);
-  if (primary.history.length > 0) return { ...primary, usedDirectDataApi: false };
-  if (import.meta.env.DEV && String(DATA_API_TRADES_URL).startsWith('/')) {
-    const direct = await fetchTradesHistoryAtBase(DATA_API_TRADES_DIRECT, conditionId, endDateStr);
-    if (direct.history.length > 0) return { ...direct, usedDirectDataApi: true };
-    const parts = [primary.error, direct.error].filter(Boolean);
-    return { history: [], error: parts.length ? parts.join(' → ') : null, usedDirectDataApi: false };
-  }
-  return { ...primary, usedDirectDataApi: false };
-}
-
-async function fetchTokenIdsByMarketSlug(eventSlug) {
-  if (!eventSlug) return { tokenIdUp: null, tokenIdDown: null };
-  try {
-    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(eventSlug)}`, { timeout: 8000 });
-    return parseUpDownTokenIdsFromMarket(m);
-  } catch {
-    return { tokenIdUp: null, tokenIdDown: null };
-  }
-}
-
-async function fetchClobPriceHistoryAtBase(baseUrl, tokenId, endDateStr) {
-  const endMs = new Date(endDateStr).getTime();
-  if (!Number.isFinite(endMs)) return { history: [], error: 'endDate invalide' };
-  const endTs = Math.floor(endMs / 1000);
-  const startTs = endTs - 14400;
+  const baseMeta = { startTs, endTs, tokenIdTail: String(tokenId).slice(-8) };
   const toHistory = (data) => {
     const h = data?.history ?? data ?? [];
     return Array.isArray(h) ? h : [];
@@ -223,112 +233,556 @@ async function fetchClobPriceHistoryAtBase(baseUrl, tokenId, endDateStr) {
       return ts >= startTs && ts <= endTs;
     });
   try {
-    const market = String(tokenId);
-    // Sur les 15m, les entrées dans 97–97,5% sont souvent des "pics" :
-    // si on s'arrête au premier fidelity non-vide (ex. 60), on les rate.
-    // On privilégie donc la granularité la plus fine (1 minute) d'abord.
-    for (const fidelity of [1, 5, 15, 60]) {
-      const res = await axios.get(baseUrl, {
-        params: { market, startTs, endTs, fidelity },
+    /** Inclure 1 min en premier : un pic 97¢ sur 1–2 min entre deux points fidelity=5 était invisible (~3 points / 15 min). */
+    const fidelityAttempts = [1, 5, 15, 60];
+    for (const fidelity of fidelityAttempts) {
+      const res = await axios.get(CLOB_PRICES_HISTORY_URL, {
+        params: { market: String(tokenId), startTs, endTs, fidelity },
         timeout: 10000,
       });
       const history = toHistory(res.data);
-      if (history.length > 0) return { history, error: null };
+      if (history.length > 0) return { history, error: null, meta: { ...baseMeta, path: 'fidelity', fidelity } };
     }
-    const res = await axios.get(baseUrl, {
-      params: { market, startTs, endTs, interval: '12h' },
+    const res = await axios.get(CLOB_PRICES_HISTORY_URL, {
+      params: { market: String(tokenId), startTs, endTs, interval: '12h' },
       timeout: 10000,
     });
     let history = toHistory(res.data);
     if (history.length === 0) {
-      const resMax = await axios.get(baseUrl, {
-        params: { market, startTs, endTs, interval: 'max' },
+      const resMax = await axios.get(CLOB_PRICES_HISTORY_URL, {
+        params: { market: String(tokenId), startTs, endTs, interval: 'max' },
         timeout: 10000,
       });
       history = filterByWindow(toHistory(resMax.data));
+      if (history.length > 0) return { history, error: null, meta: { ...baseMeta, path: 'interval:max+filter' } };
+    } else {
+      return { history, error: null, meta: { ...baseMeta, path: 'interval:12h' } };
     }
-    return { history, error: null };
+    return { history, error: null, meta: { ...baseMeta, path: 'empty' } };
   } catch (e) {
-    return { history: [], error: formatAxiosError(e) };
+    return { history: [], error: formatAxiosError(e), meta: { ...baseMeta, path: 'error' } };
   }
 }
 
-/**
- * En dev, si le proxy `/apiClob` échoue ou renvoie vide alors que le marché existe, retente en direct sur clob.polymarket.com.
- */
-async function fetchPriceHistory(tokenId, endDateStr) {
-  const primary = await fetchClobPriceHistoryAtBase(CLOB_PRICES_HISTORY_URL, tokenId, endDateStr);
-  if (primary.history.length > 0) return { ...primary, usedDirectClob: false };
-  if (import.meta.env.DEV && String(CLOB_PRICES_HISTORY_URL).startsWith('/')) {
-    const direct = await fetchClobPriceHistoryAtBase(CLOB_PRICES_HISTORY_DIRECT, tokenId, endDateStr);
-    if (direct.history.length > 0) return { history: direct.history, error: null, usedDirectClob: true };
-    const parts = [primary.error, direct.error].filter(Boolean);
-    return { history: [], error: parts.length ? parts.join(' → ') : null, usedDirectClob: false };
+/** Compare `asset` (trade) et clobTokenId (Gamma) — chaînes ou grands entiers. */
+function assetsMatch(assetRaw, tokenIdRaw) {
+  if (assetRaw == null || tokenIdRaw == null) return false;
+  const a = String(assetRaw).trim();
+  const b = String(tokenIdRaw).trim();
+  if (a === b) return true;
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+    try {
+      return BigInt(a) === BigInt(b);
+    } catch {
+      return false;
+    }
   }
-  return { ...primary, usedDirectClob: false };
+  return false;
+}
+
+/** La Data API renvoie souvent un tableau brut ; le CLOB documenté renvoie `{ data: [...] }`. */
+function unwrapTradesPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  if (payload && Array.isArray(payload.trades)) return payload.trades;
+  return [];
+}
+
+function parseTimeToUnixSec(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (/^\d+$/.test(s)) {
+      const n = Number(s);
+      if (!Number.isFinite(n)) return null;
+      return n < 1e12 ? n : Math.floor(n / 1000);
+    }
+    if (/[T\-:]/.test(s)) {
+      const ms = Date.parse(s);
+      return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+    }
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return n < 1e12 ? n : Math.floor(n / 1000);
+}
+
+function tradeTimestampSec(tr) {
+  const ts = parseTimeToUnixSec(tr?.timestamp);
+  if (ts != null) return ts;
+  return parseTimeToUnixSec(tr?.createdAt);
+}
+
+/** Identifiant token côté trade (Data API `asset`, CLOB-style `asset_id`). */
+function tradeAssetId(tr) {
+  const v = tr?.asset ?? tr?.asset_id ?? tr?.assetId;
+  return v != null ? String(v).trim() : '';
+}
+
+/** Outcome explicite « Up » / « Down » (souvent présent sur les trades agrégés). */
+function outcomeLabelToSide(outcome) {
+  if (outcome == null) return null;
+  const o = String(outcome).trim().toLowerCase();
+  if (o === 'up' || o === 'yes') return 'up';
+  if (o === 'down' || o === 'no') return 'down';
+  return null;
+}
+
+async function fetchDataApiTradesAllPages(extraParams) {
+  const merged = [];
+  for (let offset = 0; offset < 60000; offset += 10000) {
+    const { data } = await axios.get(DATA_API_TRADES_URL, {
+      params: { ...extraParams, limit: 10000, offset, takerOnly: false },
+      timeout: 25000,
+    });
+    const page = unwrapTradesPayload(data);
+    if (page.length === 0) break;
+    merged.push(...page);
+    if (page.length < 10000) break;
+  }
+  return merged;
+}
+
+/**
+ * Trades par `asset_id` (token). La Data API ne documente pas `after`/`before` : pagination puis **filtre temps en JS**.
+ */
+async function fetchDataApiTradesByAsset(tokenId, afterTs, beforeTs) {
+  const merged = [];
+  for (let offset = 0; offset < 5000; offset += 500) {
+    const { data } = await axios.get(DATA_API_TRADES_URL, {
+      params: {
+        asset_id: String(tokenId),
+        limit: 500,
+        offset,
+        takerOnly: false,
+      },
+      timeout: 10000,
+    });
+    const raw = unwrapTradesPayload(data);
+    const inWindow = raw.filter((tr) => {
+      const t = tradeTimestampSec(tr);
+      return t != null && t >= afterTs && t <= beforeTs;
+    });
+    merged.push(...inWindow);
+    if (raw.length < 500) break;
+  }
+  return merged;
+}
+
+/**
+ * Trades Data API (public) : **prix d’exécution** par token (`asset` = clobTokenId).
+ * Priorité : `asset_id` + filtre créneau client ; repli `market` / `eventId`.
+ */
+async function fetchDataApiTradePointsByToken(conditionId, tokenIdUp, tokenIdDown, endDateStr, gammaEventId = null) {
+  const cid = normalizeConditionId(conditionId);
+  if (!cid) {
+    return {
+      pointsUp: [],
+      pointsDown: [],
+      error: 'conditionId invalide',
+      meta: { reason: 'cid' },
+    };
+  }
+  const endMs = new Date(endDateStr).getTime();
+  if (!Number.isFinite(endMs)) {
+    return {
+      pointsUp: [],
+      pointsDown: [],
+      error: 'endDate invalide',
+      meta: { reason: 'endDate' },
+    };
+  }
+  const endTs = Math.floor(endMs / 1000);
+  /** Fenêtre collée au créneau (~15 min + marge avant) : évite 72 h de pagination / timeouts ; filtre simu affine encore. */
+  const tradeLo = endTs - SLOT_15M_SEC - SLOT_15M_MARGIN_SEC;
+  const tradeHi = endTs + SLOT_END_PADDING_SEC;
+  const tidUp = tokenIdUp != null && String(tokenIdUp).trim() !== '' ? String(tokenIdUp).trim() : null;
+  const tidDown = tokenIdDown != null && String(tokenIdDown).trim() !== '' ? String(tokenIdDown).trim() : null;
+
+  try {
+    let trades = [];
+    let fetchMode = 'asset_id';
+    if (tidUp || tidDown) {
+      const [tradesUp, tradesDown] = await Promise.all([
+        tidUp ? fetchDataApiTradesByAsset(tidUp, tradeLo, tradeHi).catch(() => []) : Promise.resolve([]),
+        tidDown ? fetchDataApiTradesByAsset(tidDown, tradeLo, tradeHi).catch(() => []) : Promise.resolve([]),
+      ]);
+      trades = [...tradesUp, ...tradesDown];
+    }
+    if (trades.length === 0) {
+      trades = await fetchDataApiTradesAllPages({ market: cid });
+      fetchMode = 'market';
+      if (trades.length === 0 && gammaEventId != null && Number.isFinite(Number(gammaEventId))) {
+        const byEvent = await fetchDataApiTradesAllPages({ eventId: Number(gammaEventId) });
+        trades = byEvent.filter((tr) => normalizeConditionId(tr.conditionId ?? tr.condition_id) === cid);
+        fetchMode = 'eventId+filter';
+      }
+    }
+    const rawLen = trades.length;
+    if (rawLen === 0) {
+      return {
+        pointsUp: [],
+        pointsDown: [],
+        error: null,
+        meta: {
+          tradeLo,
+          tradeHi,
+          rawTrades: 0,
+          pointsUp: 0,
+          pointsDown: 0,
+          byAssetUp: 0,
+          byAssetDown: 0,
+          bySkippedUnclassified: 0,
+          fetchMode,
+          note: 'Aucun trade Data API (asset_id puis market/eventId + filtre créneau client)',
+        },
+      };
+    }
+    const pointsUp = [];
+    const pointsDown = [];
+    let byAssetUp = 0;
+    let byAssetDown = 0;
+    let byOutcomeNameUp = 0;
+    let byOutcomeNameDown = 0;
+    /** Trades sans `asset` reconnu ni outcome explicite — on ne devine pas via outcomeIndex (souvent Down=0 sur Gamma). */
+    let bySkippedUnclassified = 0;
+
+    for (const tr of trades) {
+      const t = tradeTimestampSec(tr);
+      if (t == null || t < tradeLo || t > tradeHi) continue;
+      const rawPrice = tr.price;
+      if (rawPrice == null) continue;
+      const price = normalizeOutcomePrice(rawPrice);
+      if (!Number.isFinite(price)) continue;
+
+      const aid = tradeAssetId(tr);
+      if (tidUp && assetsMatch(aid || tr.asset, tidUp)) {
+        pointsUp.push({ t, p: price, src: 'data-api' });
+        byAssetUp += 1;
+        continue;
+      }
+      if (tidDown && assetsMatch(aid || tr.asset, tidDown)) {
+        pointsDown.push({ t, p: price, src: 'data-api' });
+        byAssetDown += 1;
+        continue;
+      }
+
+      const side = outcomeLabelToSide(tr.outcome);
+      if (side === 'up') {
+        pointsUp.push({ t, p: price, src: 'data-api-outcome' });
+        byOutcomeNameUp += 1;
+        continue;
+      }
+      if (side === 'down') {
+        pointsDown.push({ t, p: price, src: 'data-api-outcome' });
+        byOutcomeNameDown += 1;
+        continue;
+      }
+
+      bySkippedUnclassified += 1;
+    }
+    pointsUp.sort((a, b) => a.t - b.t);
+    pointsDown.sort((a, b) => a.t - b.t);
+    return {
+      pointsUp,
+      pointsDown,
+      error: null,
+      meta: {
+        tradeLo,
+        tradeHi,
+        rawTrades: rawLen,
+        pointsUp: pointsUp.length,
+        pointsDown: pointsDown.length,
+        byAssetUp,
+        byAssetDown,
+        byOutcomeNameUp,
+        byOutcomeNameDown,
+        bySkippedUnclassified,
+        market: `${cid.slice(0, 10)}…`,
+        fetchMode,
+        note: 'CLOB GET /trades = auth L2 (pas depuis le navigateur) ; ici Data API publique (asset / asset_id / outcome)',
+      },
+    };
+  } catch (e) {
+    return {
+      pointsUp: [],
+      pointsDown: [],
+      error: formatAxiosError(e),
+      meta: { tradeLo, tradeHi, rawTrades: null },
+    };
+  }
+}
+
+async function fetchTokenIdsByMarketSlug(eventSlug) {
+  if (!eventSlug) return { tokenIdUp: null, tokenIdDown: null };
+  try {
+    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(eventSlug)}`, { timeout: 8000 });
+    return parseUpDownTokenIdsFromMarket(m);
+  } catch {
+    return { tokenIdUp: null, tokenIdDown: null };
+  }
 }
 
 function toSeconds(t) {
-  if (t == null) return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? (n < 1e12 ? n : Math.floor(n / 1000)) : null;
+  return parseTimeToUnixSec(t);
+}
+
+/** Fusionne deux séries { t, p } triées par temps (CLOB + trades). */
+function mergePriceSeriesSorted(a, b) {
+  const out = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
+  out.sort((x, y) => {
+    const tx = toSeconds(x?.t ?? x?.timestamp);
+    const ty = toSeconds(y?.t ?? y?.timestamp);
+    if (tx == null && ty == null) return 0;
+    if (tx == null) return 1;
+    if (ty == null) return -1;
+    return tx - ty;
+  });
+  return out;
 }
 
 /**
- * Exclusion des dernières minutes avant la fin du créneau 15 min (alignée bot live).
- * Temporairement à 0 : réactiver `4 * 60` quand tu voudras remettre la règle des 4 minutes.
+ * Filtre les points pour la simu : fenêtre autour du créneau ; **hi** large pour garder trades tardifs.
+ * L’entrée simulée reste bornée par `SLOT_END_SIM_SLOP_SEC` dans `collectSimEntryCandidates`.
  */
-const NO_TRADE_LAST_SEC_15M = 0; // était : 4 * 60
+function filterSeriesTo15mSlot(series, slotEndSec) {
+  if (slotEndSec == null || !Number.isFinite(slotEndSec)) return Array.isArray(series) ? series : [];
+  const lo = slotEndSec - SLOT_15M_SEC - SLOT_15M_MARGIN_SEC;
+  const hi = slotEndSec + SLOT_END_PADDING_SEC;
+  const arr = Array.isArray(series) ? series : [];
+  return arr.filter((pt) => {
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    return t != null && t >= lo && t <= hi;
+  });
+}
 
-function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
-  const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
+function slotFilterBounds(slotEndSec) {
+  if (slotEndSec == null || !Number.isFinite(slotEndSec)) return null;
+  const lo = slotEndSec - SLOT_15M_SEC - SLOT_15M_MARGIN_SEC;
+  const hi = slotEndSec + SLOT_END_PADDING_SEC;
+  return {
+    loSec: lo,
+    hiSec: hi,
+    loIso: new Date(lo * 1000).toISOString(),
+    hiIso: new Date(hi * 1000).toISOString(),
+    dataApiFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
+    entryMaxAfterSlotSec: SLOT_END_SIM_SLOP_SEC,
+  };
+}
+
+/** Stats prix sur une série CLOB/trades (points déjà { t, p } ou champs équivalents). */
+function summarizeSeriesForDebug(series) {
+  const arr = Array.isArray(series) ? series : [];
+  let minP = Infinity;
+  let maxP = -Infinity;
+  let inBand = 0;
+  let first = null;
+  let last = null;
+  for (const pt of arr) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (!Number.isFinite(p) || t == null) continue;
+    minP = Math.min(minP, p);
+    maxP = Math.max(maxP, p);
+    if (hasCrossedHighConviction(p)) inBand += 1;
+    const cur = { t, p };
+    if (first == null) first = cur;
+    last = cur;
+  }
+  return {
+    count: arr.length,
+    minP: Number.isFinite(minP) ? Math.round(minP * 10000) / 10000 : null,
+    maxP: Number.isFinite(maxP) ? Math.round(maxP * 10000) / 10000 : null,
+    pointsInBand: inBand,
+    firstT: first?.t ?? null,
+    lastT: last?.t ?? null,
+  };
+}
+
+/**
+ * Fins de créneau 15m UTC : :00, :15, :30, :45.
+ * On n’exclut que la **dernière minute** avant chaque borne (les pics ~97¢ arrivent souvent en fin de slot).
+ */
+function isForbidden15mClosingWindowUtc(tsSec) {
+  if (tsSec == null || !Number.isFinite(tsSec)) return false;
+  const m = new Date(tsSec * 1000).getUTCMinutes();
+  if (m === 59) return true;
+  if (m === 14) return true;
+  if (m === 29) return true;
+  if (m === 44) return true;
+  return false;
+}
+
+/**
+ * Début de chaque créneau 15m UTC : les **3 premières minutes** après chaque borne
+ * (`minute % 15` ∈ {0,1,2}) — ex. :00–:02, :15–:17, :30–:32, :45–:47.
+ * Aligné sur une exécution prudente (carnet / liquidité) : pas d’entrée pendant 3 min après l’ouverture du marché.
+ */
+function isForbidden15mSlotOpeningMinutesUtc(tsSec) {
+  if (tsSec == null || !Number.isFinite(tsSec)) return false;
+  const m = new Date(tsSec * 1000).getUTCMinutes();
+  const r = m % 15;
+  return r <= 2;
+}
+
+function isForbiddenEntryTimingUtc(tsSec) {
+  return isForbidden15mClosingWindowUtc(tsSec) || isForbidden15mSlotOpeningMinutesUtc(tsSec);
+}
+
+/** Export debug / UI */
+const BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC = {
+  timezone: 'UTC',
+  appliedInSimulation: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC,
+  slotEndsEveryQuarterHour: [0, 15, 30, 45],
+  /** 1 dernière minute UTC avant chaque fin de quart (:14, :29, :44, :59). */
+  forbiddenUtcMinuteRangesClosing: [[14, 14], [29, 29], [44, 44], [59, 59]],
+  /** 3 premières minutes de chaque créneau 15m UTC : m%15 ∈ {0,1,2} (ex. …:00–:02, :15–:17…). */
+  forbiddenUtcMinutesSlotOpenTriples: [
+    [0, 1, 2],
+    [15, 16, 17],
+    [30, 31, 32],
+    [45, 46, 47],
+  ],
+  label: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC
+    ? 'Pas d’entrée : dernière min UTC avant :00/:15/:30/:45 (m ∈ {14,29,44,59}) OU 3 premières min après chaque début (m%15∈{0,1,2})'
+    : 'Fenêtres UTC ci-dessous documentées uniquement — **non appliquées** à la simu (`APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC = false`).',
+};
+
+/**
+ * Candidats d’entrée (événements triés, interpolation, exclusion minutes UTC ouverture + clôture 15m).
+ * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: typeof BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC }}
+ */
+function collectSimEntryCandidates(historyUp, historyDown, endDateStr) {
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
-  if (up.length === 0 && down.length === 0) return empty;
-
   let endTsSec = null;
   if (endDateStr) {
     const raw = endDateStr;
     const endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
     if (Number.isFinite(endMs)) endTsSec = Math.floor(endMs / 1000);
   }
-  const endCutSec = endTsSec != null ? endTsSec - NO_TRADE_LAST_SEC_15M : null;
-
-  // On prend le plus tôt entre (token Up entre en bande) et (token Down entre en bande).
-  // Si l'historique Down est absent, on retombe sur le complément (1 - pUp) pour rester robuste.
-  const candidates = [];
-
+  const events = [];
   for (const pt of up) {
-    const p = pt?.p ?? pt?.price;
-    const pUp = Number(p);
-    const ts = toSeconds(pt?.t ?? pt?.timestamp);
-    if (!Number.isFinite(pUp) || ts == null) continue;
-    if (endCutSec != null && ts >= endCutSec) continue;
-    if (pUp >= MIN_P && pUp <= MAX_P) candidates.push({ side: 'Up', price: pUp, ts });
-    if (down.length === 0) {
-      const pDown = 1 - pUp;
-      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (!Number.isFinite(p) || t == null) continue;
+    events.push({ t, side: 'Up', price: p });
+    events.push({ t, side: 'Down', price: 1 - p });
+  }
+  for (const pt of down) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (!Number.isFinite(p) || t == null) continue;
+    events.push({ t, side: 'Down', price: p });
+    events.push({ t, side: 'Up', price: 1 - p });
+  }
+  events.sort((a, b) => a.t - b.t);
+  const lastBySide = { Up: null, Down: null };
+  const candidates = [];
+  for (const ev of events) {
+    const { t, side, price } = ev;
+    if (!hasCrossedHighConviction(price)) {
+      lastBySide[side] = { t, price };
+      continue;
     }
+    const prev = lastBySide[side];
+    let tsUsed = t;
+    if (prev != null && prev.price < DETECT_MIN_P && price > prev.price) {
+      const numer = DETECT_MIN_P - prev.price;
+      const denom = price - prev.price;
+      if (denom > 0) tsUsed = prev.t + (t - prev.t) * (numer / denom);
+    }
+    if (endTsSec != null && Number.isFinite(endTsSec)) {
+      const slotStartSec = endTsSec - SLOT_15M_SEC;
+      if (tsUsed > endTsSec + SLOT_END_SIM_SLOP_SEC || tsUsed < slotStartSec) {
+        lastBySide[side] = { t, price };
+        continue;
+      }
+    }
+    if (APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC && isForbiddenEntryTimingUtc(tsUsed)) {
+      lastBySide[side] = { t, price };
+      continue;
+    }
+    candidates.push({ side, price: clampEntryPrice(price), ts: tsUsed });
+    lastBySide[side] = { t, price };
+  }
+  return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
+}
+
+/**
+ * Indications si aucun signal — aligné sur `collectSimEntryCandidates` (interpolation + minutes UTC interdites).
+ */
+function debugWhyNoSignal(historyUp, historyDown, endDateStr) {
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  if (up.length === 0 && down.length === 0) {
+    return { code: 'empty_after_slot_filter', detail: 'Aucun point après filtre créneau (voir slotBounds dans simDebug).' };
   }
 
-  if (down.length > 0) {
-    for (const pt of down) {
-      const p = pt?.p ?? pt?.price;
-      const pDown = Number(p);
-      const ts = toSeconds(pt?.t ?? pt?.timestamp);
-      if (!Number.isFinite(pDown) || ts == null) continue;
-      if (endCutSec != null && ts >= endCutSec) continue;
-      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
-    }
+  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(historyUp, historyDown, endDateStr);
+
+  if (candidates.length > 0) {
+    const touchesBand = candidates.slice(0, 5).map((c) => ({
+      side: c.side,
+      p: Math.round(c.price * 10000) / 10000,
+      ts: c.ts,
+    }));
+    return { code: 'would_signal', touchesBand };
   }
+
+  const su = summarizeSeriesForDebug(up);
+  const sd = summarizeSeriesForDebug(down);
+  const maxU = maxBinaryConvictionInSeries(up);
+  const maxD = maxBinaryConvictionInSeries(down);
+  const maxBin = [maxU, maxD].filter((x) => x != null && Number.isFinite(x));
+  const peak = maxBin.length ? Math.max(...maxBin) : null;
+  const hadHigh = peak != null && peak >= DETECT_MIN_P;
+
+  if (hadHigh) {
+    return {
+      code: 'excluded_by_15m_forbidden_minutes_utc',
+      detail: `Franchissement ≥ ${DETECT_MIN_P} présent, mais ts (ou interpolé) en fenêtre interdite : dernière min avant :00/:15/:30/:45 UTC ou début (3 premières min du quart : m%15∈{0,1,2}).`,
+      forbiddenMinuteRule,
+      endTsSec,
+      maxUp: su.maxP,
+      maxDown: sd.maxP,
+      maxBinaryConvictionUpToken: maxU,
+      maxBinaryConvictionDownToken: maxD,
+    };
+  }
+
+  return {
+    code: 'no_price_in_band',
+    detail: `Aucun franchissement ≥ ${DETECT_MIN_P} après filtre créneau (entrée simulée ${SIM_ENTRY_MIN_P}–${SIM_ENTRY_MAX_P}).`,
+    maxUp: su.maxP,
+    maxDown: sd.maxP,
+    minUp: su.minP,
+    minDown: sd.minP,
+    maxBinaryConvictionUpToken: maxU,
+    maxBinaryConvictionDownToken: maxD,
+  };
+}
+
+/**
+ * Détection entrée : **≥ DETECT_MIN_P** jusqu’à 1 ; entrée reportée **SIM_ENTRY_MIN_P–SIM_ENTRY_MAX_P**. Marché binaire : depuis chaque point Up on teste aussi **1−p** (Down implicite),
+ * et depuis chaque point Down on teste **1−p** (Up implicite) — indispensable quand les deux séries CLOB sont chargées
+ * (le hook 1h ne le faisait que si `down.length === 0`, ce qui bloquait la détection 15m).
+ */
+function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
+  const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  if (up.length === 0 && down.length === 0) return empty;
+
+  const { candidates } = collectSimEntryCandidates(historyUp, historyDown, endDateStr);
 
   if (candidates.length === 0) return empty;
-  // Tie-breaker : Up avant Down si ts identiques
   candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
   const first = candidates[0];
+  const settled = winner === 'Up' || winner === 'Down';
   return {
     botWouldTake: first.side,
-    botWon: winner === first.side,
+    botWon: settled ? winner === first.side : null,
     botEntryPrice: first.price,
     botEntryTimestamp: first.ts,
     botOrderType: 'Marché',
@@ -338,11 +792,15 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
 /**
  * Récupère les marchés Bitcoin Up or Down 15 min résolus (slug btc-updown-15m-*).
  * Même logique que useBitcoinUpDownResolved mais pour les créneaux 15 min.
+ * @param {number} windowHours
+ * @param {{ debug?: boolean }} [options] — `debug: true` : remplit `simDebug` par ligne + `debugSummary` (coût mémoire / logs).
  */
-export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) {
+export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, options = {}) {
+  const debug = Boolean(options.debug);
   const [resolved, setResolved] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [debugSummary, setDebugSummary] = useState(null);
 
   const fetchResolved = useCallback(async () => {
     setError(null);
@@ -351,7 +809,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
       const seen = new Set();
       const results = [];
 
-      const processEvent = (ev) => {
+      const processEvent = async (ev) => {
         const eventSlug = (ev.slug ?? '').toLowerCase();
         if (!eventSlug.includes(BITCOIN_UP_DOWN_15M_SLUG)) return;
         const refEndMs = resolve15mRefEndMs(ev);
@@ -364,23 +822,51 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
           (m0?.endDate ?? m0?.endDateIso ?? '');
         if (!endDate) return;
         const slotLabel = get15mLabelFromSlug(ev.slug ?? '');
+        const slugEndMsForOutcome = slotEndMsFrom15mSlug(ev.slug ?? '');
+        /** Fin officielle du créneau : **slug** d’abord (vérité Polymarket UTC), sinon refEndMs. */
+        const officialSlotEndMs =
+          slugEndMsForOutcome != null && Number.isFinite(slugEndMsForOutcome) ? slugEndMsForOutcome : refEndMs;
         const slotEndedAtLeast2MinAgo = refEndMs != null && Date.now() >= refEndMs + 120000;
         for (const m of ev.markets ?? []) {
-          let winner = getResolvedWinner(m);
+          const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+          let winner = getResolvedUpDownWinnerFromGammaMarket(mm);
+          /**
+           * Gamma peut mettre des outcomePrices « résolus » (≥ 98 %) **avant** l’heure de fin du slug UTC.
+           * Sans ce garde-fou, le tableau affiche Gagné/Perdu alors que le créneau est encore en cours côté horloge réelle.
+           */
+          if (
+            winner &&
+            officialSlotEndMs != null &&
+            Number.isFinite(officialSlotEndMs) &&
+            Date.now() < officialSlotEndMs
+          ) {
+            winner = null;
+          }
           if (!winner && !slotEndedAtLeast2MinAgo) continue;
-          const cid = m.conditionId ?? m.condition_id ?? ev.slug;
-          if (seen.has(cid)) continue;
-          seen.add(cid);
-          const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(m);
+          const rawCid = m.conditionId ?? m.condition_id ?? null;
+          const normCid = normalizeConditionId(rawCid);
+          /** Ne jamais utiliser le slug comme `market` Data API (invalide) — déduplication stable. */
+          const seenKey = normCid ?? `slug:${ev.slug ?? ''}:${m.id ?? m.question ?? ''}`;
+          if (seen.has(seenKey)) continue;
+          seen.add(seenKey);
+          const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mm);
           results.push({
             eventSlug: ev.slug,
+            /** Pour Data API : repli `?eventId=` si `?market=conditionId` est vide. */
+            gammaEventId: ev.id ?? ev.event_id ?? ev.eventId ?? null,
             question: m.question ?? ev.title ?? ev.slug ?? '',
             hourLabel: slotLabel,
             endDate,
-            /** Fin de créneau UTC (s) : référence CLOB / bot (dérivée de `ev.endDate` si possible). */
-            slotEndSec: refEndMs != null ? Math.floor(refEndMs / 1000) : null,
+            /** Fin de créneau UTC (s) : **slug** en priorité (vérité Polymarket), pas seulement `refEndMs`/Gamma (décalages ~15 min). */
+            slotEndSec:
+              officialSlotEndMs != null && Number.isFinite(officialSlotEndMs)
+                ? Math.floor(officialSlotEndMs / 1000)
+                : refEndMs != null
+                  ? Math.floor(refEndMs / 1000)
+                  : null,
             winner: winner || null,
-            conditionId: cid,
+            conditionId: normCid ?? rawCid ?? null,
+            normalizedConditionId: normCid,
             tokenIdUp,
             tokenIdDown,
           });
@@ -390,24 +876,39 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
       const slotCount = Math.min(MAX_15M_SLUG_FETCH, Math.ceil(windowHours * SLOTS_PER_HOUR));
       const recent15mSlugs = getRecent15mSlugs(slotCount);
       const slugEventsFirst = await fetch15mEventsBySlugBatches(recent15mSlugs, 4);
-      slugEventsFirst.forEach(processEvent);
+      for (const ev of slugEventsFirst) await processEvent(ev);
 
+      const endDateMinIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
       try {
         for (let offset = 0; offset < 500; offset += 100) {
           const { data: closedPage } = await axios.get(GAMMA_EVENTS_URL, {
-            params: { closed: true, slug_contains: BITCOIN_UP_DOWN_15M_SLUG, limit: 100, offset },
+            params: {
+              closed: true,
+              end_date_min: endDateMinIso,
+              limit: 100,
+              offset,
+              order: 'end_date',
+              ascending: false,
+            },
             timeout: 15000,
           });
           const page = Array.isArray(closedPage) ? closedPage : closedPage?.data ?? closedPage?.results ?? [];
-          page.forEach(processEvent);
+          for (const ev of page) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
+          }
           if (page.length < 100) break;
         }
       } catch {
         // Ne jamais throw : un 429/503/timeout sur la liste « closed » ne doit pas effacer les events déjà chargés par slug.
         try {
-          const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { closed: true, limit: 500 }, timeout: 15000 });
+          const { data } = await axios.get(GAMMA_EVENTS_URL, {
+            params: { closed: true, end_date_min: endDateMinIso, limit: 500, order: 'end_date', ascending: false },
+            timeout: 15000,
+          });
           const arr = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-          arr.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)).forEach(processEvent);
+          for (const ev of arr) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
+          }
         } catch {
           /* on garde ce que la phase slug a récupéré */
         }
@@ -415,24 +916,29 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
 
       try {
         const { data: activeRes } = await axios.get(GAMMA_EVENTS_URL, {
-          params: { active: true, closed: false, slug_contains: BITCOIN_UP_DOWN_15M_SLUG, limit: 100 },
+          params: { active: true, closed: false, limit: 300 },
           timeout: 15000,
         });
         const activeEvents = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-        activeEvents.forEach(processEvent);
+        for (const ev of activeEvents) {
+          if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
+        }
       } catch {
         try {
           const { data: activeRes } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 300 }, timeout: 15000 });
           const arr = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-          arr.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)).forEach(processEvent);
+          for (const ev of arr) {
+            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
+          }
         } catch {
           /* inchangé : phase slug + closed déjà fusionnés */
         }
       }
 
       results.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
+      const resultsOnePerSlot = dedupeResultsOnePer15mSlot(results);
 
-      for (const r of results) {
+      for (const r of resultsOnePerSlot) {
         if (!r.tokenIdUp && r.eventSlug) {
           const { tokenIdUp, tokenIdDown } = await fetchTokenIdsByMarketSlug(r.eventSlug);
           r.tokenIdUp = tokenIdUp;
@@ -441,44 +947,130 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
       }
 
       const enriched = [];
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i];
+      for (let i = 0; i < resultsOnePerSlot.length; i++) {
+        const r = resultsOnePerSlot[i];
         if (i > 0) await new Promise((res) => setTimeout(res, 40));
         const historyEndIso =
           r.slotEndSec != null && Number.isFinite(r.slotEndSec)
             ? new Date(r.slotEndSec * 1000).toISOString()
             : r.endDate;
-        let historyUp = [];
-        let historyDown = [];
+        let upBeforeSlot = [];
+        let downBeforeSlot = [];
         let historySource = 'none';
         let debugClobFetchError = null;
+        let debugClobDownFetchError = null;
         let debugDataFetchError = null;
-        let debugUsedDirectClob = false;
-        let debugUsedDirectDataApi = false;
+        let clobUpMeta = null;
+        let clobDownMeta = null;
+        let tradesMeta = null;
         if (r.tokenIdUp) {
           const clobRes = await fetchPriceHistory(r.tokenIdUp, historyEndIso);
-          historyUp = clobRes.history;
+          upBeforeSlot = clobRes.history;
           debugClobFetchError = clobRes.error;
-          debugUsedDirectClob = Boolean(clobRes.usedDirectClob);
-          if (historyUp.length > 0) historySource = clobRes.usedDirectClob ? 'clob-direct' : 'clob';
+          clobUpMeta = clobRes.meta;
+          if (upBeforeSlot.length > 0) historySource = 'clob';
         }
         if (r.tokenIdDown) {
-          // Série CLOB sur le token Down pour coller davantage au bestAsk token du bot.
           const downRes = await fetchPriceHistory(r.tokenIdDown, historyEndIso);
-          historyDown = downRes.history;
+          downBeforeSlot = downRes.history;
+          debugClobDownFetchError = downRes.error;
+          clobDownMeta = downRes.meta;
+          if (downBeforeSlot.length > 0 && historySource === 'none') historySource = 'clob';
         }
-        if (historyUp.length === 0 && r.conditionId) {
-          const trRes = await fetchPriceHistoryFromTrades(r.conditionId, historyEndIso);
-          historyUp = trRes.history;
+        const cidForTrades = r.normalizedConditionId ?? normalizeConditionId(r.conditionId);
+        const hadClobUpBeforeTrades = upBeforeSlot.length > 0;
+        const hadClobDownBeforeTrades = downBeforeSlot.length > 0;
+        let tradePointsUp = [];
+        let tradePointsDown = [];
+        if (cidForTrades) {
+          const trRes = await fetchDataApiTradePointsByToken(
+            cidForTrades,
+            r.tokenIdUp,
+            r.tokenIdDown,
+            historyEndIso,
+            r.gammaEventId
+          );
           debugDataFetchError = trRes.error;
-          debugUsedDirectDataApi = Boolean(trRes.usedDirectDataApi);
-          if (historyUp.length > 0) historySource = trRes.usedDirectDataApi ? 'trades-direct' : 'trades';
+          tradesMeta = trRes.meta ?? null;
+          tradePointsUp = Array.isArray(trRes.pointsUp) ? trRes.pointsUp : [];
+          tradePointsDown = Array.isArray(trRes.pointsDown) ? trRes.pointsDown : [];
+          if (tradePointsUp.length > 0) {
+            upBeforeSlot = mergePriceSeriesSorted(upBeforeSlot, tradePointsUp);
+          }
+          if (tradePointsDown.length > 0) {
+            downBeforeSlot = mergePriceSeriesSorted(downBeforeSlot, tradePointsDown);
+          }
         }
-        const historyPointCount = historyUp.length;
+        const hadTradePoints = tradePointsUp.length + tradePointsDown.length > 0;
+        if (upBeforeSlot.length > 0) {
+          const hadAnyClob = hadClobUpBeforeTrades || hadClobDownBeforeTrades;
+          if (hadAnyClob && hadTradePoints) historySource = 'clob+trades';
+          else if (hadTradePoints && !hadClobUpBeforeTrades && !hadClobDownBeforeTrades) historySource = 'trades';
+          else historySource = 'clob';
+        } else if (downBeforeSlot.length > 0) {
+          if (hadTradePoints) historySource = 'clob+trades';
+          else if (historySource === 'none') historySource = 'clob';
+        } else {
+          historySource = 'none';
+        }
+        upBeforeSlot = normalizeHistorySeriesPoints(upBeforeSlot);
+        downBeforeSlot = normalizeHistorySeriesPoints(downBeforeSlot);
+        const historyUp = filterSeriesTo15mSlot(upBeforeSlot, r.slotEndSec);
+        const historyDown = filterSeriesTo15mSlot(downBeforeSlot, r.slotEndSec);
+        const historyPointCount = historyUp.length + historyDown.length;
         const sim =
           historyUp.length > 0 || historyDown.length > 0
             ? computeBotSimulation(historyUp, historyDown, r.winner, historyEndIso)
             : { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
+
+        let simDebug = null;
+        if (debug) {
+          const why = sim.botWouldTake == null ? debugWhyNoSignal(historyUp, historyDown, historyEndIso) : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
+          simDebug = {
+            slug: r.eventSlug,
+            historyEndIso,
+            slotBounds: slotFilterBounds(r.slotEndSec),
+            conditionIdRaw: r.conditionId,
+            normalizedConditionId: r.normalizedConditionId ?? null,
+            cidForTrades: cidForTrades ?? null,
+            gammaEventId: r.gammaEventId ?? null,
+            historySource,
+            urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
+            clobUp: {
+              error: debugClobFetchError,
+              meta: clobUpMeta,
+              beforeSlot: summarizeSeriesForDebug(upBeforeSlot),
+              afterSlot: summarizeSeriesForDebug(historyUp),
+            },
+            clobDown: {
+              error: debugClobDownFetchError,
+              meta: clobDownMeta,
+              beforeSlot: summarizeSeriesForDebug(downBeforeSlot),
+              afterSlot: summarizeSeriesForDebug(historyDown),
+            },
+            tradesFallback: tradesMeta,
+            tradesError: debugDataFetchError,
+            pointsAfterSlotFilter: historyPointCount,
+            /** Aligné sur la simu (inclut complément 1−p par point). */
+            maxBinaryBeforeSlot: maxBinaryAcrossBothSeries(upBeforeSlot, downBeforeSlot),
+            maxBinaryAfterSlot: maxBinaryAcrossBothSeries(historyUp, historyDown),
+            why,
+            rule: {
+              detectMinP: DETECT_MIN_P,
+              simEntryMinP: SIM_ENTRY_MIN_P,
+              simEntryMaxP: SIM_ENTRY_MAX_P,
+              forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
+              slotEndSimSlopSec: SLOT_END_SIM_SLOP_SEC,
+              seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
+              dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
+              marginBeforeSec: SLOT_15M_MARGIN_SEC,
+              applyForbiddenMinuteWindowsUtc: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC,
+              label:
+                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–97,5¢ · complément 1−p · minutes UTC interdites optionnelles',
+            },
+          };
+        }
+
         enriched.push({
           ...r,
           ...sim,
@@ -487,49 +1079,94 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS) 
           debugHasTokenUp: Boolean(r.tokenIdUp),
           debugClobFetchError,
           debugDataFetchError,
-          debugUsedDirectClob,
-          debugUsedDirectDataApi,
+          ...(simDebug ? { simDebug } : {}),
         });
       }
-      if (import.meta.env.DEV) {
-        const clob = enriched.filter((e) => e.debugHistorySource === 'clob').length;
-        const clobDir = enriched.filter((e) => e.debugHistorySource === 'clob-direct').length;
-        const trades = enriched.filter((e) => e.debugHistorySource === 'trades').length;
-        const tradesDir = enriched.filter((e) => e.debugHistorySource === 'trades-direct').length;
-        const none = enriched.filter((e) => e.debugHistorySource === 'none').length;
-        const noToken = enriched.filter((e) => !e.debugHasTokenUp).length;
-        const sampleErr = enriched.find(
+      const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
+      if (debug) {
+        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= DETECT_MIN_P;
+        const highConvBefore = (e) => geMinBinary(e.simDebug?.maxBinaryBeforeSlot);
+        const highConvAfter = (e) => geMinBinary(e.simDebug?.maxBinaryAfterSlot);
+        const strippedBySlot = enrichedFinal.filter(
+          (e) =>
+            highConvBefore(e) &&
+            !highConvAfter(e) &&
+            e.simDebug?.why?.code === 'no_price_in_band'
+        );
+        const summary = {
+          at: new Date().toISOString(),
+          windowHours,
+          rowsBefore15mSlotDedupe: results.length,
+          rowsAfter15mSlotDedupe: resultsOnePerSlot.length,
+          rowsBefore15mTradeWindowDedupe: enriched.length,
+          rowsAfter15mTradeWindowDedupe: enrichedFinal.length,
+          rows: enrichedFinal.length,
+          withBotSignal: enrichedFinal.filter((e) => e.botWouldTake != null).length,
+          sourceClob: enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length,
+          sourceClobTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'clob+trades').length,
+          sourceTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length,
+          sourceNone: enrichedFinal.filter((e) => e.debugHistorySource === 'none').length,
+          noTokenUp: enrichedFinal.filter((e) => !e.debugHasTokenUp).length,
+          /** Conviction max (avec 1−p) avant / après filtre créneau — si « before » haut et « after » bas, le créneau exclut les bons trades. */
+          rowsMaxBinaryGeMinBeforeSlotFilter: enrichedFinal.filter(highConvBefore).length,
+          rowsMaxBinaryGeMinAfterSlotFilter: enrichedFinal.filter(highConvAfter).length,
+          rowsLikelyHighConvictionStrippedBySlotFilter: strippedBySlot.length,
+          whyNoSignalCounts: enrichedFinal.reduce((acc, e) => {
+            const c = e.simDebug?.why?.code;
+            if (c) acc[c] = (acc[c] ?? 0) + 1;
+            return acc;
+          }, {}),
+          slotFilter: {
+            marginBeforeSec: SLOT_15M_MARGIN_SEC,
+            seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
+            entryMaxAfterSlotSec: SLOT_END_SIM_SLOP_SEC,
+            dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
+            simSeriesWindowSec: SLOT_15M_SEC + SLOT_15M_MARGIN_SEC + SLOT_END_PADDING_SEC,
+          },
+          forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
+          urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
+        };
+        setDebugSummary(summary);
+        console.info('[15m résolus] mode DEBUG — résumé', summary);
+      } else {
+        setDebugSummary(null);
+      }
+
+      if (import.meta.env.DEV && !debug) {
+        const clob = enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length;
+        const trades = enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length;
+        const none = enrichedFinal.filter((e) => e.debugHistorySource === 'none').length;
+        const noToken = enrichedFinal.filter((e) => !e.debugHasTokenUp).length;
+        const sampleErr = enrichedFinal.find(
           (e) => e.debugHistorySource === 'none' && (e.debugClobFetchError || e.debugDataFetchError)
         );
-        console.info('[15m résolus] historique prix', {
-          créneaux: enriched.length,
+        console.info('[15m résolus] historique prix (aligné hook 1h + filtre créneau)', {
+          créneaux: enrichedFinal.length,
           sourceClob: clob,
-          sourceClobDirect: clobDir,
           sourceDataApiTrades: trades,
-          sourceDataDirect: tradesDir,
           sansHistorique: none,
           sansTokenUp: noToken,
           clobUrl: CLOB_PRICES_HISTORY_URL,
           dataUrl: DATA_API_TRADES_URL,
-          noTradeLastSec: NO_TRADE_LAST_SEC_15M,
+          forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
           exempleErreurFetch:
             sampleErr != null
               ? [sampleErr.debugClobFetchError, sampleErr.debugDataFetchError].filter(Boolean).join(' | ') || '200 vide ?'
               : null,
         });
       }
-      setResolved(enriched);
+      setResolved(enrichedFinal);
     } catch (err) {
       setError(err.message || 'Erreur lors du chargement des résultats 15 min.');
       setResolved([]);
     } finally {
       setLoading(false);
     }
-  }, [windowHours]);
+  }, [windowHours, debug]);
 
   useEffect(() => {
     fetchResolved();
   }, [fetchResolved]);
 
-  return { resolved, loading, error, refresh: fetchResolved };
+  return { resolved, loading, error, refresh: fetchResolved, debugSummary };
 }

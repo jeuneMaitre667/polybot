@@ -189,8 +189,10 @@ const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
-/** 15m : temporairement 0 (pas d’exclusion fin de créneau). Remettre 4 * 60 * 1000 pour la règle des 4 min. */
-const NO_TRADE_LAST_MS_15M = 0;
+/** 15m : pas de trade dans les 4 dernières minutes avant la fin d’événement (aligné backtest dashboard, minutes UTC fin de quart d’heure). */
+const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000;
+/** 15m : pas de trade pendant les 3 premières minutes du créneau (début = fin slug − 15 min). */
+const NO_TRADE_FIRST_MS_15M = 3 * 60 * 1000;
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
 const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
@@ -266,7 +268,8 @@ const PARTIAL_FILL_RETRY_MIN_REMAINING_USD = Math.max(0.01, Number(process.env.P
 const partialFillRetryRevalidatePrice = process.env.PARTIAL_FILL_RETRY_REVALIDATE_PRICE === 'true';
 const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
-const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED !== 'false';
+/** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
+const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /** Si true : plafonner la taille d’ordre sur la liquidité 97–97,5c (désactivé par défaut ; avec FAK + worst price, inutile en général). */
@@ -944,11 +947,15 @@ async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
   return getMaxUsdForAvgPriceFromLevels(levels, targetAvgP, totalUsd);
 }
 
-/** Récupère le meilleur ask actuel pour un token (validation avant placement WS). */
+/**
+ * Meilleur ask (prix pour acheter le token sur le carnet).
+ * Doc Polymarket GET /price : side=BUY → best **bid** ; side=SELL → best **ask**.
+ * Il faut donc SELL pour aligner signal / exécution sur le prix d’achat réel.
+ */
 async function getBestAsk(tokenId) {
   if (!tokenId) return null;
   try {
-    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'BUY' }, timeout: 3000 });
+    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'SELL' }, timeout: 3000 });
     const p = parseFloat(data?.price);
     return Number.isFinite(p) ? p : null;
   } catch (_) {
@@ -990,9 +997,8 @@ async function getOutcomePricesForSignal(market) {
 }
 
 /**
- * Pas de trade si l'événement se termine dans moins de X ms (5 min horaire ; 15m selon NO_TRADE_LAST_MS_15M).
- * Si le seuil 15m est 0, ne pas bloquer : avec seuil 0, `now >= endMs` couperait tout le créneau quand Gamma met
- * un endDate en avance sur la vraie fin du slug (~15 min).
+ * Pas de trade si l'événement se termine dans moins de X ms (5 min horaire ; 4 min pour 15m si NO_TRADE_LAST_MS_15M > 0).
+ * Si NO_TRADE_LAST_MS_15M <= 0, aucun blocage fin de créneau côté horloge événement (usage avancé).
  */
 function isInLastMinute(signal) {
   const raw = signal?.endDate;
@@ -1007,6 +1013,28 @@ function isInLastMinute(signal) {
   const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : NO_TRADE_LAST_MS_HOURLY;
   if (thresholdMs <= 0) return false;
   return Date.now() >= endMs - thresholdMs;
+}
+
+/**
+ * 15m : pas de trade pendant les 3 premières minutes du créneau (référence fin UTC du slug btc-updown-15m-{sec}).
+ * Aligné sur le backtest (minutes UTC avec m % 15 ≤ 2).
+ */
+function isIn15mOpeningCooldown(signal) {
+  if (MARKET_MODE !== '15m') return false;
+  const raw = signal?.eventSlug;
+  if (raw == null || typeof raw !== 'string') return false;
+  const m = raw.match(/btc-updown-15m-(\d+)$/i);
+  if (!m) return false;
+  let slotEndSec = parseInt(m[1], 10);
+  if (!Number.isFinite(slotEndSec)) return false;
+  if (slotEndSec > 1e12) slotEndSec = Math.floor(slotEndSec / 1000);
+  const slotStartMs = (slotEndSec - 900) * 1000;
+  return Date.now() < slotStartMs + NO_TRADE_FIRST_MS_15M;
+}
+
+/** Skip placement : fin de créneau (15m : 4 min) ou début de créneau 15m (3 min). */
+function shouldSkipTradeTiming(signal) {
+  return isInLastMinute(signal) || isIn15mOpeningCooldown(signal);
 }
 
 function getGammaEventsCacheKey(slugMatch) {
@@ -1597,7 +1625,7 @@ async function tryPlaceOrderForSignal(signal) {
   const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
   const key = getSignalKey(signal);
   if (placedKeys.has(key)) return;
-  if (isInLastMinute(signal)) return;
+  if (shouldSkipTradeTiming(signal)) return;
   let signalWithPrice = signal;
   let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
   if (USE_WS_PRICE_ONLY) {
@@ -2119,7 +2147,7 @@ async function run() {
 
     // Même si on ne place pas d'ordre (last minute), on loggue un breakdown attempt.
     // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
-    if (isInLastMinute(s)) {
+    if (shouldSkipTradeTiming(s)) {
       let attemptAmountUsd = amountUsd;
       if (useBalanceAsSize) {
         const tBal0 = Date.now();
@@ -2313,7 +2341,7 @@ async function run() {
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   console.log(
-  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'désactivé (15m, temporaire)' : '5 min avant fin'}`
+  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '3 min après ouverture créneau, 4 min avant fin' : '5 min avant fin'}`
 );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
@@ -2343,7 +2371,7 @@ async function main() {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
   }
   if (walletConfigured && !autoPlaceEnabled) {
-    console.log('AUTO_PLACE_ENABLED=false — le bot tourne sans placer d\'ordres.');
+    console.log('Autotrade désactivé — définir AUTO_PLACE_ENABLED=true pour placer des ordres.');
   }
 
   const allowed = await checkGeoblock();

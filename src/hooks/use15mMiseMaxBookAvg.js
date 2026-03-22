@@ -5,7 +5,7 @@ import {
   ORDER_BOOK_SIGNAL_MAX_P,
   ORDER_BOOK_SIGNAL_MIN_P,
 } from '@/lib/orderBookLiquidity.js';
-import { parseUpDownTokenIdsFromMarket } from '@/lib/gammaPolymarket.js';
+import { parseUpDownTokenIdsFromMarket, resolveGammaMarketForBtcUpDown } from '@/lib/gammaPolymarket.js';
 import {
   format15mSlotEndFr,
   getPrevious15mSlotEndSec,
@@ -50,7 +50,8 @@ async function fetchTokenIdsForSlotEnd(endSec) {
     const markets = ev?.markets;
     if (Array.isArray(markets)) {
       for (const m of markets) {
-        const out = parseUpDownTokenIdsFromMarket(m);
+        const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+        const out = parseUpDownTokenIdsFromMarket(mm);
         if (out.tokenIdUp || out.tokenIdDown) return out;
       }
     }
@@ -67,8 +68,18 @@ async function fetchTokenIdsForSlotEnd(endSec) {
   return { tokenIdUp: null, tokenIdDown: null };
 }
 
-async function fetchAsks(tokenId) {
+/**
+ * Le CLOB ne garde pas de carnet pour les marchés résolus → 404 en boucle si on interroge d’anciens créneaux.
+ * N’appeler /book que tant que le créneau n’est pas terminé (fin UTC strictement dans le futur).
+ */
+function slotEndSecIsStillOpen(endSec) {
+  if (endSec == null || !Number.isFinite(endSec)) return false;
+  return Math.floor(Date.now() / 1000) < endSec;
+}
+
+async function fetchAsks(tokenId, slotEndSecForBook = null) {
   if (!tokenId) return [];
+  if (slotEndSecForBook != null && !slotEndSecIsStillOpen(slotEndSecForBook)) return [];
   try {
     const { data } = await axios.get(CLOB_BOOK_URL, {
       params: { token_id: tokenId },
@@ -121,7 +132,7 @@ async function fetchPreviousSlotWinnerFromGamma() {
       const markets = ev?.markets;
       if (Array.isArray(markets)) {
         for (const m of markets) {
-          winner = getResolvedWinnerFromGammaMarket(m);
+          winner = getResolvedWinnerFromGammaMarket(m, ev);
           if (winner) break;
         }
       }
@@ -274,7 +285,10 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           if (staggerMs > 0) await new Promise((r) => setTimeout(r, staggerMs));
           continue;
         }
-        const [asksUp, asksDown] = await Promise.all([fetchAsks(tokenIdUp), fetchAsks(tokenIdDown)]);
+        const [asksUp, asksDown] = await Promise.all([
+          fetchAsks(tokenIdUp, endSec),
+          fetchAsks(tokenIdDown, endSec),
+        ]);
         const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
         const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
         const mise = Math.max(liqUp, liqDown);

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { coalesceClobTokenIds, parseUpDownTokenIdsFromMarket } from './gammaPolymarket.js';
+import {
+  coalesceClobTokenIds,
+  parseUpDownTokenIdsFromMarket,
+  getResolvedUpDownWinnerFromGammaMarket,
+  getUpDownOutcomeIndices,
+  mergeGammaEventMarketForUpDown,
+  parseGammaOutcomesLabels,
+} from './gammaPolymarket.js';
 
 describe('coalesceClobTokenIds', () => {
   it('retourne null pour null / undefined', () => {
@@ -49,5 +56,68 @@ describe('parseUpDownTokenIdsFromMarket', () => {
   it('retourne nulls si objet invalide', () => {
     expect(parseUpDownTokenIdsFromMarket(null)).toEqual({ tokenIdUp: null, tokenIdDown: null });
     expect(parseUpDownTokenIdsFromMarket({})).toEqual({ tokenIdUp: null, tokenIdDown: null });
+  });
+
+  it('aligne les tokens sur outcomes Gamma ["Down","Up"] (ordre alphabétique)', () => {
+    const m = {
+      outcomes: '["Down","Up"]',
+      clobTokenIds:
+        '["22222222222222222222222222222222222222222222222222222222222222222","11111111111111111111111111111111111111111111111111111111111111111"]',
+    };
+    const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(m);
+    expect(tokenIdUp?.startsWith('111')).toBe(true);
+    expect(tokenIdDown?.startsWith('222')).toBe(true);
+  });
+});
+
+describe('parseGammaOutcomesLabels / shortOutcomes', () => {
+  it('utilise shortOutcomes si outcomes absent (schéma Market OpenAPI)', () => {
+    const m = {
+      shortOutcomes: '["Down","Up"]',
+      outcomePrices: '["0.02","0.98"]',
+    };
+    expect(parseGammaOutcomesLabels(m)).toEqual(['Down', 'Up']);
+    expect(getResolvedUpDownWinnerFromGammaMarket(m)).toBe('Up');
+  });
+});
+
+describe('getResolvedUpDownWinnerFromGammaMarket', () => {
+  it('Down gagnant quand outcomePrices suit ["Down","Up"]', () => {
+    const m = {
+      outcomes: '["Down","Up"]',
+      outcomePrices: '["0.999","0.001"]',
+    };
+    expect(getResolvedUpDownWinnerFromGammaMarket(m)).toBe('Down');
+  });
+
+  it('Up gagnant quand outcomePrices suit ["Down","Up"]', () => {
+    const m = {
+      outcomes: '["Down","Up"]',
+      outcomePrices: '["0.02","0.98"]',
+    };
+    expect(getResolvedUpDownWinnerFromGammaMarket(m)).toBe('Up');
+  });
+
+  it('repli [0]=Up [1]=Down si pas d’outcomes', () => {
+    const m = { outcomePrices: '["0.99","0.01"]' };
+    expect(getResolvedUpDownWinnerFromGammaMarket(m)).toBe('Up');
+  });
+});
+
+describe('getUpDownOutcomeIndices', () => {
+  it('lit tokens[].outcome si outcomes absent', () => {
+    const m = {
+      tokens: [{ outcome: 'Down', token_id: 'd' }, { outcome: 'Up', token_id: 'u' }],
+    };
+    expect(getUpDownOutcomeIndices(m)).toEqual({ idxUp: 1, idxDown: 0 });
+  });
+});
+
+describe('mergeGammaEventMarketForUpDown', () => {
+  it('recopie outcomes depuis l’event si absent du market (winner cohérent)', () => {
+    const ev = { outcomes: '["Down","Up"]' };
+    const m = { outcomePrices: '["0.999","0.001"]' };
+    const mm = mergeGammaEventMarketForUpDown(ev, m);
+    expect(getResolvedUpDownWinnerFromGammaMarket(mm)).toBe('Down');
   });
 });

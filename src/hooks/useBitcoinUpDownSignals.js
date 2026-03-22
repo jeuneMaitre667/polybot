@@ -1,8 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import {
+  parseUpDownTokenIdsFromMarket,
+  parseGammaOutcomePrices,
+  getUpDownOutcomeIndices,
+  resolveGammaMarketForBtcUpDown,
+} from '@/lib/gammaPolymarket.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
+const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
+/**
+ * GET /price : side=SELL → best **ask** (prix pour acheter le token). side=BUY → best **bid** (doc OpenAPI Polymarket).
+ */
+const CLOB_PRICE_URL = import.meta.env.DEV ? '/apiClob/price' : 'https://clob.polymarket.com/price';
+const CLOB_PRICE_DIRECT = 'https://clob.polymarket.com/price';
+const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
+const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
 const MIN_PRICE = 0.97;
 const MAX_PRICE = 0.975;
 
@@ -20,52 +34,67 @@ function slotEndMsFrom15mSlug(slug) {
   return ts < 1e12 ? ts * 1000 : ts;
 }
 
-function parsePrices(market) {
+async function getBestAskFromBookAtBase(bookUrl, tokenId) {
+  if (!tokenId) return null;
   try {
-    const raw = market.outcomePrices ?? market.outcome_prices;
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length < 2) return null;
-    const p0 = parseFloat(arr[0]) ?? 0.5;
-    const p1 = parseFloat(arr[1]) ?? 0.5;
-    return [p0, p1];
+    const { data } = await axios.get(bookUrl, { params: { token_id: tokenId }, timeout: 5000 });
+    const asks = data?.asks;
+    if (!Array.isArray(asks) || asks.length === 0) return null;
+    let best = Infinity;
+    for (const level of asks) {
+      const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
+      if (Number.isFinite(p) && p > 0 && p < best) best = p;
+    }
+    return best === Infinity ? null : best;
   } catch {
     return null;
   }
 }
 
-/** Récupère le token ID à acheter : index 0 = Up, index 1 = Down. */
-function getTokenIdToBuy(market, takeSide) {
-  const idx = takeSide === 'Up' ? 0 : 1;
-  const ids = market.clobTokenIds ?? market.clob_token_ids;
-  if (Array.isArray(ids) && ids[idx]) return String(ids[idx]);
-  const tokens = market.tokens;
-  if (Array.isArray(tokens) && tokens[idx]?.token_id) return String(tokens[idx].token_id);
-  return null;
+/** Best ask CLOB — GET /price?side=SELL (doc Polymarket). Secours : premier niveau du carnet /book. */
+async function getBestAskPriceAtBase(priceUrl, tokenId) {
+  if (!tokenId) return null;
+  try {
+    const { data } = await axios.get(priceUrl, {
+      params: { token_id: tokenId, side: 'SELL' },
+      timeout: 5000,
+    });
+    const p = parseFloat(data?.price);
+    return Number.isFinite(p) ? p : null;
+  } catch {
+    return null;
+  }
 }
 
-/** Charge les events 15m actifs (liste Gamma + secours slug courant, comme le bot). */
+async function getBestAskPrice(tokenId) {
+  let p = await getBestAskPriceAtBase(CLOB_PRICE_URL, tokenId);
+  if (p == null && import.meta.env.DEV && String(CLOB_PRICE_URL).startsWith('/')) {
+    p = await getBestAskPriceAtBase(CLOB_PRICE_DIRECT, tokenId);
+  }
+  if (p != null) return p;
+  p = await getBestAskFromBookAtBase(CLOB_BOOK_URL, tokenId);
+  if (p == null && import.meta.env.DEV && String(CLOB_BOOK_URL).startsWith('/')) {
+    p = await getBestAskFromBookAtBase(CLOB_BOOK_DIRECT, tokenId);
+  }
+  return p;
+}
+
+/** Token à acheter pour un côté — marché éventuellement fusionné avec l’event parent. */
+function getTokenIdToBuy(mergedMarket, takeSide) {
+  const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mergedMarket);
+  return takeSide === 'Up' ? tokenIdUp : tokenIdDown;
+}
+
+/** Charge les events 15m actifs : GET /events?active=true&closed=false (OpenAPI), filtre slug client. */
 async function fetchActive15mEvents() {
   const slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
-  let events = [];
-  try {
-    const { data } = await axios.get(GAMMA_EVENTS_URL, {
-      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-      timeout: 15000,
-    });
-    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-  } catch (err) {
-    if (err.response?.status === 422 || err.response?.status === 400) {
-      const { data } = await axios.get(GAMMA_EVENTS_URL, {
-        params: { active: true, closed: false, limit: 200 },
-        timeout: 15000,
-      });
-      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) =>
-        (ev.slug ?? '').toLowerCase().includes(slugMatch)
-      );
-    } else {
-      throw err;
-    }
-  }
+  const { data } = await axios.get(GAMMA_EVENTS_URL, {
+    params: { active: true, closed: false, limit: 200 },
+    timeout: 15000,
+  });
+  let events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) =>
+    (ev.slug ?? '').toLowerCase().includes(slugMatch)
+  );
   const hasMatch = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
   if (!hasMatch) {
     const nowSec = Math.floor(Date.now() / 1000);
@@ -85,7 +114,7 @@ async function fetchActive15mEvents() {
 
 /**
  * Signaux 97–97,5 % pour le marché horaire ou 15 min.
- * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, même logique que le bot (slug_contains + secours slug).
+ * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, secours GET /events/slug/{slug} créneau courant.
  */
 export function useBitcoinUpDownSignals(marketMode = 'hourly') {
   const [signals, setSignals] = useState([]);
@@ -116,19 +145,47 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
 
         const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
         const slotEndMs = marketMode === '15m' ? slotEndMsFrom15mSlug(ev.slug ?? '') : null;
+        const nowMs = Date.now();
+        if (marketMode === '15m' && slotEndMs != null && Number.isFinite(slotEndMs) && nowMs >= slotEndMs) {
+          continue;
+        }
 
         for (const m of ev.markets) {
-          const prices = parsePrices(m);
-          if (!prices) continue;
-          const [priceUp, priceDown] = prices;
-          const upInRange = priceUp >= MIN_PRICE && priceUp <= MAX_PRICE;
-          const downInRange = priceDown >= MIN_PRICE && priceDown <= MAX_PRICE;
+          const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+          const rawPrices = parseGammaOutcomePrices(mm);
+          if (!rawPrices) continue;
+          const { idxUp, idxDown } = getUpDownOutcomeIndices(mm);
+          const baseUp = rawPrices[idxUp];
+          const baseDown = rawPrices[idxDown];
+          let priceUp;
+          let priceDown;
+          if (marketMode === '15m') {
+            const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mm);
+            const [askUp, askDown] = await Promise.all([
+              tokenIdUp ? getBestAskPrice(tokenIdUp) : Promise.resolve(null),
+              tokenIdDown ? getBestAskPrice(tokenIdDown) : Promise.resolve(null),
+            ]);
+            priceUp = askUp != null ? askUp : baseUp;
+            priceDown = askDown != null ? askDown : baseDown;
+            if (priceUp == null || priceDown == null) continue;
+          } else {
+            priceUp = baseUp;
+            priceDown = baseDown;
+          }
+          /**
+           * Détection alignée sur le backtest 15m : conviction ≥ 97¢ (jusqu’à 1).
+           * Ne pas exiger price ≤ 97,5¢ : sur le carnet, le favori est souvent à 98–99¢ ;
+           * l’ancien test `<= MAX_PRICE` ne déclenchait presque jamais de signal.
+           * Le plafond 97,5¢ s’applique à l’ordre (clamp côté `placeOrderForSignal`).
+           */
+          const upQualifies = priceUp >= MIN_PRICE && priceUp <= 1;
+          const downQualifies = priceDown >= MIN_PRICE && priceDown <= 1;
           const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
           /** Pour 15m : fin de créneau depuis le slug (Gamma `endDate` souvent décalé). */
           const endDateForSignal =
             slotEndMs != null && Number.isFinite(slotEndMs) ? new Date(slotEndMs).toISOString() : marketEndDate;
 
-          if (upInRange) {
+          if (upQualifies) {
             const takeSide = 'Up';
             results.push({
               market: m,
@@ -138,11 +195,11 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
               takeSide,
               priceUp,
               priceDown,
-              tokenIdToBuy: getTokenIdToBuy(m, takeSide),
+              tokenIdToBuy: getTokenIdToBuy(mm, takeSide),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
               endDate: endDateForSignal,
             });
-          } else if (downInRange) {
+          } else if (downQualifies) {
             const takeSide = 'Down';
             results.push({
               market: m,
@@ -152,7 +209,7 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
               takeSide,
               priceUp,
               priceDown,
-              tokenIdToBuy: getTokenIdToBuy(m, takeSide),
+              tokenIdToBuy: getTokenIdToBuy(mm, takeSide),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
               endDate: endDateForSignal,
             });
