@@ -869,6 +869,15 @@ export function BitcoinUpDownStrategy() {
                   >
                     3 jours
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setExtraDays(4)}
+                    disabled={resolvedLoading || extraDays >= 4}
+                    className="btn btn--default btn--outline"
+                    title="Afficher les 7 derniers jours (168 h)"
+                  >
+                    7 jours
+                  </button>
                 </div>
               </>
             )}
@@ -901,7 +910,7 @@ export function BitcoinUpDownStrategy() {
                       </span>
                     )}
                     <span className="strat-muted-tight">
-                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites en <strong>UTC</strong> : <strong>3 premières minutes</strong> de chaque quart d’heure (<code>m % 15 ≤ 2</code>) et <strong>4 dernières minutes</strong> avant chaque :00 / :15 / :30 / :45. Conviction ≥ 97 % jusqu’à 1,00, complément <strong>1 − p</strong>. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
+                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Conviction ≥ 97 % jusqu’à 1,00, complément <strong>1 − p</strong>. Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
                     </span>
                   </p>
                   <label className="strat-15m-debug-toggle">
@@ -1049,6 +1058,15 @@ export function BitcoinUpDownStrategy() {
                         title="Revenir directement aux 3 derniers jours (extraDays = 0)"
                       >
                         3 jours
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExtraDays(4)}
+                        disabled={resolved15mLoading || extraDays >= 4}
+                        className="btn btn--default btn--outline"
+                        title="Afficher les 7 derniers jours (168 h)"
+                      >
+                        7 jours
                       </button>
                     </div>
                   </>

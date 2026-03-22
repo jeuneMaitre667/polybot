@@ -12,6 +12,12 @@ import {
   dedupeEnrichedOnePer15mTradeWindow,
 } from '@/lib/bitcoin15mBacktestDedupe.js';
 import { formatBitcoin15mSlotRangeEt } from '@/lib/polymarketDisplayTime.js';
+import {
+  is15mSlotEntryTimeForbidden,
+  SLOT_15M_ENTRY_FORBID_FIRST_SEC,
+  SLOT_15M_ENTRY_FORBID_LAST_SEC,
+  ENTRY_TIMING_ET_TIMEZONE,
+} from '@/lib/bitcoin15mSlotEntryTiming.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
@@ -195,21 +201,20 @@ const SLOT_15M_MARGIN_SEC = 30 * 60;
  */
 const SLOT_END_PADDING_SEC = 45 * 60;
 /**
- * Borne **stricte** pour l’horodatage d’**entrée simulée** (évite signaux type « plusieurs min après clôture »).
+ * Rejet des candidats d’entrée si `ts` dépasse **fin slug + cette marge** (doit matcher la borne haute des séries
+ * / `tradeHi`, sinon les pics ~97¢ visibles dans l’historique sont tous exclus → 0 signal en tableau).
  */
-const SLOT_END_SIM_SLOP_SEC = 30;
+const SLOT_ENTRY_MAX_AFTER_END_SEC = SLOT_END_PADDING_SEC;
 /**
- * Ancien nom (retiré du filtre) — **alias** de `SLOT_END_PADDING_SEC` pour éviter erreurs « not defined »
+ * @deprecated Ancien nom (30 s puis retiré) — **alias** de `SLOT_ENTRY_MAX_AFTER_END_SEC` pour éviter
+ * « SLOT_END_SIM_SLOP_SEC is not defined » (cache Vite, HMR, onglet).
+ */
+const SLOT_END_SIM_SLOP_SEC = SLOT_ENTRY_MAX_AFTER_END_SEC;
+/**
+ * Ancien nom — **alias** de `SLOT_END_PADDING_SEC` pour éviter erreurs « not defined »
  * (cache Vite / onglet / copier-coller d’une vieille version).
  */
 const SLOT_SERIES_HI_PADDING_SEC = SLOT_END_PADDING_SEC;
-
-/**
- * Si `true`, rejette les entrées dont le `ts` tombe dans les minutes UTC d’ouverture / clôture (voir
- * `BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC`). **Par défaut `false`** : avec `true`, les pics ~97¢ en fin de
- * créneau tombent quasi toujours en minute :14/:29/:44/:59 → `excluded_by_15m_forbidden_minutes_utc` sur presque toutes les lignes.
- */
-const APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC = false;
 
 /**
  * Historique CLOB `prices-history` — souvent **prix mid** (~50¢), pas le best ask ; utile comme contexte,
@@ -543,7 +548,7 @@ function mergePriceSeriesSorted(a, b) {
 
 /**
  * Filtre les points pour la simu : fenêtre autour du créneau ; **hi** large pour garder trades tardifs.
- * L’entrée simulée reste bornée par `SLOT_END_SIM_SLOP_SEC` dans `collectSimEntryCandidates`.
+ * L’entrée simulée accepte un `ts` jusqu’à `SLOT_ENTRY_MAX_AFTER_END_SEC` après la fin slug (trades tardifs).
  */
 function filterSeriesTo15mSlot(series, slotEndSec) {
   if (slotEndSec == null || !Number.isFinite(slotEndSec)) return Array.isArray(series) ? series : [];
@@ -566,7 +571,7 @@ function slotFilterBounds(slotEndSec) {
     loIso: new Date(lo * 1000).toISOString(),
     hiIso: new Date(hi * 1000).toISOString(),
     dataApiFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
-    entryMaxAfterSlotSec: SLOT_END_SIM_SLOP_SEC,
+    entryMaxAfterSlotSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
   };
 }
 
@@ -599,64 +604,29 @@ function summarizeSeriesForDebug(series) {
   };
 }
 
-/**
- * Fins de créneau 15m UTC : :00, :15, :30, :45.
- * On n’exclut que la **dernière minute** avant chaque borne (les pics ~97¢ arrivent souvent en fin de slot).
- */
-function isForbidden15mClosingWindowUtc(tsSec) {
-  if (tsSec == null || !Number.isFinite(tsSec)) return false;
-  const m = new Date(tsSec * 1000).getUTCMinutes();
-  if (m === 59) return true;
-  if (m === 14) return true;
-  if (m === 29) return true;
-  if (m === 44) return true;
-  return false;
-}
-
-/**
- * Début de chaque créneau 15m UTC : les **3 premières minutes** après chaque borne
- * (`minute % 15` ∈ {0,1,2}) — ex. :00–:02, :15–:17, :30–:32, :45–:47.
- * Aligné sur une exécution prudente (carnet / liquidité) : pas d’entrée pendant 3 min après l’ouverture du marché.
- */
-function isForbidden15mSlotOpeningMinutesUtc(tsSec) {
-  if (tsSec == null || !Number.isFinite(tsSec)) return false;
-  const m = new Date(tsSec * 1000).getUTCMinutes();
-  const r = m % 15;
-  return r <= 2;
-}
-
-function isForbiddenEntryTimingUtc(tsSec) {
-  return isForbidden15mClosingWindowUtc(tsSec) || isForbidden15mSlotOpeningMinutesUtc(tsSec);
-}
-
-/** Export debug / UI */
+/** Export debug / UI (clé historique `forbiddenMinuteWindowsUtc` conservée pour le JSON de debug). */
 const BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC = {
-  timezone: 'UTC',
-  appliedInSimulation: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC,
-  slotEndsEveryQuarterHour: [0, 15, 30, 45],
-  /** 1 dernière minute UTC avant chaque fin de quart (:14, :29, :44, :59). */
-  forbiddenUtcMinuteRangesClosing: [[14, 14], [29, 29], [44, 44], [59, 59]],
-  /** 3 premières minutes de chaque créneau 15m UTC : m%15 ∈ {0,1,2} (ex. …:00–:02, :15–:17…). */
-  forbiddenUtcMinutesSlotOpenTriples: [
-    [0, 1, 2],
-    [15, 16, 17],
-    [30, 31, 32],
-    [45, 46, 47],
-  ],
-  label: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC
-    ? 'Pas d’entrée : dernière min UTC avant :00/:15/:30/:45 (m ∈ {14,29,44,59}) OU 3 premières min après chaque début (m%15∈{0,1,2})'
-    : 'Fenêtres UTC ci-dessous documentées uniquement — **non appliquées** à la simu (`APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC = false`).',
+  basis: 'et_quarter_hour',
+  displayTimezone: ENTRY_TIMING_ET_TIMEZONE,
+  appliedInSimulation: true,
+  slotDurationSec: SLOT_15M_SEC,
+  forbidFirstSecondsFromSlotStart: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
+  forbidLastSecondsBeforeSlotEnd: SLOT_15M_ENTRY_FORBID_LAST_SEC,
+  label:
+    `Pas d’entrée : dans chaque quart d’heure local ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45), interdit les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières minutes et les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières — aligné sur l’heure ET du trade (comme le tableau).`,
 };
 
 /**
- * Candidats d’entrée (événements triés, interpolation, exclusion minutes UTC ouverture + clôture 15m).
+ * Candidats d’entrée (événements triés, interpolation, exclusion début / fin de quart d’heure **en heure ET**).
  * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: typeof BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC }}
  */
-function collectSimEntryCandidates(historyUp, historyDown, endDateStr) {
+function collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit = null) {
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   let endTsSec = null;
-  if (endDateStr) {
+  if (slotEndSecExplicit != null && Number.isFinite(Number(slotEndSecExplicit))) {
+    endTsSec = Math.floor(Number(slotEndSecExplicit));
+  } else if (endDateStr) {
     const raw = endDateStr;
     const endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
     if (Number.isFinite(endMs)) endTsSec = Math.floor(endMs / 1000);
@@ -694,14 +664,14 @@ function collectSimEntryCandidates(historyUp, historyDown, endDateStr) {
     }
     if (endTsSec != null && Number.isFinite(endTsSec)) {
       const slotStartSec = endTsSec - SLOT_15M_SEC;
-      if (tsUsed > endTsSec + SLOT_END_SIM_SLOP_SEC || tsUsed < slotStartSec) {
+      if (tsUsed > endTsSec + SLOT_ENTRY_MAX_AFTER_END_SEC || tsUsed < slotStartSec) {
         lastBySide[side] = { t, price };
         continue;
       }
-    }
-    if (APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC && isForbiddenEntryTimingUtc(tsUsed)) {
-      lastBySide[side] = { t, price };
-      continue;
+      if (is15mSlotEntryTimeForbidden(tsUsed, endTsSec)) {
+        lastBySide[side] = { t, price };
+        continue;
+      }
     }
     candidates.push({ side, price: clampEntryPrice(price), ts: tsUsed });
     lastBySide[side] = { t, price };
@@ -710,16 +680,21 @@ function collectSimEntryCandidates(historyUp, historyDown, endDateStr) {
 }
 
 /**
- * Indications si aucun signal — aligné sur `collectSimEntryCandidates` (interpolation + minutes UTC interdites).
+ * Indications si aucun signal — aligné sur `collectSimEntryCandidates` (interpolation + marges début/fin créneau).
  */
-function debugWhyNoSignal(historyUp, historyDown, endDateStr) {
+function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit = null) {
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   if (up.length === 0 && down.length === 0) {
     return { code: 'empty_after_slot_filter', detail: 'Aucun point après filtre créneau (voir slotBounds dans simDebug).' };
   }
 
-  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(historyUp, historyDown, endDateStr);
+  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(
+    historyUp,
+    historyDown,
+    endDateStr,
+    slotEndSecExplicit
+  );
 
   if (candidates.length > 0) {
     const touchesBand = candidates.slice(0, 5).map((c) => ({
@@ -740,8 +715,8 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr) {
 
   if (hadHigh) {
     return {
-      code: 'excluded_by_15m_forbidden_minutes_utc',
-      detail: `Franchissement ≥ ${DETECT_MIN_P} présent, mais ts (ou interpolé) en fenêtre interdite : dernière min avant :00/:15/:30/:45 UTC ou début (3 premières min du quart : m%15∈{0,1,2}).`,
+      code: 'excluded_by_15m_slot_forbidden_window',
+      detail: `Franchissement ≥ ${DETECT_MIN_P} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
       forbiddenMinuteRule,
       endTsSec,
       maxUp: su.maxP,
@@ -768,13 +743,13 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr) {
  * et depuis chaque point Down on teste **1−p** (Up implicite) — indispensable quand les deux séries CLOB sont chargées
  * (le hook 1h ne le faisait que si `down.length === 0`, ce qui bloquait la détection 15m).
  */
-function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
+function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEndSecExplicit = null) {
   const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   if (up.length === 0 && down.length === 0) return empty;
 
-  const { candidates } = collectSimEntryCandidates(historyUp, historyDown, endDateStr);
+  const { candidates } = collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit);
 
   if (candidates.length === 0) return empty;
   candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
@@ -1018,14 +993,32 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
         const historyUp = filterSeriesTo15mSlot(upBeforeSlot, r.slotEndSec);
         const historyDown = filterSeriesTo15mSlot(downBeforeSlot, r.slotEndSec);
         const historyPointCount = historyUp.length + historyDown.length;
-        const sim =
+        const emptySim = {
+          botWouldTake: null,
+          botWon: null,
+          botEntryPrice: null,
+          botEntryTimestamp: null,
+          botOrderType: null,
+        };
+        let sim =
           historyUp.length > 0 || historyDown.length > 0
-            ? computeBotSimulation(historyUp, historyDown, r.winner, historyEndIso)
-            : { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
+            ? computeBotSimulation(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec)
+            : emptySim;
+        if (
+          sim.botWouldTake != null &&
+          r.slotEndSec != null &&
+          Number.isFinite(r.slotEndSec) &&
+          is15mSlotEntryTimeForbidden(sim.botEntryTimestamp, r.slotEndSec)
+        ) {
+          sim = emptySim;
+        }
 
         let simDebug = null;
         if (debug) {
-          const why = sim.botWouldTake == null ? debugWhyNoSignal(historyUp, historyDown, historyEndIso) : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
+          const why =
+            sim.botWouldTake == null
+              ? debugWhyNoSignal(historyUp, historyDown, historyEndIso, r.slotEndSec)
+              : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
           simDebug = {
             slug: r.eventSlug,
             historyEndIso,
@@ -1060,13 +1053,14 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               simEntryMinP: SIM_ENTRY_MIN_P,
               simEntryMaxP: SIM_ENTRY_MAX_P,
               forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
-              slotEndSimSlopSec: SLOT_END_SIM_SLOP_SEC,
+              entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
               seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
               dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
               marginBeforeSec: SLOT_15M_MARGIN_SEC,
-              applyForbiddenMinuteWindowsUtc: APPLY_FORBIDDEN_15M_MINUTE_WINDOWS_UTC,
+              entryForbiddenSlotFirstSec: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
+              entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
               label:
-                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–97,5¢ · complément 1−p · minutes UTC interdites optionnelles',
+                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–97,5¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
             },
           };
         }
@@ -1119,7 +1113,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           slotFilter: {
             marginBeforeSec: SLOT_15M_MARGIN_SEC,
             seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
-            entryMaxAfterSlotSec: SLOT_END_SIM_SLOP_SEC,
+            entryMaxAfterSlotSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
             dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
             simSeriesWindowSec: SLOT_15M_SEC + SLOT_15M_MARGIN_SEC + SLOT_END_PADDING_SEC,
           },

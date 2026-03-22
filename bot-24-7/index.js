@@ -4,7 +4,7 @@
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
  * 2. Boucle : récupérer les signaux Gamma (prix 96,8–97 %)
- * 3. Pour chaque signal : si pas dans la dernière minute avant fin → placer ordre CLOB (marché ou limite)
+ * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : tenter de redeem les tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains
  *
@@ -21,6 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import WebSocket from 'ws';
 import axios from 'axios';
+import { is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -189,10 +190,6 @@ const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
-/** 15m : pas de trade dans les 4 dernières minutes avant la fin d’événement (aligné backtest dashboard, minutes UTC fin de quart d’heure). */
-const NO_TRADE_LAST_MS_15M = 4 * 60 * 1000;
-/** 15m : pas de trade pendant les 3 premières minutes du créneau (début = fin slug − 15 min). */
-const NO_TRADE_FIRST_MS_15M = 3 * 60 * 1000;
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
 const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
@@ -997,10 +994,11 @@ async function getOutcomePricesForSignal(market) {
 }
 
 /**
- * Pas de trade si l'événement se termine dans moins de X ms (5 min horaire ; 4 min pour 15m si NO_TRADE_LAST_MS_15M > 0).
- * Si NO_TRADE_LAST_MS_15M <= 0, aucun blocage fin de créneau côté horloge événement (usage avancé).
+ * Marché horaire : pas de trade dans les 5 dernières minutes avant `endDate` Gamma.
+ * (Le 15m utilise `shouldSkipTradeTiming` → grille ET, pas cette fonction.)
  */
 function isInLastMinute(signal) {
+  if (MARKET_MODE === '15m') return false;
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
   let endMs;
@@ -1010,31 +1008,21 @@ function isInLastMinute(signal) {
     endMs = new Date(raw).getTime();
   }
   if (Number.isNaN(endMs)) return false;
-  const thresholdMs = MARKET_MODE === '15m' ? NO_TRADE_LAST_MS_15M : NO_TRADE_LAST_MS_HOURLY;
+  const thresholdMs = NO_TRADE_LAST_MS_HOURLY;
   if (thresholdMs <= 0) return false;
   return Date.now() >= endMs - thresholdMs;
 }
 
 /**
- * 15m : pas de trade pendant les 3 premières minutes du créneau (référence fin UTC du slug btc-updown-15m-{sec}).
- * Aligné sur le backtest (minutes UTC avec m % 15 ≤ 2).
+ * Skip placement selon le mode :
+ * - 15m : **même règle que le dashboard** — pas les 3 premières / 4 dernières minutes de chaque quart d’heure **ET** (:00,:15,:30,:45).
+ * - horaire : 5 dernières minutes avant fin événement Gamma.
  */
-function isIn15mOpeningCooldown(signal) {
-  if (MARKET_MODE !== '15m') return false;
-  const raw = signal?.eventSlug;
-  if (raw == null || typeof raw !== 'string') return false;
-  const m = raw.match(/btc-updown-15m-(\d+)$/i);
-  if (!m) return false;
-  let slotEndSec = parseInt(m[1], 10);
-  if (!Number.isFinite(slotEndSec)) return false;
-  if (slotEndSec > 1e12) slotEndSec = Math.floor(slotEndSec / 1000);
-  const slotStartMs = (slotEndSec - 900) * 1000;
-  return Date.now() < slotStartMs + NO_TRADE_FIRST_MS_15M;
-}
-
-/** Skip placement : fin de créneau (15m : 4 min) ou début de créneau 15m (3 min). */
 function shouldSkipTradeTiming(signal) {
-  return isInLastMinute(signal) || isIn15mOpeningCooldown(signal);
+  if (MARKET_MODE === '15m') {
+    return is15mSlotEntryTimeForbiddenNow(Math.floor(Date.now() / 1000));
+  }
+  return isInLastMinute(signal);
 }
 
 function getGammaEventsCacheKey(slugMatch) {
@@ -2341,7 +2329,7 @@ async function run() {
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   console.log(
-  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? '3 min après ouverture créneau, 4 min avant fin' : '5 min avant fin'}`
+  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'grille ET : 3 premières + 4 dernières min de chaque quart (:00,:15,:30,:45)' : '5 min avant fin'}`
 );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`

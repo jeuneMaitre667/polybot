@@ -6,6 +6,7 @@ import {
   getUpDownOutcomeIndices,
   resolveGammaMarketForBtcUpDown,
 } from '@/lib/gammaPolymarket.js';
+import { isLive15mEntryForbiddenNow } from '@/lib/bitcoin15mSlotEntryTiming.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
@@ -147,6 +148,9 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
         const slotEndMs = marketMode === '15m' ? slotEndMsFrom15mSlug(ev.slug ?? '') : null;
         const nowMs = Date.now();
         if (marketMode === '15m' && slotEndMs != null && Number.isFinite(slotEndMs) && nowMs >= slotEndMs) {
+          continue;
+        }
+        if (marketMode === '15m' && isLive15mEntryForbiddenNow(nowMs, slotEndMs)) {
           continue;
         }
 

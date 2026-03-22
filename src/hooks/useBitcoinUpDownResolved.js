@@ -10,11 +10,15 @@ import { formatHourlyEventLabelFromSlug } from '@/lib/polymarketDisplayTime.js';
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
 const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
-const CLOB_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
-const DATA_API_TRADES_URL = 'https://data-api.polymarket.com/trades';
+const CLOB_PRICES_HISTORY_URL = import.meta.env.DEV
+  ? '/apiClob/prices-history'
+  : 'https://clob.polymarket.com/prices-history';
+const DATA_API_TRADES_URL = import.meta.env.DEV ? '/apiData/trades' : 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
-const MIN_P = 0.97;
-const MAX_P = 0.975;
+/** Détection sur séries CLOB (souvent mid/bid sous le best ask live). */
+const DETECT_MIN_P = 0.965;
+const SIM_ENTRY_MIN_P = 0.97;
+const SIM_ENTRY_MAX_P = 0.975;
 
 /** Fenêtre par défaut (en heures). 72 = 3 jours. */
 const DEFAULT_WINDOW_HOURS = 72;
@@ -71,7 +75,7 @@ async function fetchPriceHistoryFromTrades(conditionId, endDateStr) {
   const startTs = endTs - 14400;
   try {
     const { data: trades } = await axios.get(DATA_API_TRADES_URL, {
-      params: { market: cid, limit: 2000, takerOnly: true },
+      params: { market: cid, limit: 2000, takerOnly: false },
       timeout: 12000,
     });
     if (!Array.isArray(trades) || trades.length === 0) return [];
@@ -126,7 +130,8 @@ async function fetchPriceHistory(tokenId, endDateStr) {
     });
   try {
     // Marchés résolus : SANS interval, uniquement startTs + endTs + fidelity
-    const fidelityAttempts = [60, 15, 5]; // 1h, 15min, 5min
+    /** 1 min en premier : pics courts 97¢ visibles (comme 15m). */
+    const fidelityAttempts = [1, 60, 15, 5];
     for (const fidelity of fidelityAttempts) {
       const res = await axios.get(CLOB_PRICES_HISTORY_URL, {
         params: { market: tokenId, startTs, endTs, fidelity },
@@ -164,10 +169,28 @@ function toSeconds(t) {
 // Règle bot horaire : pas d'entrée dans les 5 dernières minutes avant la fin de l'événement.
 const NO_TRADE_LAST_SEC_HOURLY = 5 * 60;
 
+function normalizeOutcomePriceHourly(raw) {
+  if (raw == null) return NaN;
+  let p = typeof raw === 'string' ? parseFloat(String(raw).replace(',', '.')) : Number(raw);
+  if (!Number.isFinite(p)) return NaN;
+  if (p > 1 && p <= 100) p = p / 100;
+  if (p > 1) p = 1;
+  if (p < 0) p = 0;
+  return p;
+}
+
+function hasHourlyDetectionBand(p) {
+  return Number.isFinite(p) && p >= DETECT_MIN_P && p <= 1;
+}
+
+function clampHourlyEntryPrice(p) {
+  if (!Number.isFinite(p) || p < SIM_ENTRY_MIN_P) return SIM_ENTRY_MIN_P;
+  return Math.min(p, SIM_ENTRY_MAX_P);
+}
+
 /**
- * À partir de l'historique du token Up (prix p = proba Up), détermine si le bot aurait pris Up ou Down
- * (règle : côté à 97–97,5 %) et si ça aurait gagné. Retourne aussi l'heure et le type d'ordre (Limit).
- * Règle : pas d'entrée dans les 5 dernières minutes avant la fin de l'événement (aligné avec le bot live).
+ * À partir de l'historique Up/Down, premier franchissement ≥ DETECT_MIN_P (séries CLOB souvent sous le ask live).
+ * Prix d'entrée simulé plafonné SIM_ENTRY_MIN_P–SIM_ENTRY_MAX_P. Pas d'entrée dans les 5 dernières minutes.
  */
 function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
   const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
@@ -183,36 +206,31 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
   }
   const endCutSec = endTsSec != null ? endTsSec - NO_TRADE_LAST_SEC_HOURLY : null;
 
-  // Déterministe : on prend le plus tôt entre (tokenUp entre en bande) et (tokenDown entre en bande).
-  // Quand l'historique Down est absent, on retombe sur le complément (1 - pUp) pour garder un comportement robuste.
   const candidates = [];
 
   for (const pt of up) {
-    const p = pt?.p ?? pt?.price;
-    const pUp = Number(p);
+    const pUp = normalizeOutcomePriceHourly(pt?.p ?? pt?.price);
     const ts = toSeconds(pt?.t ?? pt?.timestamp);
     if (!Number.isFinite(pUp) || ts == null) continue;
     if (endCutSec != null && ts >= endCutSec) continue;
-    if (pUp >= MIN_P && pUp <= MAX_P) candidates.push({ side: 'Up', price: pUp, ts });
+    if (hasHourlyDetectionBand(pUp)) candidates.push({ side: 'Up', price: clampHourlyEntryPrice(pUp), ts });
     if (down.length === 0) {
-      const pDown = 1 - pUp;
-      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
+      const pDownC = normalizeOutcomePriceHourly(1 - pUp);
+      if (hasHourlyDetectionBand(pDownC)) candidates.push({ side: 'Down', price: clampHourlyEntryPrice(pDownC), ts });
     }
   }
 
   if (down.length > 0) {
     for (const pt of down) {
-      const p = pt?.p ?? pt?.price;
-      const pDown = Number(p);
+      const pDown = normalizeOutcomePriceHourly(pt?.p ?? pt?.price);
       const ts = toSeconds(pt?.t ?? pt?.timestamp);
       if (!Number.isFinite(pDown) || ts == null) continue;
       if (endCutSec != null && ts >= endCutSec) continue;
-      if (pDown >= MIN_P && pDown <= MAX_P) candidates.push({ side: 'Down', price: pDown, ts });
+      if (hasHourlyDetectionBand(pDown)) candidates.push({ side: 'Down', price: clampHourlyEntryPrice(pDown), ts });
     }
   }
 
   if (candidates.length === 0) return empty;
-  // Tie-breaker : Up avant Down si ts identique.
   candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
   const first = candidates[0];
   return {
