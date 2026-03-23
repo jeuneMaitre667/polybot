@@ -3,7 +3,7 @@
  *
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
- * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 96–98 %)
+ * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 97–98 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : tenter de redeem les tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains
@@ -22,6 +22,12 @@ import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import WebSocket from 'ws';
 import axios from 'axios';
 import { is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
+import {
+  mergeGammaEventMarketForUpDown,
+  getAlignedUpDownGammaPrices,
+  getAlignedUpDownTokenIds,
+  getTokenIdForSide,
+} from './gammaUpDownOrder.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -199,13 +205,13 @@ const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Fenêtre de prix pour signaux et mise max : 96 % – 98 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.96;
+// Fenêtre de prix pour signaux et mise max : 97 % – 98 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.97;
 const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.98;
 const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
- * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 96–98 %).
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 97–98 %).
  */
 const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
 let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.99;
@@ -219,6 +225,16 @@ const marketOrderTif = (process.env.MARKET_ORDER_TIF || 'FAK').trim().toUpperCas
 const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK;
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
+/** Fin de fenêtre 15m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 900 s (comme le dashboard). */
+function slotEndMsFrom15mSlug(slug) {
+  if (!slug || typeof slug !== 'string') return null;
+  const m = slug.match(/btc-updown-15m-(\d+)$/i);
+  if (!m) return null;
+  const raw = parseInt(m[1], 10);
+  if (!Number.isFinite(raw)) return null;
+  const startSec = raw < 1e12 ? raw : Math.floor(raw / 1000);
+  return (startSec + 900) * 1000;
+}
 const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
 
 /** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
@@ -324,6 +340,14 @@ const avgPriceTolP = Number(process.env.AVG_PRICE_TOL_P) || 0.0005;
 const avgPriceBinIters = Number(process.env.AVG_PRICE_BIN_ITERS) || 25;
 /** Appels carnet / liquidité « mise max » : seulement si historique ou plafonds legacy activés (évite la latence sinon). */
 const needLiquidityBook = recordLiquidityHistory || useLiquidityCap || useAvgPriceSizing;
+/**
+ * Si true : à chaque fetchSignals (poll), log JSON `signal_visibility_poll` avec les prix Up/Down **tels que le bot les voit**,
+ * même hors [MIN_P, MAX_P], + indicateurs « serait dans la fenêtre stratégie ? » et « timing interdit maintenant ? ».
+ * Utile pour vérifier que Gamma/CLOB répondent sans attendre un vrai signal. Throttle : SIGNAL_VISIBILITY_LOG_MS (défaut 10 s).
+ */
+const signalVisibilityLog = process.env.SIGNAL_VISIBILITY_LOG === 'true';
+const SIGNAL_VISIBILITY_LOG_MS = Math.max(2000, Number(process.env.SIGNAL_VISIBILITY_LOG_MS) || 10_000);
+let signalVisibilityLogLastAt = 0;
 /** Réagir en temps réel aux changements de prix via WebSocket CLOB (best_bid_ask). USE_WEBSOCKET=false pour ne faire que du polling. */
 const useWebSocket = process.env.USE_WEBSOCKET !== 'false';
 /** Garde-fous incidents Polymarket (retards prix/exécution/balance). */
@@ -363,14 +387,14 @@ if (wallet) {
 }
 
 /**
- * Type de wallet CLOB (doc Polymarket) :
- * 0 = EOA (clé privée standalone),
- * 1 = POLY_PROXY (Magic),
- * 2 = GNOSIS_SAFE (Gnosis Safe / proxy le plus fréquent côté Polymarket).
+ * Type de wallet CLOB (doc Polymarket / @polymarket/clob-client) :
+ * 0 = EOA (signer = adresse qui trade, pas de funder séparé),
+ * 1 = POLY_PROXY (compte email / Magic — l’adresse « Profil » du site est le proxy / funder),
+ * 2 = GNOSIS_SAFE (Safe — souvent l’adresse affichée sur le profil).
  *
- * IMPORTANT : par défaut on garde le comportement EOA (0) pour compatibilité,
- * mais tu peux corriger en proxy en mettant CLOB_SIGNATURE_TYPE=2 dans ~/bot-24-7/.env
- * (et éventuellement CLOB_FUNDER_ADDRESS si besoin).
+ * Si ton adresse Polymarket (Paramètres → Profil) ≠ l’adresse dérivée de PRIVATE_KEY :
+ * mets CLOB_SIGNATURE_TYPE=1 ou 2 selon le type de compte, et CLOB_FUNDER_ADDRESS = exactement
+ * l’adresse affichée sur polymarket.com (sinon les trades partent sur un autre compte).
  */
 const CLOB_SIGNATURE_TYPE = Number(process.env.CLOB_SIGNATURE_TYPE) || 0;
 const CLOB_FUNDER_ADDRESS_RAW = process.env.CLOB_FUNDER_ADDRESS?.trim();
@@ -573,6 +597,59 @@ async function createSignedMarketOrder(client, userMarketOrder) {
   return client.createMarketOrder(userMarketOrder, { negRisk: false });
 }
 
+/** Taille max du JSON `clobResponse` dans last-order / orders.log (évite fichiers énormes). */
+const CLOB_RESPONSE_LOG_MAX_JSON = Number(process.env.CLOB_RESPONSE_LOG_MAX_JSON) || 12000;
+
+/**
+ * Copie profonde « safe » de la réponse POST /order pour audit (tronque chaînes / tableaux / profondeur).
+ * Inclut tout champ supplémentaire renvoyé par le CLOB (ex. fills) même s’il n’est pas dans l’OpenAPI.
+ */
+function serializeClobPostOrderResponseForLog(body) {
+  if (!body || typeof body !== 'object') return null;
+  const seen = new WeakSet();
+  const walk = (x, depth) => {
+    if (depth > 5) return '[max-depth]';
+    if (x === null || typeof x === 'boolean' || typeof x === 'number') return x;
+    if (typeof x === 'bigint') return x.toString();
+    if (typeof x === 'string') return x.length > 400 ? `${x.slice(0, 400)}…` : x;
+    if (Array.isArray(x)) {
+      const max = 50;
+      const arr = x.slice(0, max).map((el) => walk(el, depth + 1));
+      if (x.length > max) arr.push(`…+${x.length - max} more`);
+      return arr;
+    }
+    if (typeof x === 'object') {
+      if (seen.has(x)) return '[circular]';
+      seen.add(x);
+      const o = {};
+      let i = 0;
+      for (const [k, v] of Object.entries(x)) {
+        if (i++ > 80) {
+          o._truncatedKeys = true;
+          break;
+        }
+        o[k] = walk(v, depth + 1);
+      }
+      return o;
+    }
+    return String(x);
+  };
+  try {
+    const serialized = walk(body, 0);
+    const str = JSON.stringify(serialized);
+    if (str.length > CLOB_RESPONSE_LOG_MAX_JSON) {
+      return {
+        _jsonTruncated: true,
+        _approxBytes: str.length,
+        head: str.slice(0, Math.min(4000, CLOB_RESPONSE_LOG_MAX_JSON)),
+      };
+    }
+    return serialized;
+  } catch (e) {
+    return { _serializeError: String(e?.message || e).slice(0, 200) };
+  }
+}
+
 /**
  * Parse la réponse POST /order (SendOrderResponse Polymarket).
  * makingAmount / takingAmount : fixed-point 6 décimales (chaîne ou nombre).
@@ -581,9 +658,11 @@ async function createSignedMarketOrder(client, userMarketOrder) {
 function parsePolymarketPostOrderFill(responseBody, { orderSide = Side.BUY, requestedUsd = null } = {}) {
   const out = {
     clobStatus: null,
+    clobSuccess: null,
     filledUsdc: null,
     filledOutcomeTokens: null,
     fillRatio: null,
+    averageFillPriceP: null,
     tradeIDs: undefined,
     transactionsHashes: undefined,
     clobErrorMsg: null,
@@ -613,7 +692,33 @@ function parsePolymarketPostOrderFill(responseBody, { orderSide = Side.BUY, requ
     out.fillRatio = Math.round(out.fillRatio * 10000) / 10000;
   }
 
+  // Prix moyen effectif (VWAP) : USDC / tokens ; ou champ API s’il existe un jour.
+  const apiAvgRaw =
+    responseBody.averagePrice ??
+    responseBody.average_price ??
+    responseBody.avgPrice ??
+    responseBody.avg_price ??
+    responseBody.price ??
+    null;
+  if (apiAvgRaw != null && apiAvgRaw !== '') {
+    const n = Number(typeof apiAvgRaw === 'bigint' ? apiAvgRaw.toString() : apiAvgRaw);
+    if (Number.isFinite(n) && n > 0) {
+      // Heuristique : valeurs > 1 traitées comme fixed-point 6 déc (comme making/taking), sinon probabilité 0–1.
+      out.averageFillPriceP = n > 1 ? n / 1e6 : n;
+    }
+  }
+  if (
+    out.averageFillPriceP == null &&
+    out.filledUsdc != null &&
+    out.filledOutcomeTokens != null &&
+    out.filledUsdc > 0 &&
+    out.filledOutcomeTokens > 0
+  ) {
+    out.averageFillPriceP = Math.round((out.filledUsdc / out.filledOutcomeTokens) * 1e8) / 1e8;
+  }
+
   out.clobStatus = typeof responseBody.status === 'string' ? responseBody.status : null;
+  out.clobSuccess = typeof responseBody.success === 'boolean' ? responseBody.success : null;
   out.clobErrorMsg = responseBody.errorMsg || responseBody.error_msg || null;
   if (Array.isArray(responseBody.tradeIDs)) out.tradeIDs = responseBody.tradeIDs;
   else if (Array.isArray(responseBody.trade_ids)) out.tradeIDs = responseBody.trade_ids;
@@ -628,12 +733,16 @@ function pickFillFieldsForLog(fill) {
   if (!fill) return {};
   const o = {};
   if (fill.clobStatus != null) o.clobStatus = fill.clobStatus;
+  if (fill.clobSuccess != null) o.clobSuccess = fill.clobSuccess;
   if (fill.filledUsdc != null) o.filledUsdc = fill.filledUsdc;
   if (fill.filledOutcomeTokens != null) o.filledOutcomeTokens = fill.filledOutcomeTokens;
   if (fill.fillRatio != null) o.fillRatio = fill.fillRatio;
+  if (fill.averageFillPriceP != null) o.averageFillPriceP = fill.averageFillPriceP;
   if (fill.tradeIDs?.length) o.tradeIDs = fill.tradeIDs;
   if (fill.transactionsHashes?.length) o.transactionsHashes = fill.transactionsHashes;
   if (fill.clobErrorMsg) o.clobErrorMsg = fill.clobErrorMsg;
+  if (fill.clobResponse != null) o.clobResponse = fill.clobResponse;
+  if (Array.isArray(fill.clobResponses) && fill.clobResponses.length) o.clobResponses = fill.clobResponses;
   return o;
 }
 
@@ -642,31 +751,16 @@ function formatFillConsoleSuffix(placeResult) {
   if (placeResult.filledUsdc == null) return '';
   const pct = placeResult.fillRatio != null ? ` (${(placeResult.fillRatio * 100).toFixed(1)} % du montant demandé)` : '';
   const st = placeResult.clobStatus ? ` [CLOB: ${placeResult.clobStatus}]` : '';
-  return ` — exécuté ~${placeResult.filledUsdc.toFixed(2)} USDC${pct}${st}`;
+  const avg =
+    placeResult.averageFillPriceP != null && Number.isFinite(placeResult.averageFillPriceP)
+      ? ` @ ~${(placeResult.averageFillPriceP * 100).toFixed(2)}¢`
+      : '';
+  return ` — exécuté ~${placeResult.filledUsdc.toFixed(2)} USDC${avg}${pct}${st}`;
 }
 
-function parsePrices(market) {
-  try {
-    const raw = market.outcomePrices ?? market.outcome_prices;
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length < 2) return null;
-    return [parseFloat(arr[0]) ?? 0.5, parseFloat(arr[1]) ?? 0.5];
-  } catch {
-    return null;
-  }
-}
-
+/** Token CLOB pour acheter Up ou Down — indices alignés sur les libellés Gamma (souvent Down, Up). */
 function getTokenIdToBuy(market, takeSide) {
-  const idx = takeSide === 'Up' ? 0 : 1;
-  let ids = market.clobTokenIds ?? market.clob_token_ids;
-  if (typeof ids === 'string') {
-    try { ids = JSON.parse(ids); } catch { ids = null; }
-  }
-  if (Array.isArray(ids) && ids[idx]) return String(ids[idx]);
-  const tokens = market.tokens;
-  if (Array.isArray(tokens) && tokens[idx]?.token_id) return String(tokens[idx].token_id);
-  if (Array.isArray(tokens) && tokens[idx]?.tokenId) return String(tokens[idx].tokenId);
-  return null;
+  return getTokenIdForSide(market, takeSide);
 }
 
 /** Appel RPC direct eth_call (secours si CLOB indisponible). Calcule data = balanceOf(address). */
@@ -1245,14 +1339,34 @@ async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
 }
 
 /**
- * Meilleur ask (prix pour acheter le token sur le carnet).
- * Doc Polymarket GET /price : side=BUY → best **bid** ; side=SELL → best **ask**.
- * Il faut donc SELL pour aligner signal / exécution sur le prix d’achat réel.
+ * Meilleur ask (prix pour acheter le token) : d’abord le carnet `/book` (prix réels du marché),
+ * puis GET `/price?side=BUY` en secours (doc Polymarket : BUY = best **ask**, prix pour acheter le token).
+ * (~0,55/0,45) alors que le carnet affiche les vrais niveaux (ex. 0,10 / 0,91) — aligné avec le site Polymarket.
  */
-async function getBestAsk(tokenId) {
+async function getBestAskFromBookOnly(tokenId) {
   if (!tokenId) return null;
   try {
-    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'SELL' }, timeout: 3000 });
+    const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 3000 });
+    const asks = data?.asks;
+    if (!Array.isArray(asks) || asks.length === 0) return null;
+    let best = Infinity;
+    for (const level of asks) {
+      const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
+      if (Number.isFinite(p) && p > 0 && p < best) best = p;
+    }
+    return best === Infinity ? null : best;
+  } catch (err) {
+    notePolymarketIncidentError('clob_book', err);
+    return null;
+  }
+}
+
+async function getBestAsk(tokenId) {
+  if (!tokenId) return null;
+  const fromBook = await getBestAskFromBookOnly(tokenId);
+  if (fromBook != null) return fromBook;
+  try {
+    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'BUY' }, timeout: 3000 });
     const p = parseFloat(data?.price);
     return Number.isFinite(p) ? p : null;
   } catch (err) {
@@ -1278,7 +1392,7 @@ async function getBestAskCachedForSignal(tokenId) {
  * En mode clob, secours partiel sur Gamma si un ask CLOB manque.
  */
 async function getOutcomePricesForSignal(market) {
-  const fromGamma = parsePrices(market);
+  const fromGamma = getAlignedUpDownGammaPrices(market);
   if (signalPriceSource !== 'clob') return fromGamma;
 
   const tokenUp = getTokenIdToBuy(market, 'Up');
@@ -1448,40 +1562,94 @@ async function fetchSignals() {
   profile.hasMatchingSlugAfterEvents = gammaOut.profile.hasMatchingSlugAfterEvents;
   profile.fallbackSlugOk = gammaOut.profile.fallbackSlugOk;
   profile.fallbackSlugMs = gammaOut.profile.fallbackSlugMs;
+
+  if (MARKET_MODE === '15m') {
+    const r = await resolve15mEventsForTrading(events, Date.now());
+    events = r.events;
+    profile.fifteenMResolveStrategy = r.resolveStrategy;
+    profile.fifteenMSlugMismatch = r.slugMismatch;
+    profile.expected15mSlug = r.expectedSlug;
+  }
+
   const results = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const visibilitySnapshots = [];
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
     const eventSlug = (ev.slug ?? '').toLowerCase();
     if (!eventSlug.includes(slugMatch)) continue;
     const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
-      const prices = await getOutcomePricesForSignal(m);
+      const merged = mergeGammaEventMarketForUpDown(ev, m);
+      const prices = await getOutcomePricesForSignal(merged);
       if (!prices) continue;
       const [priceUp, priceDown] = prices;
       const upInRange = priceUp >= MIN_P && priceUp <= MAX_P;
       const downInRange = priceDown >= MIN_P && priceDown <= MAX_P;
       const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+      if (signalVisibilityLog) {
+        const gammaPair = getAlignedUpDownGammaPrices(merged);
+        const timingSignal = { endDate: marketEndDate };
+        visibilitySnapshots.push({
+          slug: (ev.slug ?? eventSlug).slice(0, 80),
+          priceSource: signalPriceSource,
+          priceUp: Math.round(priceUp * 1e6) / 1e6,
+          priceDown: Math.round(priceDown * 1e6) / 1e6,
+          gammaUp: gammaPair?.[0] != null ? Math.round(gammaPair[0] * 1e6) / 1e6 : null,
+          gammaDown: gammaPair?.[1] != null ? Math.round(gammaPair[1] * 1e6) / 1e6 : null,
+          strategyWindow: { minP: MIN_P, maxP: MAX_P },
+          upInStrategyWindow: upInRange,
+          downInStrategyWindow: downInRange,
+          /** Même règle que l’émission du signal (Up prioritaire si les deux). */
+          wouldEmitSide: upInRange ? 'Up' : downInRange ? 'Down' : null,
+          timingForbiddenNow: shouldSkipTradeTiming(timingSignal),
+          ...(MARKET_MODE === '15m'
+            ? {
+                expected15mSlug: profile.expected15mSlug ?? null,
+                fifteenMResolveStrategy: profile.fifteenMResolveStrategy ?? null,
+                fifteenMSlugMismatch: profile.fifteenMSlugMismatch ?? false,
+              }
+            : {}),
+        });
+      }
       if (upInRange) {
         results.push({
-          market: m,
+          market: merged,
           eventSlug: ev.slug ?? eventSlug,
           takeSide: 'Up',
           priceUp,
           priceDown,
-          tokenIdToBuy: getTokenIdToBuy(m, 'Up'),
+          tokenIdToBuy: getTokenIdToBuy(merged, 'Up'),
           endDate: marketEndDate,
         });
       } else if (downInRange) {
         results.push({
-          market: m,
+          market: merged,
           eventSlug: ev.slug ?? eventSlug,
           takeSide: 'Down',
           priceUp,
           priceDown,
-          tokenIdToBuy: getTokenIdToBuy(m, 'Down'),
+          tokenIdToBuy: getTokenIdToBuy(merged, 'Down'),
           endDate: marketEndDate,
         });
       }
+    }
+  }
+
+  if (signalVisibilityLog && visibilitySnapshots.length > 0) {
+    const nowVis = Date.now();
+    if (nowVis - signalVisibilityLogLastAt >= SIGNAL_VISIBILITY_LOG_MS) {
+      signalVisibilityLogLastAt = nowVis;
+      const payload = {
+        mode: MARKET_MODE,
+        pollEmittedSignals: results.length,
+        snapshots: visibilitySnapshots.slice(0, 5),
+      };
+      logJson('info', 'signal_visibility_poll', payload);
+      const s0 = visibilitySnapshots[0];
+      console.log(
+        `[signal_visibility] ${MARKET_MODE} src=${signalPriceSource} | Up=${s0.priceUp} Down=${s0.priceDown} | fenêtre stratégie Up/Down=${s0.upInStrategyWindow}/${s0.downInStrategyWindow} | émettrait=${s0.wouldEmitSide ?? '∅'} | timing_interdit=${s0.timingForbiddenNow} | signaux_poll=${results.length}`,
+      );
     }
   }
 
@@ -1490,6 +1658,10 @@ async function fetchSignals() {
   if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
   else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
   else profile.strategy = 'events_empty_or_invalid';
+  if (MARKET_MODE === '15m' && profile.fifteenMResolveStrategy) {
+    const mis = profile.fifteenMSlugMismatch ? '|mismatch' : '';
+    profile.strategy = `${profile.strategy}|15m:${profile.fifteenMResolveStrategy}${mis}`;
+  }
   results._fetchSignalsProfile = profile;
   return results;
 }
@@ -1542,6 +1714,17 @@ async function getActiveMarketTokensForWs() {
       console.log(`[WS] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
     }
   }
+
+  if (MARKET_MODE === '15m') {
+    const r = await resolve15mEventsForTrading(events, Date.now());
+    events = r.events;
+    if (r.slugMismatch) {
+      console.log(
+        `[WS] 15m: résolution créneau — stratégie=${r.resolveStrategy} attendu=${r.expectedSlug} (mismatch vs liste Gamma)`,
+      );
+    }
+  }
+
   const tokenIds = [];
   const tokenToSignal = new Map();
   for (const ev of events) {
@@ -1551,28 +1734,97 @@ async function getActiveMarketTokensForWs() {
     const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
       const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
-      const ids = m.clobTokenIds ?? m.clob_token_ids;
-      const tokens = m.tokens;
-      const tokenIdUp = Array.isArray(ids) && ids[0] ? String(ids[0]) : (Array.isArray(tokens) && tokens[0]?.token_id ? String(tokens[0].token_id) : null);
-      const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
+      const merged = mergeGammaEventMarketForUpDown(ev, m);
+      const { tokenIdUp, tokenIdDown } = getAlignedUpDownTokenIds(merged);
       if (tokenIdUp) {
         tokenIds.push(tokenIdUp);
-        tokenToSignal.set(tokenIdUp, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Up', endDate, tokenIdToBuy: tokenIdUp, priceUp: MIN_P, priceDown: 1 - MIN_P });
+        tokenToSignal.set(tokenIdUp, {
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Up',
+          endDate,
+          tokenIdToBuy: tokenIdUp,
+          priceUp: MIN_P,
+          priceDown: 1 - MIN_P,
+        });
       }
       if (tokenIdDown) {
         tokenIds.push(tokenIdDown);
-        tokenToSignal.set(tokenIdDown, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Down', endDate, tokenIdToBuy: tokenIdDown, priceUp: 1 - MIN_P, priceDown: MIN_P });
+        tokenToSignal.set(tokenIdDown, {
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Down',
+          endDate,
+          tokenIdToBuy: tokenIdDown,
+          priceUp: 1 - MIN_P,
+          priceDown: MIN_P,
+        });
       }
     }
   }
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
-/** Slug du créneau 15m actuel (fin de créneau en s UTC). Aligné sur le dashboard (Math.ceil). L'API Gamma liste ne renvoie souvent pas les events 15m ; on les récupère par slug. */
+/** Slug du créneau 15m ouvert : `btc-updown-15m-{eventStartSec}` (Gamma), start = floor(epoch/900)*900. */
 function getCurrent15mEventSlug() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const slotEnd = Math.ceil(nowSec / 900) * 900;
-  return `${BITCOIN_UP_DOWN_15M_SLUG}-${slotEnd}`;
+  const slotStart = Math.floor(nowSec / 900) * 900;
+  return `${BITCOIN_UP_DOWN_15M_SLUG}-${slotStart}`;
+}
+
+/**
+ * Repli : marchés 15m encore ouverts, triés par fin de créneau (plus proche d’abord).
+ * Aligné sur le dashboard (`pickCurrent15mEvent`).
+ */
+function pick15mFallbackEventFromList(events, nowMs) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const preferred = getCurrent15mEventSlug().toLowerCase();
+  const exact = events.find((e) => (e.slug ?? '').toLowerCase() === preferred);
+  if (exact) return exact;
+  const stillOpen = events.filter((e) => {
+    const end = slotEndMsFrom15mSlug(e.slug ?? '');
+    return end != null && Number.isFinite(end) && nowMs < end;
+  });
+  stillOpen.sort((a, b) => {
+    const ea = slotEndMsFrom15mSlug(a.slug ?? '') ?? 0;
+    const eb = slotEndMsFrom15mSlug(b.slug ?? '') ?? 0;
+    return ea - eb;
+  });
+  return stillOpen[0] ?? events[0];
+}
+
+/**
+ * Un seul event 15m pour trading / WS : slug UTC courant exact, sinon GET /events/slug, sinon repli trié.
+ * (La liste Gamma peut contenir plusieurs `btc-updown-15m-*` — ne pas prendre le premier au hasard.)
+ */
+async function resolve15mEventsForTrading(events, nowMs = Date.now()) {
+  const expectedSlug = getCurrent15mEventSlug().toLowerCase();
+  const exact = events.find((e) => (e.slug ?? '').toLowerCase() === expectedSlug);
+  if (exact?.markets?.length) {
+    return { events: [exact], resolveStrategy: 'list_exact_slug', slugMismatch: false, expectedSlug };
+  }
+  try {
+    const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(expectedSlug)}`, {
+      timeout: 8000,
+    });
+    if (ev?.markets?.length && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+      const sl = (ev.slug ?? '').toLowerCase();
+      return { events: [ev], resolveStrategy: 'direct_slug', slugMismatch: sl !== expectedSlug, expectedSlug };
+    }
+  } catch (_) {
+    /* 404 ou réseau */
+  }
+  const fb = pick15mFallbackEventFromList(events, nowMs);
+  if (fb?.markets?.length) {
+    const sl = (fb.slug ?? '').toLowerCase();
+    return {
+      events: [fb],
+      resolveStrategy: 'fallback_open_sorted',
+      slugMismatch: sl !== expectedSlug,
+      expectedSlug,
+    };
+  }
+  return { events: [], resolveStrategy: 'empty', slugMismatch: false, expectedSlug };
 }
 
 /** Slug du créneau horaire actuel (heure ET). Format: bitcoin-up-or-down-march-15-2026-4pm-et. */
@@ -1604,7 +1856,7 @@ async function fetchActiveWindows() {
       if (!key || seenKeys.has(key)) continue;
       seenKeys.add(key);
       const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
-      results.push({ market: m, endDate: marketEndDate, key });
+      results.push({ market: m, ev, endDate: marketEndDate, key });
     }
   }
   return results;
@@ -1754,16 +2006,18 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
         }
         const result = await client.postOrder(signedOrder, marketOrderType);
         const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
+        const clobResponse = serializeClobPostOrderResponseForLog(result);
         consecutiveOrderErrors = 0;
-        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit, ...fill };
+        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit, clobResponse, ...fill };
       }
       const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
       // Ordre limite : create + sign puis POST (même pattern que marché).
       const signedOrderLimit = await client.createOrder(userOrder, options);
       const result = await client.postOrder(signedOrderLimit, OrderType.GTC);
       const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
+      const clobResponse = serializeClobPostOrderResponseForLog(result);
       consecutiveOrderErrors = 0;
-      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false, ...fill };
+      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false, clobResponse, ...fill };
     } catch (err) {
       lastError = err.message;
       const status = err.response?.status;
@@ -1822,7 +2076,10 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
   if (first.filledUsdc == null || first.filledUsdc <= 0) return first;
 
   let totalFilled = first.filledUsdc;
+  let totalFilledOutcomeTokens =
+    first.filledOutcomeTokens != null && Number.isFinite(first.filledOutcomeTokens) ? first.filledOutcomeTokens : null;
   const orderIDs = first.orderID != null ? [first.orderID] : [];
+  const clobResponses = first.clobResponse != null ? [first.clobResponse] : [];
   let anyPreSignHit = !!first.preSignCacheHit;
   const epsUsd = Math.max(0.05, targetUsd * 0.002);
 
@@ -1885,15 +2142,23 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
       break;
     }
     if (next.orderID != null) orderIDs.push(next.orderID);
+    if (next.clobResponse != null) clobResponses.push(next.clobResponse);
 
     if (next.filledUsdc == null) break;
     totalFilled += next.filledUsdc;
+    if (next.filledOutcomeTokens != null && Number.isFinite(next.filledOutcomeTokens)) {
+      totalFilledOutcomeTokens = (totalFilledOutcomeTokens ?? 0) + next.filledOutcomeTokens;
+    }
 
     if (totalFilled >= targetUsd - epsUsd) break;
   }
 
   const aggregateFillRatio =
     targetUsd > 0 ? Math.min(2, Math.round((totalFilled / targetUsd) * 10000) / 10000) : null;
+  let aggregateAverageFillPriceP = null;
+  if (totalFilled > 0 && totalFilledOutcomeTokens != null && totalFilledOutcomeTokens > 0) {
+    aggregateAverageFillPriceP = Math.round((totalFilled / totalFilledOutcomeTokens) * 1e8) / 1e8;
+  }
   const baseLog = pickFillFieldsForLog(lastOk);
 
   return {
@@ -1904,7 +2169,11 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
     preSignCacheHit: anyPreSignHit,
     ...baseLog,
     filledUsdc: totalFilled,
+    filledOutcomeTokens: totalFilledOutcomeTokens,
     fillRatio: aggregateFillRatio,
+    averageFillPriceP: aggregateAverageFillPriceP ?? baseLog.averageFillPriceP ?? lastOk?.averageFillPriceP,
+    clobResponse: clobResponses.length ? clobResponses[clobResponses.length - 1] : lastOk?.clobResponse,
+    clobResponses: clobResponses.length > 1 ? clobResponses : undefined,
   };
 }
 
@@ -1913,20 +2182,25 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 /** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
 async function tryPlaceOrderForSignal(signal) {
-  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) {
-    if (signal?.tokenIdToBuy) {
-      const r = !walletConfigured
-        ? 'wallet_not_configured'
-        : !autoPlaceEnabled
-          ? 'auto_place_disabled'
-          : killSwitchActive
-            ? 'kill_switch'
-            : 'missing_token';
-      logSignalInRangeButNoOrder('ws', r, signal, {});
-    }
+  if (!signal?.tokenIdToBuy) return;
+  const key = getSignalKey(signal);
+  /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
+  if (shouldSkipTradeTiming(signal)) {
+    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, {});
     return;
   }
-  const key = getSignalKey(signal);
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
+    const r = !walletConfigured
+      ? 'wallet_not_configured'
+      : !autoPlaceEnabled
+        ? 'auto_place_disabled'
+        : killSwitchActive
+          ? 'kill_switch'
+          : 'unknown';
+    logSignalInRangeButNoOrder('ws', r, signal, {});
+    return;
+  }
   const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
   if (cooldownRemainingMs > 0) {
     recordSkipReason('cooldown_active', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
@@ -1943,11 +2217,6 @@ async function tryPlaceOrderForSignal(signal) {
   if (placedKeys.has(key)) {
     recordSkipReason('already_placed_for_slot', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
     logSignalInRangeButNoOrder('ws', 'already_placed_for_slot', signal, {});
-    return;
-  }
-  if (shouldSkipTradeTiming(signal)) {
-    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, {});
     return;
   }
   let signalWithPrice = signal;
@@ -2144,6 +2413,9 @@ async function tryPlaceOrderForSignal(signal) {
       preSignCacheHit: result.preSignCacheHit,
       partialFillRetries: result.partialFillRetries ?? 0,
       orderIDs: result.orderIDs,
+      clobSignerAddress: wallet?.address ?? null,
+      clobSignatureType: CLOB_SIGNATURE_TYPE,
+      clobFunderAddress: clobFunderAddress ?? null,
       ...fillLog,
     };
     writeLastOrder(orderData);
@@ -2379,11 +2651,12 @@ async function run() {
         try {
           const activeWindows = await fetchActiveWindows();
           logFetchActiveWindowsIfDue(activeWindows.length);
-          for (const { market: m, endDate, key } of activeWindows) {
+          for (const { market: m, ev, endDate, key } of activeWindows) {
             if (recordedLiquidityWindows.has(key)) continue;
             const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
-            const tokenUp = getTokenIdToBuy(m, 'Up');
-            const tokenDown = getTokenIdToBuy(m, 'Down');
+            const merged = mergeGammaEventMarketForUpDown(ev, m);
+            const tokenUp = getTokenIdToBuy(merged, 'Up');
+            const tokenDown = getTokenIdToBuy(merged, 'Down');
             const liqProfileUp = {};
             const liqProfileDown = {};
             const [bookUp, bookDown] = await Promise.all([
@@ -2498,6 +2771,22 @@ async function run() {
       await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
     }
     });
+    }
+
+    // Observabilité : `place_orders` (timing_forbidden, etc.) n’est pas exécuté si autotrade off / sans wallet —
+    // le dashboard restait vide alors qu’un signal poll était bien dans [MIN_P, MAX_P] et la grille ET interdisait l’entrée.
+    if (
+      MARKET_MODE === '15m' &&
+      Array.isArray(signals) &&
+      signals.length > 0 &&
+      is15mSlotEntryTimeForbiddenNow(Math.floor(Date.now() / 1000))
+    ) {
+      const s0 = signals.find((x) => x?.tokenIdToBuy);
+      if (s0) {
+        const k = getSignalKey(s0);
+        recordSkipReason('timing_forbidden', 'poll', { conditionId: k, tokenId: s0.tokenIdToBuy });
+        logSignalInRangeButNoOrder('poll', 'timing_forbidden', s0, {});
+      }
     }
 
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
@@ -2725,6 +3014,9 @@ async function run() {
         preSignCacheHit: result.preSignCacheHit,
         partialFillRetries: result.partialFillRetries ?? 0,
         orderIDs: result.orderIDs,
+        clobSignerAddress: wallet?.address ?? null,
+        clobSignatureType: CLOB_SIGNATURE_TYPE,
+        clobFunderAddress: clobFunderAddress ?? null,
         ...fillLog,
       };
       writeLastOrder(orderData);
@@ -2828,6 +3120,11 @@ async function main() {
   } else {
     console.log('Wallet: non configuré — pas de placement d’ordres. Ajoute PRIVATE_KEY dans .env puis redémarre (pm2 restart polymarket-bot).');
   }
+  if (signalVisibilityLog) {
+    console.log(
+      `SIGNAL_VISIBILITY_LOG=true : log périodique des prix vus par le poll (hors fenêtre incl.) — throttle ${SIGNAL_VISIBILITY_LOG_MS} ms → bot.log (signal_visibility_poll).`,
+    );
+  }
   if (walletConfigured && !autoPlaceEnabled) {
     console.log('Autotrade désactivé — définir AUTO_PLACE_ENABLED=true pour placer des ordres.');
   }
@@ -2844,6 +3141,8 @@ async function main() {
     mode: MARKET_MODE,
     autoPlaceEnabled,
     recordLiquidityHistory,
+    signalVisibilityLog,
+    signalVisibilityLogMs: signalVisibilityLog ? SIGNAL_VISIBILITY_LOG_MS : null,
     botLogPath: BOT_JSON_LOG_FILE,
   });
 

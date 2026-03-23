@@ -46,11 +46,11 @@ function formatAxiosError(err) {
 }
 /**
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
- * Seuil détection plus bas que la fenêtre d’entrée : détecter dès ≥ 95,5¢, reporter l’entrée dans **96–98¢**.
+ * Seuil détection : ≥ 97¢ (aligné bot 15m) ; entrée simulée **97–98¢**.
  */
-const DETECT_MIN_P = 0.955;
-/** Prix d’entrée simulé : plancher 96¢ (aligné fenêtre signal bot / dashboard). */
-const SIM_ENTRY_MIN_P = 0.96;
+const DETECT_MIN_P = 0.97;
+/** Prix d’entrée simulé : plancher 97¢ (aligné fenêtre signal bot / dashboard). */
+const SIM_ENTRY_MIN_P = 0.97;
 const SIM_ENTRY_MAX_P = 0.98;
 
 /** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
@@ -108,14 +108,14 @@ function normalizeHistorySeriesPoints(series) {
   });
 }
 
-/** Slug 15m = btc-updown-15m-{finUtcSec} — libellé type Polymarket (plage ET). */
+/** Slug 15m = btc-updown-15m-{eventStartUtcSec} — `formatBitcoin15mSlotRangeEt` attend la **fin** de fenêtre. */
 function get15mLabelFromSlug(slug) {
   if (!slug || typeof slug !== 'string') return slug || '—';
   const m = slug.match(/btc-updown-15m-(\d+)$/i);
   if (m) {
     const ts = parseInt(m[1], 10);
-    const sec = ts < 1e12 ? ts : Math.floor(ts / 1000);
-    return formatBitcoin15mSlotRangeEt(sec);
+    const startSec = ts < 1e12 ? ts : Math.floor(ts / 1000);
+    return formatBitcoin15mSlotRangeEt(startSec + 15 * 60);
   }
   return slug;
 }
@@ -126,18 +126,17 @@ const SLOTS_PER_HOUR = 4;
 const MAX_15M_SLUG_FETCH = 168 * SLOTS_PER_HOUR; // 672 = 7 jours max (pour « un jour de plus »)
 
 /**
- * Slug Polymarket = btc-updown-15m-{timestamp} avec **la fin du créneau** en secondes UTC
- * (aligné sur bot-24-7 getCurrent15mEventSlug et use15mMiseMaxBookAvg). Avant : floor(début)
- * → décalage de 15 min et 404 sur /events/slug → aucun résultat passé.
+ * Slugs récents : suffixe = **eventStart** UTC (`floor(now/900)*900`, puis -900, -1800, …).
+ * Aligné Gamma / Polymarket / bot (`getCurrent15mEventSlug`).
  */
 function getRecent15mSlugs(slotCount) {
   const nowSec = Math.floor(Date.now() / 1000);
   const slotSec = 15 * 60;
-  const currentSlotEnd = Math.ceil(nowSec / slotSec) * slotSec;
+  const currentStart = Math.floor(nowSec / slotSec) * slotSec;
   const slugs = [];
   const n = Math.min(slotCount, MAX_15M_SLUG_FETCH);
-  for (let i = 1; i <= n; i++) {
-    slugs.push(`${BITCOIN_UP_DOWN_15M_SLUG}-${currentSlotEnd - i * slotSec}`);
+  for (let i = 0; i < n; i++) {
+    slugs.push(`${BITCOIN_UP_DOWN_15M_SLUG}-${currentStart - i * slotSec}`);
   }
   return slugs;
 }
@@ -151,10 +150,8 @@ function isWithinLastHoursByRefEndMs(refEndMs, hours) {
 
 /**
  * Fin de créneau pour filtrage, fenêtre CLOB/prices-history et simulation.
- * On privilégie le timestamp du slug `btc-updown-15m-{finUtcSec}` : même convention que
- * le bot (`getCurrent15mEventSlug`) et que Polymarket.
- * Sur Gamma, `ev.endDate` peut être décalé d’environ un créneau (~900s) par rapport au slug,
- * ce qui décale la fenêtre d’historique et fausse les entrées simulées.
+ * `slotEndMsFrom15mSlug` renvoie la **fin** (= début slug + 900 s, Gamma `eventStartTime`).
+ * Sur Gamma, `ev.endDate` peut différer légèrement ; le slug reste la vérité affichage Polymarket.
  */
 function resolve15mRefEndMs(ev) {
   const slugEnd = slotEndMsFrom15mSlug(ev.slug ?? '');
@@ -1060,7 +1057,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               entryForbiddenSlotFirstSec: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
               entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
               label:
-                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 96–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
+                'Détection ≥97¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
             },
           };
         }

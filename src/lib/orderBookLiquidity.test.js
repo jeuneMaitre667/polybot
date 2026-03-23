@@ -19,8 +19,8 @@ describe('liquidityUsdFromAsks', () => {
       { price: '0.975', size: '20' },
       { price: '0.98', size: '50' },
     ];
-    // 0.96*100 + 0.97*10 + 0.975*20 + 0.98*50 = 96 + 9.7 + 19.5 + 49 = 174.2
-    expect(liquidityUsdFromAsks(asks)).toBe(174.2);
+    // Bande défaut 97–98¢ : exclut 0,96 → 0.97*10 + 0.975*20 + 0.98*50 = 78.2
+    expect(liquidityUsdFromAsks(asks)).toBe(78.2);
   });
 
   it('accepte tuples [price, size]', () => {
@@ -37,7 +37,7 @@ describe('liquidityUsdFromAsks', () => {
   });
 
   it('expose les constantes de bande signal', () => {
-    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.96);
+    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.97);
     expect(ORDER_BOOK_SIGNAL_MAX_P).toBe(0.98);
   });
 });

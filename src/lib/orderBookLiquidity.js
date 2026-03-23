@@ -1,8 +1,46 @@
-/** Bande prix signal / « mise max » carnet (alignée bot : 96 % – 98 %). */
-export const ORDER_BOOK_SIGNAL_MIN_P = 0.96;
+/** Bande prix signal / « mise max » carnet (alignée bot : 97 % – 98 %). */
+export const ORDER_BOOK_SIGNAL_MIN_P = 0.97;
 export const ORDER_BOOK_SIGNAL_MAX_P = 0.98;
 /** Plafond exécution marché type bot (`MARKET_WORST_PRICE_P` / FAK) : liquidité cumulée jusqu’à ce prix. */
 export const ORDER_BOOK_MARKET_WORST_P = 0.99;
+
+/** Prix d’un niveau ask CLOB (plusieurs schémas possibles). */
+function parseAskLevelPrice(level) {
+  const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
+  return Number.isFinite(p) ? p : NaN;
+}
+
+/** Taille d’un niveau ask (clés supplémentaires : amount, remaining — selon versions / proxies). */
+function parseAskLevelSize(level) {
+  const s = parseFloat(
+    level?.size ??
+      level?.s ??
+      level?.q ??
+      level?.qty ??
+      level?.quantity ??
+      level?.amount ??
+      level?.remaining ??
+      level?.[1] ??
+      0
+  );
+  return Number.isFinite(s) ? s : 0;
+}
+
+/**
+ * Meilleur prix ask affiché (plus bas > 0), **sans** exiger de taille — aligné `useBitcoinUpDownSignals` / carnet Polymarket.
+ * Utile quand la taille est absente ou sous un champ non parsé : `/price` peut alors renvoyer un mid ~50¢ alors que le carnet montre 38¢/63¢.
+ * @param {unknown} asks
+ * @returns {number|null}
+ */
+export function getBestAskPriceLenientFromRawAsks(asks) {
+  if (!Array.isArray(asks)) return null;
+  let min = Infinity;
+  for (const level of asks) {
+    const p = parseAskLevelPrice(level);
+    if (Number.isFinite(p) && p > 0 && p < min) min = p;
+  }
+  return min === Infinity ? null : min;
+}
 
 /**
  * Liquidité côté asks (USDC) entre minP et maxP : somme (prix × taille).
@@ -17,9 +55,8 @@ export function liquidityUsdFromAsks(
   if (!Array.isArray(asks)) return 0;
   let totalUsd = 0;
   for (const level of asks) {
-    // Réponse CLOB peut varier : { price, size } ou { p, s } / { p, q } ou tuple [price, size].
-    const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? 0);
-    const s = parseFloat(level?.size ?? level?.s ?? level?.q ?? level?.qty ?? level?.[1] ?? 0);
+    const p = parseAskLevelPrice(level);
+    const s = parseAskLevelSize(level);
 
     if (!Number.isFinite(p) || !Number.isFinite(s)) continue;
     if (p >= minP && p <= maxP && s > 0) totalUsd += p * s;
@@ -36,8 +73,8 @@ export function getBestAskPriceFromRawAsks(asks) {
   if (!Array.isArray(asks)) return null;
   let min = Infinity;
   for (const level of asks) {
-    const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
-    const s = parseFloat(level?.size ?? level?.s ?? level?.q ?? level?.qty ?? level?.[1] ?? 0);
+    const p = parseAskLevelPrice(level);
+    const s = parseAskLevelSize(level);
     if (!Number.isFinite(p) || !Number.isFinite(s) || s <= 0) continue;
     if (p > 0 && p < min) min = p;
   }
@@ -51,8 +88,8 @@ export function countAskLevelsInBand(asks, minP = ORDER_BOOK_SIGNAL_MIN_P, maxP 
   if (!Array.isArray(asks)) return 0;
   let n = 0;
   for (const level of asks) {
-    const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
-    const s = parseFloat(level?.size ?? level?.s ?? level?.q ?? level?.qty ?? level?.[1] ?? 0);
+    const p = parseAskLevelPrice(level);
+    const s = parseAskLevelSize(level);
     if (!Number.isFinite(p) || !Number.isFinite(s) || s <= 0) continue;
     if (p >= minP && p <= maxP) n += 1;
   }

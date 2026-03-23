@@ -16,8 +16,8 @@ const CLOB_PRICES_HISTORY_URL = import.meta.env.DEV
 const DATA_API_TRADES_URL = import.meta.env.DEV ? '/apiData/trades' : 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 /** Détection sur séries CLOB (souvent mid/bid sous le best ask live). */
-const DETECT_MIN_P = 0.955;
-const SIM_ENTRY_MIN_P = 0.96;
+const DETECT_MIN_P = 0.965;
+const SIM_ENTRY_MIN_P = 0.97;
 const SIM_ENTRY_MAX_P = 0.98;
 
 /** Fenêtre par défaut (en heures). 72 = 3 jours. */
@@ -189,8 +189,8 @@ function clampHourlyEntryPrice(p) {
 }
 
 /**
- * À partir de l'historique Up/Down, premier franchissement ≥ DETECT_MIN_P (séries CLOB souvent sous le ask live).
- * Prix d'entrée simulé plafonné SIM_ENTRY_MIN_P–SIM_ENTRY_MAX_P. Pas d'entrée dans les 5 dernières minutes.
+ * À partir de l'historique Up/Down, premier franchissement ≥ DETECT_MIN_P (96,5¢) puis entrée plafonnée **97–98¢**.
+ * Pas d'entrée dans les 5 dernières minutes.
  */
 function computeBotSimulation(historyUp, historyDown, winner, endDateStr) {
   const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };

@@ -64,11 +64,11 @@ function getCurrentBitcoinUpDownEventSlug() {
   return `${BITCOIN_UP_DOWN_SLUG}-${month}-${day}-${year}-${hour}${ampm}-et`;
 }
 
-/** Slug Polymarket du créneau 15 min actuel (btc-updown-15m-{timestamp} fin de créneau en s UTC). */
+/** Slug Polymarket du créneau 15 min ouvert : `btc-updown-15m-{eventStartSec}` (début fenêtre, s UTC). */
 function getCurrent15mEventSlug() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const slotEnd = Math.ceil(nowSec / SLOT_15M_SEC) * SLOT_15M_SEC;
-  return `btc-updown-15m-${slotEnd}`;
+  const slotStart = Math.floor(nowSec / SLOT_15M_SEC) * SLOT_15M_SEC;
+  return `btc-updown-15m-${slotStart}`;
 }
 
 /** Point vert (Up) ou rouge (Down) comme sur Polymarket. */
@@ -95,13 +95,17 @@ function signalBucketLabelFromPrice(priceP) {
 export function BitcoinUpDownStrategy() {
   const { address, signer, isPolygon } = useWallet();
   const [resultMode, setResultMode] = useState(() => readStratResultModeFromStorage());
-  const { signals } = useBitcoinUpDownSignals(resultMode === '15m' ? '15m' : 'hourly');
+  const { signals, live15mMeta } = useBitcoinUpDownSignals(resultMode === '15m' ? '15m' : 'hourly');
 
   useEffect(() => {
     writeStratResultModeToStorage(resultMode);
   }, [resultMode]);
 
-  const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
+  /** Liquidité / carnet : même token que le signal « prix seul » si la grille ET masque le signal affiché. */
+  const currentSignalTokenId =
+    signals?.[0]?.tokenIdToBuy ??
+    (live15mMeta?.hiddenByTiming ? live15mMeta.signalsIfTimingIgnored?.[0]?.tokenIdToBuy : null) ??
+    null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
   const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
@@ -255,7 +259,7 @@ export function BitcoinUpDownStrategy() {
   }, [resolvedHours, initialBalance, includeFees]);
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 96–98 %). */
+    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 97–98 %). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
@@ -366,7 +370,8 @@ export function BitcoinUpDownStrategy() {
 
   const getCapUsdForSignal = (signal) => {
     if (!showLiquiditySuggestion || liquidityAtTargetUsd == null || liquidityAtTargetUsd <= 0) return null;
-    if (signals?.[0] && getSignalKey(signal) === getSignalKey(signals[0])) return liquidityAtTargetUsd;
+    const primary = signals?.[0] ?? (live15mMeta?.hiddenByTiming ? live15mMeta.signalsIfTimingIgnored?.[0] : null);
+    if (primary && getSignalKey(signal) === getSignalKey(primary)) return liquidityAtTargetUsd;
     return null;
   };
 
@@ -384,7 +389,7 @@ export function BitcoinUpDownStrategy() {
     setPlacingFor(null);
   };
 
-  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 96–98 %) apparaît
+  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 97–98 %) apparaît
   useEffect(() => {
     if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
     const toPlace = signals.filter(
@@ -473,7 +478,7 @@ export function BitcoinUpDownStrategy() {
                   <span className="strat-rule-chevron" aria-hidden>
                     &gt;
                   </span>
-                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 98¢ (ex. achat 96¢ → gain 4¢ si résolu 1 $)
+                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 98¢ (ex. achat 97¢ → gain 3¢ si résolu 1 $)
                 </li>
               </ul>
               <div className="strat-reason-bars">
@@ -547,6 +552,53 @@ export function BitcoinUpDownStrategy() {
                   ). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
                   l’auto.
                 </p>
+                {resultMode === '15m' && live15mMeta?.hiddenByTiming && live15mMeta.signalsIfTimingIgnored?.[0] && (
+                  <p
+                    className="strat-autoplace-panel__hint"
+                    style={{
+                      borderLeft: '3px solid var(--amber, #f5a623)',
+                      paddingLeft: 10,
+                      marginTop: 10,
+                      color: 'var(--text-1)',
+                    }}
+                  >
+                    <strong>Prix dans {SIGNAL_BAND_PCT_LABEL}</strong> (côté{' '}
+                    {live15mMeta.signalsIfTimingIgnored[0].takeSide}) mais{' '}
+                    <strong>fenêtre d’entrée interdite</strong> (grille ET : 3 premières / 4 dernières min du quart
+                    d’heure). Le dashboard et le bot <strong>ne montrent pas</strong> de signal dans ce cas — comme un
+                    trade refusé par timing. Asks live : Up{' '}
+                    {live15mMeta.liveAskUp != null ? `${(live15mMeta.liveAskUp * 100).toFixed(1)}¢` : '—'}, Down{' '}
+                    {live15mMeta.liveAskDown != null ? `${(live15mMeta.liveAskDown * 100).toFixed(1)}¢` : '—'}.
+                  </p>
+                )}
+                {resultMode === '15m' && live15mMeta?.slugMismatch && (
+                  <p
+                    className="strat-autoplace-panel__hint strat-text-amber"
+                    style={{ marginTop: 10, lineHeight: 1.5 }}
+                  >
+                    <strong>Créneau 15m :</strong> l’event Gamma utilisé ne correspond pas au slug attendu du créneau
+                    UTC courant. Les prix peuvent être ceux <strong>d’un autre quart d’heure</strong>. Attendu :{' '}
+                    <code className="strat-code-inline">{live15mMeta.expectedEventSlug ?? '—'}</code> — reçu :{' '}
+                    <code className="strat-code-inline">{live15mMeta.resolvedEventSlug ?? '—'}</code>. Actualise la page
+                    après déploiement ; le hook force désormais GET <code className="strat-code-inline">/events/slug/…</code>{' '}
+                    sur le bon slug.
+                  </p>
+                )}
+                {resultMode === '15m' &&
+                  live15mMeta?.livePriceSource &&
+                  live15mMeta.livePriceSource !== 'clob' && (
+                    <p
+                      className="strat-autoplace-panel__hint strat-text-amber"
+                      style={{ marginTop: 10, lineHeight: 1.5 }}
+                    >
+                      <strong>Source prix : Gamma (indicatif)</strong> — le carnet CLOB n’a pas renvoyé les deux best
+                      asks (réseau, CORS, proxy dev, etc.). Les pourcentages peuvent rester proches de 50/50 alors que
+                      Polymarket affiche les <strong>vrais prix d’achat</strong> (ex. 10¢ / 91¢). Compare avec l’URL
+                      officielle du même slug (
+                      <code className="strat-code-inline">{live15mMeta.expectedEventSlug ?? getCurrent15mEventSlug()}</code>
+                      ).
+                    </p>
+                  )}
               </div>
 
               <h3 className="strat-balance-perf-heading">Solde &amp; performance</h3>
@@ -747,7 +799,7 @@ export function BitcoinUpDownStrategy() {
             Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché){' '}
             {resultMode === 'hourly'
               ? '— pas d’entrée dans les 5 dernières minutes du créneau.'
-              : '— 15 min : pas d’entrée les 3 premières minutes UTC de chaque quart d’heure ni les 4 dernières avant la fin (aligné exécution prudente).'}{' '}
+              : '— 15 min : pas d’entrée les 3 premières minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).'}{' '}
             Données historiques CLOB.
           </p>
 

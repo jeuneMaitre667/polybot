@@ -272,9 +272,9 @@ function liquidityBySignalFromFiltered(filtered) {
   const valid = filtered.filter((e) => {
     const n = Number(e?.liquidityUsd);
     const p = Number(e?.signalPriceP);
-    return e?.at && Number.isFinite(n) && n > 0 && Number.isFinite(p) && p >= 0.96 && p <= 0.98;
+    return e?.at && Number.isFinite(n) && n > 0 && Number.isFinite(p) && p >= 0.97 && p <= 0.98;
   });
-  const byBucket = new Map(); // key: 96.0..98.0 (0.1%)
+  const byBucket = new Map(); // key: 97.0..98.0 (0.1%)
   for (const e of valid) {
     const pPct = Number(e.signalPriceP) * 100;
     const bucketPct = Math.round(pPct * 10) / 10;
