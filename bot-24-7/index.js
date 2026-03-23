@@ -405,6 +405,52 @@ function getSignalKey(signal) {
   return signal.market?.conditionId ?? signal.eventSlug ?? '';
 }
 
+/** Prix “best ask” du côté acheté (Up = priceUp, Down = priceDown) pour logs / garde-fous. */
+function pickSignalBestAskP(signal) {
+  if (!signal?.takeSide) return null;
+  const p = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
+  const n = Number(p);
+  return Number.isFinite(n) ? n : null;
+}
+
+const SIGNAL_IN_RANGE_NO_ORDER_LOG_MS = Math.max(1000, Number(process.env.SIGNAL_IN_RANGE_NO_ORDER_LOG_MS) || 5000);
+const signalInRangeNoOrderThrottle = new Map(); // key -> ts
+
+/**
+ * Une ligne PM2 + entrée JSONL bot.log quand un prix est dans [MIN_P, MAX_P] mais aucun ordre n’est placé.
+ * Throttle par (source, reason, conditionId|token).
+ */
+function logSignalInRangeButNoOrder(source, reason, signal, fields = {}) {
+  if (!signal || typeof signal !== 'object') return;
+  const bestAskP =
+    fields.bestAskP != null && Number.isFinite(Number(fields.bestAskP))
+      ? Number(fields.bestAskP)
+      : pickSignalBestAskP(signal);
+  if (bestAskP == null || bestAskP < MIN_P || bestAskP > MAX_P) return;
+  const cond = getSignalKey(signal) || signal.tokenIdToBuy || 'na';
+  const throttleKey = `${source}|${reason}|${cond}`;
+  const now = Date.now();
+  const prev = signalInRangeNoOrderThrottle.get(throttleKey);
+  if (prev && now - prev < SIGNAL_IN_RANGE_NO_ORDER_LOG_MS) return;
+  signalInRangeNoOrderThrottle.set(throttleKey, now);
+  const { bestAskP: _drop, ...restFields } = fields;
+  const payload = {
+    source,
+    reason,
+    bestAskP: Math.round(bestAskP * 1e6) / 1e6,
+    minP: MIN_P,
+    maxP: MAX_P,
+    takeSide: signal.takeSide,
+    conditionId: String(getSignalKey(signal) || '').slice(0, 120),
+    tokenId: signal.tokenIdToBuy ? String(signal.tokenIdToBuy).slice(0, 32) : null,
+    ...restFields,
+  };
+  logJson('info', 'signal_in_range_but_no_order', payload);
+  try {
+    console.log(`[signal_in_range_but_no_order] ${JSON.stringify(payload)}`);
+  } catch (_) {}
+}
+
 function isRetryableExecutionError(errLike) {
   const msg = String(errLike?.message || errLike || '').toLowerCase();
   const status = Number(errLike?.response?.status);
@@ -1735,25 +1781,41 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 /** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
 async function tryPlaceOrderForSignal(signal) {
-  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) {
+    if (signal?.tokenIdToBuy) {
+      const r = !walletConfigured
+        ? 'wallet_not_configured'
+        : !autoPlaceEnabled
+          ? 'auto_place_disabled'
+          : killSwitchActive
+            ? 'kill_switch'
+            : 'missing_token';
+      logSignalInRangeButNoOrder('ws', r, signal, {});
+    }
+    return;
+  }
   const key = getSignalKey(signal);
   const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
   if (cooldownRemainingMs > 0) {
     recordSkipReason('cooldown_active', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+    logSignalInRangeButNoOrder('ws', 'cooldown_active', signal, { remainingMs: Math.round(cooldownRemainingMs) });
     return;
   }
   if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
     recordSkipReason('degraded_mode', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'degraded_mode_pause', signal, {});
     return;
   }
   const t0 = Date.now();
   const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
   if (placedKeys.has(key)) {
     recordSkipReason('already_placed_for_slot', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'already_placed_for_slot', signal, {});
     return;
   }
   if (shouldSkipTradeTiming(signal)) {
     recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, {});
     return;
   }
   let signalWithPrice = signal;
@@ -1775,6 +1837,11 @@ async function tryPlaceOrderForSignal(signal) {
       const restAsk = await getBestAsk(signal.tokenIdToBuy);
       if (restAsk == null || restAsk < MIN_P || restAsk > MAX_P) {
         recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_invalid', signal, {
+          bestAskP: wsBestAsk,
+          wsAgeMs: Math.round(wsAgeMs),
+          restAsk: restAsk != null ? Math.round(restAsk * 1e6) / 1e6 : null,
+        });
         writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
         setPolymarketDegraded('stale_ws_data', incidentDurationMs);
         logJson('warn', 'WS stale: revalidation REST indisponible/hors fenêtre, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk });
@@ -1783,6 +1850,13 @@ async function tryPlaceOrderForSignal(signal) {
       const mismatch = Math.abs(restAsk - wsBestAsk);
       if (mismatch > wsPriceMismatchMaxP) {
         recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_mismatch', signal, {
+          bestAskP: wsBestAsk,
+          wsAgeMs: Math.round(wsAgeMs),
+          restAsk: Math.round(restAsk * 1e6) / 1e6,
+          mismatch: Math.round(mismatch * 1e6) / 1e6,
+          mismatchMaxP: wsPriceMismatchMaxP,
+        });
         writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
         setPolymarketDegraded('ws_rest_price_mismatch', incidentDurationMs);
         logJson('warn', 'WS stale: mismatch WS/REST, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk, restAsk, mismatch });
@@ -1839,6 +1913,10 @@ async function tryPlaceOrderForSignal(signal) {
     timingsMs.creds = Math.max(1, Date.now() - tCreds0);
   } catch (err) {
     notePolymarketIncidentError('clob_creds', err);
+    logSignalInRangeButNoOrder('ws', 'clob_creds', signal, {
+      bestAskP: bestAskLive,
+      error: String(err?.message || err).slice(0, 240),
+    });
     console.warn('WebSocket tryPlace: CLOB client:', err.message);
     return;
   }
@@ -1870,6 +1948,12 @@ async function tryPlaceOrderForSignal(signal) {
   // Permet d'avoir un breakdown même sans trade réel.
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
     recordSkipReason('amount_below_min', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'amount_below_min', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      orderSizeMinUsd,
+      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
+    });
     if (shouldLogTradeLatencyAttempt(key)) {
       logJson('info', 'Trade latency attempt (WS, no order)', {
         conditionId: key,
@@ -1970,6 +2054,11 @@ async function tryPlaceOrderForSignal(signal) {
       setExecutionCooldown(key, result.error);
       notePolymarketIncidentError('ws_order_failure', result.error);
     }
+    logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      error: String(result?.error || '').slice(0, 240),
+    });
     logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
     console.error(`[${time}] [WS] Erreur ${signalWithPrice.takeSide}: ${result.error}`);
   }
@@ -2329,10 +2418,12 @@ async function run() {
     const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
     if (cooldownRemainingMs > 0) {
       recordSkipReason('cooldown_active', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+      logSignalInRangeButNoOrder('poll', 'cooldown_active', s, { remainingMs: Math.round(cooldownRemainingMs) });
       continue;
     }
     if (placedKeys.has(key)) {
       recordSkipReason('already_placed_for_slot', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      logSignalInRangeButNoOrder('poll', 'already_placed_for_slot', s, {});
       continue;
     }
     const t0 = Date.now();
@@ -2350,6 +2441,7 @@ async function run() {
     // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
     if (shouldSkipTradeTiming(s)) {
       recordSkipReason('timing_forbidden', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, {});
       let attemptAmountUsd = amountUsd;
       if (useBalanceAsSize) {
         const tBal0 = Date.now();
@@ -2390,6 +2482,10 @@ async function run() {
       amountUsd = balance != null ? balance : orderSizeUsd;
       if (amountUsd < orderSizeMinUsd) {
         recordSkipReason('amount_below_min', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('poll', 'amount_below_min', s, {
+          amountUsd: Math.round(amountUsd * 100) / 100,
+          orderSizeMinUsd,
+        });
         if (recordLiquidityHistory) {
           const tBook0 = Date.now();
           const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
@@ -2536,6 +2632,11 @@ async function run() {
         setExecutionCooldown(key, result.error);
         notePolymarketIncidentError('poll_order_failure', result.error);
       }
+      logSignalInRangeButNoOrder('poll', 'place_order_failed', s, {
+        bestAskP: pickSignalBestAskP(s),
+        amountUsd: Math.round(amountUsd * 100) / 100,
+        error: String(result?.error || '').slice(0, 240),
+      });
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }
