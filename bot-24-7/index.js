@@ -67,12 +67,34 @@ ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
 const GAMMA_EVENTS_CACHE_MS = Number(process.env.GAMMA_EVENTS_CACHE_MS) || 4000;
 const gammaEventsCache = new Map(); // cacheKey -> { expiresAt, events, profile }
 
+/** Compteur / throttle pour ne pas saturer stderr si bot.log reste injoignable. */
+let botLogAppendFailCount = 0;
+let botLogAppendLastStderrMs = 0;
+const BOT_LOG_APPEND_STDERR_THROTTLE_MS = 60 * 1000;
+
 /** Log structuré JSON (une ligne par événement) dans bot.log pour analyse ou envoi vers un outil de log. */
 function logJson(level, message, meta = {}) {
   try {
     rotateBotJsonLogIfNeeded();
     fs.appendFileSync(BOT_JSON_LOG_FILE, JSON.stringify({ level, message, ts: new Date().toISOString(), ...meta }) + '\n', 'utf8');
-  } catch (_) {}
+  } catch (e) {
+    botLogAppendFailCount += 1;
+    const now = Date.now();
+    if (now - botLogAppendLastStderrMs >= BOT_LOG_APPEND_STDERR_THROTTLE_MS || botLogAppendFailCount === 1) {
+      botLogAppendLastStderrMs = now;
+      console.error(
+        '[bot.log] Écriture impossible (vérifie permissions / disque / inode).',
+        'path=',
+        BOT_JSON_LOG_FILE,
+        'code=',
+        e?.code,
+        'message=',
+        e?.message,
+        'failCount=',
+        botLogAppendFailCount,
+      );
+    }
+  }
 }
 
 // Rotation légère de bot.log (JSONL) pour éviter qu'il grossisse indéfiniment.
@@ -960,19 +982,37 @@ const bookCache = new Map();
 let cachedCreds = null;
 let cachedCredsAt = 0;
 
+/** Creds utilisables pour ClobClient (key + secret + passphrase). */
+function normalizeClobCreds(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const key = raw.key ?? raw.apiKey;
+  if (!key || !raw.secret || !raw.passphrase) return null;
+  if (raw.apiKey && !raw.key) return { ...raw, key: raw.apiKey };
+  return raw;
+}
+
+/** 400 « Could not create api key » = clé déjà présente côté Polymarket → il faut derive, pas create. */
+function isCreateApiKeyAlreadyExistsError(err) {
+  const status = err?.response?.status;
+  const body = err?.response?.data?.error ?? err?.response?.data?.message ?? err?.message;
+  const s = String(body || err?.message || '');
+  return status === 400 || /could not create api key|already exist|duplicate key/i.test(s);
+}
+
 /**
  * Obtient les creds L2 CLOB (api key + secret + passphrase).
  * Ne pas utiliser createOrDeriveApiKey() du SDK : il appelle createApiKey() en premier ;
- * si une clé existe déjà (nonce 0), create renvoie 400 "Could not create api key", la promesse
- * est rejetée et deriveApiKey() n'est jamais exécuté — bruit en logs et échec au refresh du cache.
- * Ordre correct : derive d'abord, create seulement si pas de clé. Voir Polymarket/clob-client#202.
+ * si une clé existe déjà, create renvoie 400 et derive n'est jamais tenté.
+ * Ordre : derive → si incomplet, create → si 400 « clé existe », derive à nouveau.
  */
 async function getClobCredsCached() {
   const now = Date.now();
-  if (cachedCreds && now - cachedCredsAt < CREDS_CACHE_TTL_MS) return cachedCreds;
-  // Important : même pour la création/derivation de creds (L1),
-  // le client a besoin d'une "account context" complète (signatureType + funderAddress)
-  // sinon @polymarket/clob-client peut lever "wallet client is missing account address".
+  if (cachedCreds && now - cachedCredsAt < CREDS_CACHE_TTL_MS) {
+    const hit = normalizeClobCreds(cachedCreds);
+    if (hit) return hit;
+    cachedCreds = null;
+  }
+
   const clientWithoutCreds = new ClobClient(
     CLOB_HOST,
     CHAIN_ID,
@@ -982,23 +1022,58 @@ async function getClobCredsCached() {
     clobFunderAddress,
   );
 
-  let creds = null;
-  try {
-    creds = await clientWithoutCreds.deriveApiKey();
-  } catch (_) {
-    creds = null;
-  }
-  const k = creds && (creds.key ?? creds.apiKey);
-  const hasUsableCreds = Boolean(k && creds.secret && creds.passphrase);
-  if (!hasUsableCreds) {
-    creds = await clientWithoutCreds.createApiKey();
-  } else if (creds.apiKey && !creds.key) {
-    creds = { ...creds, key: creds.apiKey };
+  async function tryDerive() {
+    try {
+      const d = await clientWithoutCreds.deriveApiKey();
+      return normalizeClobCreds(d);
+    } catch {
+      return null;
+    }
   }
 
-  cachedCreds = creds;
-  cachedCredsAt = now;
-  return creds;
+  let creds = await tryDerive();
+  if (creds) {
+    cachedCreds = creds;
+    cachedCredsAt = now;
+    return creds;
+  }
+
+  try {
+    const created = await clientWithoutCreds.createApiKey();
+    creds = normalizeClobCreds(created);
+    if (creds) {
+      cachedCreds = creds;
+      cachedCredsAt = now;
+      logJson('info', 'CLOB createApiKey OK (nouvelle clé)', {});
+      return creds;
+    }
+  } catch (createErr) {
+    if (isCreateApiKeyAlreadyExistsError(createErr)) {
+      logJson('info', 'CLOB createApiKey 400 (clé existante) — nouvelle tentative deriveApiKey', {
+        error: String(createErr?.message || createErr?.response?.data?.error || createErr).slice(0, 300),
+      });
+      creds = await tryDerive();
+      if (creds) {
+        cachedCreds = creds;
+        cachedCredsAt = now;
+        return creds;
+      }
+    }
+    throw createErr;
+  }
+
+  creds = await tryDerive();
+  if (creds) {
+    cachedCreds = creds;
+    cachedCredsAt = now;
+    return creds;
+  }
+
+  const err = new Error(
+    'CLOB: impossible d’obtenir des clés API (derive incomplet + create sans succès). Vérifie PRIVATE_KEY, CLOB_SIGNATURE_TYPE, compte Polymarket.',
+  );
+  logJson('error', 'CLOB creds échec total', { error: err.message });
+  throw err;
 }
 
 async function buildClobClientCachedCreds() {
