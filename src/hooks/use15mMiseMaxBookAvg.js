@@ -19,6 +19,8 @@ const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'http
 const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
 const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
 const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
+const CLOB_PRICE_URL = import.meta.env.DEV ? '/apiClob/price' : 'https://clob.polymarket.com/price';
+const CLOB_PRICE_DIRECT = 'https://clob.polymarket.com/price';
 const BITCOIN_UP_DOWN_15M = 'btc-updown-15m';
 const SLOT_SEC = 15 * 60;
 /** Rafraîchissement léger : carnet créneau actuel + gagnant dernier créneau (sans rescanner les N créneaux). */
@@ -130,6 +132,27 @@ async function fetchAsks(tokenId, slotEndSecForBook = null) {
   }
 }
 
+async function fetchBestAskLive(tokenId) {
+  if (!tokenId) return null;
+  async function atBase(baseUrl) {
+    try {
+      const { data } = await axios.get(baseUrl, {
+        params: { token_id: tokenId, side: 'SELL' },
+        timeout: 8000,
+      });
+      const p = parseFloat(data?.price);
+      return Number.isFinite(p) ? p : null;
+    } catch {
+      return null;
+    }
+  }
+  let p = await atBase(CLOB_PRICE_URL);
+  if (p == null && import.meta.env.DEV && String(CLOB_PRICE_URL).startsWith('/')) {
+    p = await atBase(CLOB_PRICE_DIRECT);
+  }
+  return p;
+}
+
 /** Dernier créneau **terminé** (pas l’actuel) : gagnant Up/Down via Gamma outcomePrices. */
 async function fetchPreviousSlotWinnerFromGamma() {
   const slotEndSec = getPrevious15mSlotEndSec();
@@ -171,7 +194,7 @@ function medianSorted(arr) {
 
 /**
  * Moyenne de la « mise max » carnet sur N créneaux 15m :
- * max(liquidité Up, Down) dans 97 % – 97,5 % (`ORDER_BOOK_SIGNAL_*`, aligné bot / `orderBookLiquidity`).
+ * max(liquidité Up, Down) dans la bande signal (`ORDER_BOOK_SIGNAL_*`, aligné bot / `orderBookLiquidity`).
  *
  * Quand `enabled`, le **carnet du créneau ouvert** et le **gagnant du dernier créneau** sont aussi
  * rafraîchis automatiquement toutes les ~1 s (sans refaire le scan complet des N créneaux).
@@ -188,7 +211,7 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [currentSlotMiseMaxUsd, setCurrentSlotMiseMaxUsd] = useState(null);
   /** Série temporelle : un point par créneau où Gamma+CLOB ont répondu (même si mise = 0). */
   const [seriesBySlot, setSeriesBySlot] = useState([]);
-  /** @deprecated Utiliser currentSlotBookAsksUp / Down — carnet dominant (97–97,5 %). */
+  /** @deprecated Utiliser currentSlotBookAsksUp / Down — carnet dominant (bande signal). */
   const [currentSlotBookAsks, setCurrentSlotBookAsks] = useState([]);
   /** Asks CLOB créneau actuel : Up et Down (profondeur type Polymarket). */
   const [currentSlotBookAsksUp, setCurrentSlotBookAsksUp] = useState([]);
@@ -204,6 +227,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [liquidityBandDownUsd, setLiquidityBandDownUsd] = useState(null);
   const [bestAskUpP, setBestAskUpP] = useState(null);
   const [bestAskDownP, setBestAskDownP] = useState(null);
+  const [bestAskLiveUpP, setBestAskLiveUpP] = useState(null);
+  const [bestAskLiveDownP, setBestAskLiveDownP] = useState(null);
   const [levelsBandUp, setLevelsBandUp] = useState(0);
   const [levelsBandDown, setLevelsBandDown] = useState(0);
   const [liquidityToWorstUpUsd, setLiquidityToWorstUpUsd] = useState(null);
@@ -252,6 +277,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         setLiquidityBandDownUsd(0);
         setBestAskUpP(null);
         setBestAskDownP(null);
+        setBestAskLiveUpP(null);
+        setBestAskLiveDownP(null);
         setLevelsBandUp(0);
         setLevelsBandDown(0);
         setLiquidityToWorstUpUsd(0);
@@ -261,6 +288,10 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       const [asksUp, asksDown] = await Promise.all([
         fetchAsks(tokenIdUp, end0),
         fetchAsks(tokenIdDown, end0),
+      ]);
+      const [liveAskUp, liveAskDown] = await Promise.all([
+        fetchBestAskLive(tokenIdUp),
+        fetchBestAskLive(tokenIdDown),
       ]);
       if (!mounted.current) return;
       const m = computeSlotBookMetrics(asksUp, asksDown);
@@ -273,6 +304,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setLiquidityBandDownUsd(m.liquidityBandDownUsd);
       setBestAskUpP(m.bestAskUpP);
       setBestAskDownP(m.bestAskDownP);
+      setBestAskLiveUpP(liveAskUp);
+      setBestAskLiveDownP(liveAskDown);
       setLevelsBandUp(m.levelsBandUp);
       setLevelsBandDown(m.levelsBandDown);
       setLiquidityToWorstUpUsd(m.liquidityToWorstUpUsd);
@@ -313,6 +346,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setLiquidityBandDownUsd(null);
       setBestAskUpP(null);
       setBestAskDownP(null);
+      setBestAskLiveUpP(null);
+      setBestAskLiveDownP(null);
       setLevelsBandUp(0);
       setLevelsBandDown(0);
       setLiquidityToWorstUpUsd(null);
@@ -363,6 +398,10 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         seriesPoints.push({ slotEndSec: endSec, miseMaxUsd: mise });
         if (i === 0) {
           firstSlotMise = mise;
+          const [liveAskUp, liveAskDown] = await Promise.all([
+            fetchBestAskLive(tokenIdUp),
+            fetchBestAskLive(tokenIdDown),
+          ]);
           const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
           setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
           setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
@@ -374,6 +413,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           setLiquidityBandDownUsd(mm.liquidityBandDownUsd);
           setBestAskUpP(mm.bestAskUpP);
           setBestAskDownP(mm.bestAskDownP);
+          setBestAskLiveUpP(liveAskUp);
+          setBestAskLiveDownP(liveAskDown);
           setLevelsBandUp(mm.levelsBandUp);
           setLevelsBandDown(mm.levelsBandDown);
           setLiquidityToWorstUpUsd(mm.liquidityToWorstUpUsd);
@@ -419,6 +460,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setCurrentSlotBookAsks([]);
       setCurrentSlotBookAsksUp([]);
       setCurrentSlotBookAsksDown([]);
+      setBestAskLiveUpP(null);
+      setBestAskLiveDownP(null);
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -451,6 +494,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     liquidityBandDownUsd,
     bestAskUpP,
     bestAskDownP,
+    bestAskLiveUpP,
+    bestAskLiveDownP,
     levelsBandUp,
     levelsBandDown,
     liquidityToWorstUpUsd,

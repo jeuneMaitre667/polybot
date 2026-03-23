@@ -18,8 +18,9 @@ const CLOB_PRICE_URL = import.meta.env.DEV ? '/apiClob/price' : 'https://clob.po
 const CLOB_PRICE_DIRECT = 'https://clob.polymarket.com/price';
 const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
 const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
-const MIN_PRICE = 0.97;
-const MAX_PRICE = 0.975;
+/** Fenêtre signal affichée / alignée bot (dashboard + `.env` bot). */
+const MIN_PRICE = 0.96;
+const MAX_SIGNAL_PRICE = 0.98;
 
 // Uniquement les événements "Bitcoin Up or Down - Hourly" (slug du type bitcoin-up-or-down-march-14-6pm-et)
 const BITCOIN_UP_DOWN_HOURLY_SLUG = 'bitcoin-up-or-down';
@@ -114,7 +115,7 @@ async function fetchActive15mEvents() {
 }
 
 /**
- * Signaux 97–97,5 % pour le marché horaire ou 15 min.
+ * Signaux dans la fenêtre prix (MIN_PRICE–MAX_SIGNAL_PRICE, ex. 96–98 %) pour le marché horaire ou 15 min.
  * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, secours GET /events/slug/{slug} créneau courant.
  */
 export function useBitcoinUpDownSignals(marketMode = 'hourly') {
@@ -176,14 +177,9 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
             priceUp = baseUp;
             priceDown = baseDown;
           }
-          /**
-           * Détection alignée sur le backtest 15m : conviction ≥ 97¢ (jusqu’à 1).
-           * Ne pas exiger price ≤ 97,5¢ : sur le carnet, le favori est souvent à 98–99¢ ;
-           * l’ancien test `<= MAX_PRICE` ne déclenchait presque jamais de signal.
-           * Le plafond 97,5¢ s’applique à l’ordre (clamp côté `placeOrderForSignal`).
-           */
-          const upQualifies = priceUp >= MIN_PRICE && priceUp <= 1;
-          const downQualifies = priceDown >= MIN_PRICE && priceDown <= 1;
+          /** Fenêtre signal : [MIN_PRICE, MAX_SIGNAL_PRICE] (ex. 96–98¢). */
+          const upQualifies = priceUp >= MIN_PRICE && priceUp <= MAX_SIGNAL_PRICE;
+          const downQualifies = priceDown >= MIN_PRICE && priceDown <= MAX_SIGNAL_PRICE;
           const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
           /** Pour 15m : fin de créneau depuis le slug (Gamma `endDate` souvent décalé). */
           const endDateForSignal =

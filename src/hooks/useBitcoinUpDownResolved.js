@@ -16,9 +16,9 @@ const CLOB_PRICES_HISTORY_URL = import.meta.env.DEV
 const DATA_API_TRADES_URL = import.meta.env.DEV ? '/apiData/trades' : 'https://data-api.polymarket.com/trades';
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 /** Détection sur séries CLOB (souvent mid/bid sous le best ask live). */
-const DETECT_MIN_P = 0.965;
-const SIM_ENTRY_MIN_P = 0.97;
-const SIM_ENTRY_MAX_P = 0.975;
+const DETECT_MIN_P = 0.955;
+const SIM_ENTRY_MIN_P = 0.96;
+const SIM_ENTRY_MAX_P = 0.98;
 
 /** Fenêtre par défaut (en heures). 72 = 3 jours. */
 const DEFAULT_WINDOW_HOURS = 72;
@@ -130,7 +130,7 @@ async function fetchPriceHistory(tokenId, endDateStr) {
     });
   try {
     // Marchés résolus : SANS interval, uniquement startTs + endTs + fidelity
-    /** 1 min en premier : pics courts 97¢ visibles (comme 15m). */
+    /** 1 min en premier : pics courts sur la fenêtre signal visibles (comme 15m). */
     const fidelityAttempts = [1, 60, 15, 5];
     for (const fidelity of fidelityAttempts) {
       const res = await axios.get(CLOB_PRICES_HISTORY_URL, {

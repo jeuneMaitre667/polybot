@@ -10,6 +10,7 @@ import {
   ORDER_BOOK_SIGNAL_MAX_P,
   ORDER_BOOK_SIGNAL_MIN_P,
 } from '@/lib/orderBookLiquidity.js';
+import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -30,6 +31,17 @@ function formatCountdownRemaining(sec) {
   const s = sec % 60;
   if (m >= 1) return `${m} min ${s}s`;
   return `${s} s`;
+}
+
+function formatTimeHmsMs(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${hh}:${mm}:${ss}.${ms}`;
 }
 
 function formatSecondsAgo(iso, nowMs) {
@@ -57,12 +69,19 @@ export function BotOverview() {
   const statusUrl15m = DEFAULT_BOT_STATUS_URL_15M;
   const { data } = useBotStatus(statusUrl);
   const { data: data15m } = useBotStatus(statusUrl15m);
-  const [latencyMode, setLatencyMode] = useState('1h');
+  /** Persisté (localStorage) ; 15m seulement si URL bot 15m configurée. */
+  const [latencyMode, setLatencyMode] = useState(() =>
+    readLatencyModeFromStorage(Boolean(DEFAULT_BOT_STATUS_URL_15M)),
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    writeLatencyModeToStorage(latencyMode);
+  }, [latencyMode]);
 
   const balance = data?.balanceUsd != null ? Number(data.balanceUsd) : null;
   const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
@@ -107,6 +126,8 @@ export function BotOverview() {
     liquidityBandDownUsd: miseMaxLiqBandDown,
     bestAskUpP: miseMaxBestAskUp,
     bestAskDownP: miseMaxBestAskDown,
+    bestAskLiveUpP: miseMaxBestAskLiveUp,
+    bestAskLiveDownP: miseMaxBestAskLiveDown,
     levelsBandUp: miseMaxLevelsBandUp,
     levelsBandDown: miseMaxLevelsBandDown,
     liquidityToWorstUpUsd: miseMaxLiqWorstUp,
@@ -132,6 +153,25 @@ export function BotOverview() {
   const signalMinPct = (ORDER_BOOK_SIGNAL_MIN_P * 100).toFixed(0);
   const signalMaxPct = (ORDER_BOOK_SIGNAL_MAX_P * 100).toFixed(1).replace(/\.0$/, '');
   const worstPct = (ORDER_BOOK_MARKET_WORST_P * 100).toFixed(0);
+  const miseMaxComparedOutcome =
+    miseMaxLiqBandUp == null || miseMaxLiqBandDown == null
+      ? null
+      : miseMaxLiqBandUp >= miseMaxLiqBandDown
+        ? 'Up'
+        : 'Down';
+  const miseMaxSnapshotAt = formatTimeHmsMs(miseMax15mLastAt);
+  const bestAskDeltaUp =
+    Number.isFinite(Number(miseMaxBestAskUp)) && Number.isFinite(Number(miseMaxBestAskLiveUp))
+      ? Math.abs(Number(miseMaxBestAskUp) - Number(miseMaxBestAskLiveUp))
+      : null;
+  const bestAskDeltaDown =
+    Number.isFinite(Number(miseMaxBestAskDown)) && Number.isFinite(Number(miseMaxBestAskLiveDown))
+      ? Math.abs(Number(miseMaxBestAskDown) - Number(miseMaxBestAskLiveDown))
+      : null;
+  // 0.15c de tolérance visuelle (0.0015 en probabilité).
+  const BEST_ASK_DELTA_OK_P = 0.0015;
+  const bestAskUpAligned = bestAskDeltaUp != null ? bestAskDeltaUp <= BEST_ASK_DELTA_OK_P : null;
+  const bestAskDownAligned = bestAskDeltaDown != null ? bestAskDeltaDown <= BEST_ASK_DELTA_OK_P : null;
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
@@ -610,6 +650,40 @@ export function BotOverview() {
                     <span className="mise-max-meta-label">Best ask (CLOB)</span>
                     <span className="mise-max-meta-value">
                       Up {formatAskCents(miseMaxBestAskUp)} · Down {formatAskCents(miseMaxBestAskDown)}
+                      <span
+                        className={`mise-max-mini-label ${
+                          bestAskUpAligned == null
+                            ? 'mise-max-mini-label--muted'
+                            : bestAskUpAligned
+                              ? 'mise-max-mini-label--ok'
+                              : 'mise-max-mini-label--warn'
+                        }`}
+                      >
+                        {bestAskUpAligned == null ? 'book vs live: n/a' : `Up ${bestAskUpAligned ? 'aligné' : 'écart'}`}
+                      </span>
+                      <span
+                        className={`mise-max-mini-label ${
+                          bestAskDownAligned == null
+                            ? 'mise-max-mini-label--muted'
+                            : bestAskDownAligned
+                              ? 'mise-max-mini-label--ok'
+                              : 'mise-max-mini-label--warn'
+                        }`}
+                      >
+                        {bestAskDownAligned == null ? 'book vs live: n/a' : `Down ${bestAskDownAligned ? 'aligné' : 'écart'}`}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Best ask live (/price SELL)</span>
+                    <span className="mise-max-meta-value">
+                      Up {formatAskCents(miseMaxBestAskLiveUp)} · Down {formatAskCents(miseMaxBestAskLiveDown)}
+                    </span>
+                  </div>
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Outcome comparé (mise max)</span>
+                    <span className="mise-max-meta-value">
+                      {miseMaxComparedOutcome ?? '—'}{miseMaxComparedOutcome ? ` (${signalMinPct}–${signalMaxPct}%)` : ''}
                     </span>
                   </div>
                   <div className="mise-max-meta-row">
@@ -681,7 +755,7 @@ export function BotOverview() {
                     <span className="mise-max-meta-label">Fraîcheur</span>
                     <span className="mise-max-meta-value">
                       {miseMaxBookAge != null
-                        ? `Carnet à jour il y a ${miseMaxBookAge}`
+                        ? `Snapshot ${miseMaxSnapshotAt ?? '—'} · il y a ${miseMaxBookAge}`
                         : 'En attente de première lecture…'}
                     </span>
                   </div>

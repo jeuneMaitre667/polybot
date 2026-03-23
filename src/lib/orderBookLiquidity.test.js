@@ -19,8 +19,8 @@ describe('liquidityUsdFromAsks', () => {
       { price: '0.975', size: '20' },
       { price: '0.98', size: '50' },
     ];
-    // 0.97*10 + 0.975*20 = 9.7 + 19.5 = 29.2
-    expect(liquidityUsdFromAsks(asks)).toBe(29.2);
+    // 0.96*100 + 0.97*10 + 0.975*20 + 0.98*50 = 96 + 9.7 + 19.5 + 49 = 174.2
+    expect(liquidityUsdFromAsks(asks)).toBe(174.2);
   });
 
   it('accepte tuples [price, size]', () => {
@@ -28,7 +28,7 @@ describe('liquidityUsdFromAsks', () => {
       [0.97, 100],
       [0.98, 200],
     ];
-    expect(liquidityUsdFromAsks(asks)).toBe(97);
+    expect(liquidityUsdFromAsks(asks)).toBe(97 + 196);
   });
 
   it('respecte min/max personnalisés', () => {
@@ -37,7 +37,7 @@ describe('liquidityUsdFromAsks', () => {
   });
 
   it('expose les constantes de bande signal', () => {
-    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.97);
-    expect(ORDER_BOOK_SIGNAL_MAX_P).toBe(0.975);
+    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.96);
+    expect(ORDER_BOOK_SIGNAL_MAX_P).toBe(0.98);
   });
 });

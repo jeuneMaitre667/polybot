@@ -46,19 +46,19 @@ function formatAxiosError(err) {
 }
 /**
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
- * Seuil détection plus bas que le prix d’entrée cible : détecter dès ≥ 96,5¢, reporter l’entrée à **≥ 97¢** (plafond 97,5¢).
+ * Seuil détection plus bas que la fenêtre d’entrée : détecter dès ≥ 95,5¢, reporter l’entrée dans **96–98¢**.
  */
-const DETECT_MIN_P = 0.965;
-/** Prix d’entrée simulé : plancher 97¢ (même si la série a franchi à 96,5¢). */
-const SIM_ENTRY_MIN_P = 0.97;
-const SIM_ENTRY_MAX_P = 0.975;
+const DETECT_MIN_P = 0.955;
+/** Prix d’entrée simulé : plancher 96¢ (aligné fenêtre signal bot / dashboard). */
+const SIM_ENTRY_MIN_P = 0.96;
+const SIM_ENTRY_MAX_P = 0.98;
 
 /** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
 function hasCrossedHighConviction(p) {
   return Number.isFinite(p) && p >= DETECT_MIN_P && p <= 1;
 }
 
-/** Prix d’entrée reporté : plancher 97¢, plafond 97,5¢. */
+/** Prix d’entrée reporté : plancher 96¢, plafond 98¢. */
 function clampEntryPrice(p) {
   if (!Number.isFinite(p) || p < SIM_ENTRY_MIN_P) return SIM_ENTRY_MIN_P;
   return Math.min(p, SIM_ENTRY_MAX_P);
@@ -197,12 +197,12 @@ const SLOT_15M_MARGIN_SEC = 30 * 60;
 /**
  * Fenêtre **après** la fin slug : `tradeHi` côté Data API **et** borne haute du filtre séries.
  * Doit être **identique** : sinon on fetch des trades jusqu’à +45 min puis on les jette au `filterSeriesTo15mSlot`
- * (pics ~97¢ souvent horodatés entre +15 et +45 min → `rowsMaxBinaryGeMinAfterSlotFilter: 0`).
+ * (pics haute conviction souvent horodatés entre +15 et +45 min → `rowsMaxBinaryGeMinAfterSlotFilter: 0`).
  */
 const SLOT_END_PADDING_SEC = 45 * 60;
 /**
  * Rejet des candidats d’entrée si `ts` dépasse **fin slug + cette marge** (doit matcher la borne haute des séries
- * / `tradeHi`, sinon les pics ~97¢ visibles dans l’historique sont tous exclus → 0 signal en tableau).
+ * / `tradeHi`, sinon les pics visibles dans l’historique sont tous exclus → 0 signal en tableau).
  */
 const SLOT_ENTRY_MAX_AFTER_END_SEC = SLOT_END_PADDING_SEC;
 /**
@@ -218,7 +218,7 @@ const SLOT_SERIES_HI_PADDING_SEC = SLOT_END_PADDING_SEC;
 
 /**
  * Historique CLOB `prices-history` — souvent **prix mid** (~50¢), pas le best ask ; utile comme contexte,
- * les **vrais** ~97¢ viennent surtout des trades Data API (`fetchDataApiTradePointsByToken`).
+ * les **vrais** prix d’exécution élevés viennent surtout des trades Data API (`fetchDataApiTradePointsByToken`).
  */
 async function fetchPriceHistory(tokenId, endDateStr) {
   const endMs = new Date(endDateStr).getTime();
@@ -238,7 +238,7 @@ async function fetchPriceHistory(tokenId, endDateStr) {
       return ts >= startTs && ts <= endTs;
     });
   try {
-    /** Inclure 1 min en premier : un pic 97¢ sur 1–2 min entre deux points fidelity=5 était invisible (~3 points / 15 min). */
+    /** Inclure 1 min en premier : un pic court sur 1–2 min entre deux points fidelity=5 était invisible (~3 points / 15 min). */
     const fidelityAttempts = [1, 5, 15, 60];
     for (const fidelity of fidelityAttempts) {
       const res = await axios.get(CLOB_PRICES_HISTORY_URL, {
@@ -1060,7 +1060,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               entryForbiddenSlotFirstSec: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
               entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
               label:
-                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–97,5¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
+                'Détection ≥96,5¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 96–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
             },
           };
         }

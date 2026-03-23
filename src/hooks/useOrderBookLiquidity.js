@@ -6,7 +6,7 @@ const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.poly
 
 /**
  * Récupère le carnet d'ordres pour un token et calcule la liquidité (en USD) disponible
- * dans la bande 97 % – 97,5 %. La moyenne sur 3 jours est collectée par le bot et exposée via l'API status.
+ * dans la bande signal (ex. 96 % – 98 %, `ORDER_BOOK_SIGNAL_*`). La moyenne sur 3 jours est collectée par le bot et exposée via l'API status.
  * @param {string | null} tokenId - token_id du côté à acheter (Up ou Down)
  * @returns {{ liquidityUsd: number | null, loading: boolean, error: string | null, refresh: () => void }}
  */

@@ -3,7 +3,7 @@
  *
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
- * 2. Boucle : récupérer les signaux Gamma (prix 96,8–97 %)
+ * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 96–98 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : tenter de redeem les tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains
@@ -177,16 +177,16 @@ const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Fenêtre de prix pour signaux et mise max : 97 % – 97,5 % (plus de signaux qu’à 96,8–97 %).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.97;
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.975;
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.975;
+// Fenêtre de prix pour signaux et mise max : 96 % – 98 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.96;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.98;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98;
 /**
- * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.98 = 98¢.
- * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal 97–97,5 %).
+ * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 96–98 %).
  */
 const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
-let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.98;
+let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.99;
 marketWorstPriceP = Math.min(0.99, Math.max(0.01, marketWorstPriceP));
 /**
  * Comportement à l’envoi (doc Polymarket CLOB) :
@@ -277,7 +277,7 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
-/** Si true : plafonner la taille d’ordre sur la liquidité 97–97,5c (désactivé par défaut ; avec FAK + worst price, inutile en général). */
+/** Si true : plafonner la taille d’ordre sur la liquidité MIN_P–MAX_PRICE_LIQUIDITY (désactivé par défaut ; avec FAK + worst price, inutile en général). */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP === 'true';
 /**
  * Si true (défaut), refuse l'ordre si le scénario « victoire » ne rapporte pas strictement plus USDC que la mise
@@ -882,8 +882,8 @@ function logLiquidityEmptyIfThrottled(tokenId, reason) {
   if (prev && prev.reason === reason && now - prev.ts < LIQUIDITY_LOG_THROTTLE_MS) return;
   liquidityLogThrottle.set(key, { reason, ts: now });
   const short = (typeof key === 'string' && key.length > 18) ? key.slice(0, 18) + '…' : key;
-  console.log(`[Mise max] Liquidité 97%: ${reason} (token ${short})`);
-  logJson('info', 'Liquidité 97% vide', { reason, tokenId: short });
+  console.log(`[Mise max] Liquidité signal (${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(0)}%): ${reason} (token ${short})`);
+  logJson('info', 'Liquidité fenêtre signal vide', { reason, tokenId: short });
 }
 
 // Eviter de spammer trade-latency-history.json quand le bot ne peut pas placer (ex: wallet=0).
@@ -973,7 +973,7 @@ async function buildClobClientCachedCreds() {
 /**
  * Récupère la "mise max" compatible avec un ordre market FOK :
  * montant max (USD) qu'on peut engager en USDC tout en s'assurant que l'exécution ne dépasse pas
- * le plafond de prix (97,5c) — en sommant la profondeur cumulée jusqu'au pire prix autorisé.
+ * le plafond MAX_PRICE_LIQUIDITY (défaut 98¢) — en sommant la profondeur cumulée jusqu’à ce prix.
  *
  * Objectif : maximiser la probabilité de remplissage total (moins de no-fill),
  * au prix d'une avg price potentiellement un peu plus dégradée si on consomme jusqu'au plafond.
@@ -1049,7 +1049,7 @@ async function getFilteredAskLevels(tokenId, profile = null) {
     }
 
     let totalUsd = 0;
-    // Somme cumulée : permet de caper la taille à la liquidité totale jusqu'au plafond 97,5%.
+    // Somme cumulée : caper la taille à la liquidité totale jusqu’au plafond MAX_PRICE_LIQUIDITY.
     for (const { p, s } of levels) totalUsd += p * s;
     const out = totalUsd > 0 ? totalUsd : null;
     bookCache.set(tokenId, { atMs: now, value: out, levels });
@@ -1446,11 +1446,11 @@ async function getActiveMarketTokensForWs() {
       const tokenIdDown = Array.isArray(ids) && ids[1] ? String(ids[1]) : (Array.isArray(tokens) && tokens[1]?.token_id ? String(tokens[1].token_id) : null);
       if (tokenIdUp) {
         tokenIds.push(tokenIdUp);
-        tokenToSignal.set(tokenIdUp, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Up', endDate, tokenIdToBuy: tokenIdUp, priceUp: 0.97, priceDown: 0.03 });
+        tokenToSignal.set(tokenIdUp, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Up', endDate, tokenIdToBuy: tokenIdUp, priceUp: MIN_P, priceDown: 1 - MIN_P });
       }
       if (tokenIdDown) {
         tokenIds.push(tokenIdDown);
-        tokenToSignal.set(tokenIdDown, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Down', endDate, tokenIdToBuy: tokenIdDown, priceUp: 0.03, priceDown: 0.97 });
+        tokenToSignal.set(tokenIdDown, { market: m, eventSlug: ev.slug ?? eventSlug, takeSide: 'Down', endDate, tokenIdToBuy: tokenIdDown, priceUp: 1 - MIN_P, priceDown: MIN_P });
       }
     }
   }
@@ -1843,7 +1843,7 @@ async function tryPlaceOrderForSignal(signal) {
   let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
   const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
   if (USE_WS_PRICE_ONLY) {
-    // Prix déjà sur le signal (reçu par WS, filtré 97–97,5 %). Pas d'appel REST → ~50–150 ms de gagné.
+    // Prix déjà sur le signal (reçu par WS, filtré [MIN_P, MAX_P]). Pas d'appel REST → ~50–150 ms de gagné.
     const tBestAsk0 = Date.now();
     const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
     if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
@@ -2348,7 +2348,9 @@ async function run() {
           });
           recordedLiquidityWindows.set(key, endMs);
         } else {
-          console.warn('Mise max non enregistrée: pas de profondeur au prix du marché (0.97–0.975) pour ce créneau (ou erreur API CLOB).');
+          console.warn(
+            `Mise max non enregistrée: pas de profondeur au prix du marché (${(MIN_P * 100).toFixed(0)}–${(MAX_P * 100).toFixed(0)}¢) pour ce créneau (ou erreur API CLOB).`,
+          );
         }
         if (decisionLogged < 3) {
           appendSignalDecisionLatencyHistory({
@@ -2569,7 +2571,9 @@ async function run() {
           console.log(`Mise plafonnée à ${amountUsd.toFixed(2)} $ (USE_LIQUIDITY_CAP, liquidité carnet)${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
         }
       } else if (useLiquidityCap && (liquidity === null || liquidity === 0)) {
-        console.warn('USE_LIQUIDITY_CAP: liquidité 97–97,5c indisponible pour ce créneau (book CLOB ou erreur API)');
+        console.warn(
+          `USE_LIQUIDITY_CAP: liquidité ${(MIN_P * 100).toFixed(0)}–${(MAX_P * 100).toFixed(0)}¢ indisponible pour ce créneau (book CLOB ou erreur API)`,
+        );
       }
     } else {
       timingsMs.book = 1;
@@ -2708,7 +2712,7 @@ async function main() {
       }
     }
     if (useWebSocket) console.log('WebSocket CLOB activé (best_bid_ask) — réaction en temps réel aux changements de prix.');
-    if (useLiquidityCap) console.log('USE_LIQUIDITY_CAP=true : taille d’ordre plafonnée par la liquidité 97–97,5c (legacy).');
+    if (useLiquidityCap) console.log(`USE_LIQUIDITY_CAP=true : taille d’ordre plafonnée par la liquidité ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(0)}¢ (legacy).`);
     if (useAvgPriceSizing) console.log('USE_AVG_PRICE_SIZING=true : taille limitée pour avg ≤ bestAsk + tol (legacy).');
     if (recordLiquidityHistory) console.log('RECORD_LIQUIDITY_HISTORY=true : écriture liquidity-history.json + relevés signal/créneaux.');
   } else {

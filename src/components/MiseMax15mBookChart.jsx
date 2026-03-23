@@ -9,6 +9,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '@/lib/orderBookLiquidity.js';
+
+const SIGNAL_BAND_PCT = `${Math.round(ORDER_BOOK_SIGNAL_MIN_P * 100)}–${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)} %`;
 
 /**
  * @param {{ series: Array<{ slotEndSec: number, miseMaxUsd: number }> }} props
@@ -43,7 +46,7 @@ export function MiseMax15mBookChart({ series }) {
   return (
     <div style={{ marginTop: 16, width: '100%', height: 220 }}>
       <p style={{ marginBottom: 8, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-3)', fontFamily: 'JetBrains Mono, monospace' }}>
-        Historique par créneau (fin UTC → mise max $ en 97–97,5 %)
+        Historique par créneau (fin UTC → mise max $ en {SIGNAL_BAND_PCT})
       </p>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 32 }}>

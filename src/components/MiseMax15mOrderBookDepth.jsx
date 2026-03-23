@@ -6,6 +6,9 @@ import {
   filterLevelsInPriceRange,
   normalizeAskLevels,
 } from '@/lib/orderBookDepth.js';
+import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '@/lib/orderBookLiquidity.js';
+
+const SIGNAL_BAND_PCT = `${Math.round(ORDER_BOOK_SIGNAL_MIN_P * 100)}–${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)} %`;
 
 function formatPrice(p) {
   return Number(p).toFixed(3);
@@ -152,7 +155,7 @@ export function MiseMax15mOrderBookDepth({ asksUp = [], asksDown = [], lastAt, l
     <div className="mise-max-depth pm-ob">
       <p className="mise-max-depth-title">Carnet d&apos;ordres — Bitcoin 15m (Up / Down)</p>
       <p className="pm-ob__subtitle">
-        Créneau <strong>en cours</strong> : asks dans la fenêtre prix (bot 97–97,5 %). Le bandeau indique le{' '}
+        Créneau <strong>en cours</strong> : asks dans la fenêtre prix (bot {SIGNAL_BAND_PCT}). Le bandeau indique le{' '}
         <strong>dernier créneau terminé</strong>.
       </p>
 
@@ -183,7 +186,7 @@ export function MiseMax15mOrderBookDepth({ asksUp = [], asksDown = [], lastAt, l
 
       {rowsUp.length === 0 && rowsDown.length === 0 && (
         <p className="mise-max-depth-empty pm-ob__both-empty-note">
-          Aucune ligne d&apos;ask dans la fenêtre affichée pour ce créneau (carnets vides ou hors plage 97–97,5 %).
+          Aucune ligne d&apos;ask dans la fenêtre affichée pour ce créneau (carnets vides ou hors plage {SIGNAL_BAND_PCT}).
         </p>
       )}
 

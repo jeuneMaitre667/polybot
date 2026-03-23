@@ -7,12 +7,16 @@ import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from
 import { useWallet } from '../context/useWallet';
 import { placePolymarketOrder } from '../lib/polymarketOrder';
 import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '../lib/orderBookLiquidity.js';
+
+const SIGNAL_BAND_PCT_LABEL = `${Math.round(ORDER_BOOK_SIGNAL_MIN_P * 100)}–${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)} %`;
+const SIGNAL_MAX_CENTS_LABEL = `${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)}¢`;
 import { build15mBacktestDisplayRows, SLOT_15M_SEC } from '../lib/bitcoin15mGridDisplay.js';
 import {
   formatBitcoin15mSlotRangeEt,
   formatTradeTimestampEt,
   formatTimestampUtcTooltip,
 } from '../lib/polymarketDisplayTime.js';
+import { readStratResultModeFromStorage, writeStratResultModeToStorage } from '../lib/dashboardUiPrefs.js';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -90,8 +94,13 @@ function signalBucketLabelFromPrice(priceP) {
 
 export function BitcoinUpDownStrategy() {
   const { address, signer, isPolygon } = useWallet();
-  const [resultMode, setResultMode] = useState('hourly'); // 'hourly' | '15m' — avant les signaux (mode fetch)
+  const [resultMode, setResultMode] = useState(() => readStratResultModeFromStorage());
   const { signals } = useBitcoinUpDownSignals(resultMode === '15m' ? '15m' : 'hourly');
+
+  useEffect(() => {
+    writeStratResultModeToStorage(resultMode);
+  }, [resultMode]);
+
   const currentSignalTokenId = signals?.[0]?.tokenIdToBuy ?? null;
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
@@ -246,7 +255,7 @@ export function BitcoinUpDownStrategy() {
   }, [resolvedHours, initialBalance, includeFees]);
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (≥ 97 %, plafond ~99,5 % sur timeseries CLOB ; bot réel ~97,5 %). */
+    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 96–98 %). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
@@ -342,7 +351,7 @@ export function BitcoinUpDownStrategy() {
       sizeUsd = options.capUsd;
     }
     const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
-    /** Plafond 97,5¢ comme le backtest / carnet « signal », même si le best ask affiche 98–99¢. */
+    /** Plafond signal (ex. 98¢) comme le backtest / carnet, même si le best ask live dépasse. */
     const n = Number(raw);
     const price = Number.isFinite(n)
       ? Math.min(Math.max(n, ORDER_BOOK_SIGNAL_MIN_P), ORDER_BOOK_SIGNAL_MAX_P)
@@ -375,7 +384,7 @@ export function BitcoinUpDownStrategy() {
     setPlacingFor(null);
   };
 
-  // Le bot place l'ordre à ta place dès qu'un signal 97–97,5 % apparaît
+  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 96–98 %) apparaît
   useEffect(() => {
     if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
     const toPlace = signals.filter(
@@ -416,7 +425,7 @@ export function BitcoinUpDownStrategy() {
           <div className="strat-hero-grid">
             <div className="strat-hero-left">
               <h2 className="strat-hero-title">Bitcoin Up or Down</h2>
-              <p className="strat-hero-sub">Signal 97–97,5 % · Horaires &amp; 15 min · FOK</p>
+              <p className="strat-hero-sub">Signal {SIGNAL_BAND_PCT_LABEL} · Horaires &amp; 15 min · FOK</p>
               <div className="strat-hero-links">
                 <a
                   href={`https://polymarket.com/event/${getCurrentBitcoinUpDownEventSlug()}`}
@@ -464,7 +473,7 @@ export function BitcoinUpDownStrategy() {
                   <span className="strat-rule-chevron" aria-hidden>
                     &gt;
                   </span>
-                  Signaux 97–97,5 % visent ≥ 4 % de gain par trade (achat à 95¢, gain 5¢)
+                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 98¢ (ex. achat 96¢ → gain 4¢ si résolu 1 $)
                 </li>
               </ul>
               <div className="strat-reason-bars">
@@ -533,7 +542,7 @@ export function BitcoinUpDownStrategy() {
                   </button>
                 </div>
                 <p className="strat-autoplace-panel__hint">
-                  <strong>ON</strong> = un ordre part tout seul dès qu’un signal 97–97,5 % apparaît (
+                  <strong>ON</strong> = un ordre part tout seul dès qu’un signal {SIGNAL_BAND_PCT_LABEL} apparaît (
                   {resultMode === '15m' ? '15 min' : 'horaire'}
                   ). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
                   l’auto.
@@ -634,7 +643,7 @@ export function BitcoinUpDownStrategy() {
                   type="button"
                   onClick={toggleShowLiquiditySuggestion}
                   className={`btn btn--xs ${showLiquiditySuggestion ? 'btn--toggle-on' : 'btn--toggle-off'}`}
-                  title="Afficher le panneau liquidité 97–97,5 % sous la stratégie"
+                  title={`Afficher le panneau liquidité ${SIGNAL_BAND_PCT_LABEL} sous la stratégie`}
                 >
                   Liquidité {showLiquiditySuggestion ? 'ON' : 'OFF'}
                 </button>
@@ -646,10 +655,10 @@ export function BitcoinUpDownStrategy() {
             <div className="strat-data-window strat-data-window--nested">
               <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                 <span style={{ width: 2, height: 16, borderRadius: 999, background: 'rgba(0,255,136,0.6)' }} aria-hidden />
-                Taille max suggérée (FOK ≤ 97,5c)
+                Taille max suggérée (FOK ≤ {SIGNAL_MAX_CENTS_LABEL})
               </h3>
               <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8, lineHeight: 1.5 }}>
-                Liquidité disponible à 97–97,5 % sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour ne pas dépasser 97,5c.
+                Liquidité disponible à {SIGNAL_BAND_PCT_LABEL} sur le créneau actuel. La mise est <strong>plafonnée automatiquement</strong> à ce montant (dashboard et bot) pour ne pas dépasser {SIGNAL_MAX_CENTS_LABEL}.
               </p>
               {liquidityLoading ? (
                 <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Chargement du carnet…</span>
@@ -699,7 +708,7 @@ export function BitcoinUpDownStrategy() {
                   )}
                 </div>
               ) : currentSignalTokenId ? (
-                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Aucune liquidité à 97–97,5 % pour l’instant.</span>
+                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Aucune liquidité à {SIGNAL_BAND_PCT_LABEL} pour l’instant.</span>
               ) : null}
             </div>
           )}
@@ -735,7 +744,7 @@ export function BitcoinUpDownStrategy() {
             </div>
           </div>
           <p className="strat-results-desc">
-            Simulation alignée sur le bot (97–97,5 %, marché){' '}
+            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché){' '}
             {resultMode === 'hourly'
               ? '— pas d’entrée dans les 5 dernières minutes du créneau.'
               : '— 15 min : pas d’entrée les 3 premières minutes UTC de chaque quart d’heure ni les 4 dernières avant la fin (aligné exécution prudente).'}{' '}
@@ -763,7 +772,7 @@ export function BitcoinUpDownStrategy() {
                       <span className="strat-block-msg strat-text-green">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
                     )}
                     <span className="strat-muted-tight">
-                      Même règles que le bot : prix dans 97–97,5 % et pas d&apos;entrée dans les 5 dernières minutes du créneau. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
+                      Même règles que le bot : prix dans {SIGNAL_BAND_PCT_LABEL} et pas d&apos;entrée dans les 5 dernières minutes du créneau. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
                     </span>
                   </p>
                 </div>
@@ -839,7 +848,7 @@ export function BitcoinUpDownStrategy() {
                     return (
                       <p className="strat-results-foot">
                         Simulation : <strong className="strat-text-green">{won}</strong> gagnés /{' '}
-                        <strong>{withSimul.length}</strong> créneaux avec signal 97–97,5 % · Données historiques CLOB.
+                        <strong>{withSimul.length}</strong> créneaux avec signal {SIGNAL_BAND_PCT_LABEL} · Données historiques CLOB.
                       </p>
                     );
                   }
@@ -910,7 +919,7 @@ export function BitcoinUpDownStrategy() {
                       </span>
                     )}
                     <span className="strat-muted-tight">
-                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Conviction ≥ 97 % jusqu’à 1,00, complément <strong>1 − p</strong>. Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
+                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
                     </span>
                   </p>
                   <label className="strat-15m-debug-toggle">
@@ -1036,7 +1045,7 @@ export function BitcoinUpDownStrategy() {
                       <p className="strat-results-foot">
                         Simulation : <strong className="strat-text-green">{backtestResult15m.won}</strong> gagnés /{' '}
                         <strong>{backtestResult15m.withSimul.length}</strong> créneaux résolus avec entrée ·{' '}
-                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) ≥ 97 % (simu CLOB + trades + complément 1−p).
+                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) dans {SIGNAL_BAND_PCT_LABEL} (simu CLOB + trades + complément 1−p).
                       </p>
                     )}
                     <div className="strat-actions-row">
