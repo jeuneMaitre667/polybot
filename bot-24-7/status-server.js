@@ -174,10 +174,22 @@ function getHealth() {
     wsConnected: !!o.wsConnected,
     wsLastChangeAt: o.wsLastChangeAt ?? null,
     wsLastConnectedAt: o.wsLastConnectedAt ?? null,
+    wsLastBidAskAt: o.wsLastBidAskAt ?? null,
     lastOrderAt: o.lastOrderAt ?? null,
     lastOrderSource: o.lastOrderSource ?? null,
     geoblockOk: o.geoblockOk,
     killSwitchActive: !!o.killSwitchActive,
+    polymarketDegraded: !!o.polymarketDegraded,
+    degradedReason: o.degradedReason ?? null,
+    degradedUntil: o.degradedUntil ?? null,
+    staleWsData: !!o.staleWsData,
+    staleWsDataAt: o.staleWsDataAt ?? null,
+    executionDelayed: !!o.executionDelayed,
+    executionDelayedAt: o.executionDelayedAt ?? null,
+    lastSkipReason: o.lastSkipReason ?? null,
+    lastSkipSource: o.lastSkipSource ?? null,
+    lastSkipAt: o.lastSkipAt ?? null,
+    lastSkipDetails: o.lastSkipDetails ?? null,
     at: o.at ?? null,
   };
 }
@@ -375,7 +387,14 @@ function getTradeLatencyStats24h() {
     const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr) || arr.length === 0) {
-      return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, preSignCacheHits: 0, preSignCacheTotal: 0, preSignCacheHitRate: null };
+      return {
+        all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+        poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+        preSignCacheHits: 0,
+        preSignCacheTotal: 0,
+        preSignCacheHitRate: null,
+      };
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
@@ -387,13 +406,30 @@ function getTradeLatencyStats24h() {
     const poll = [];
     let preSignCacheHits = 0;
     let preSignCacheTotal = 0;
+    let lastWsAtMs = null;
+    let lastWsLatencyMs = null;
+    let lastPollAtMs = null;
+    let lastPollLatencyMs = null;
     for (const e of filtered) {
       const n = Number(e?.latencyMs);
       if (!Number.isFinite(n) || n <= 0) continue;
       all.push(n);
       const src = String(e?.source || '').toLowerCase();
-      if (src === 'ws') ws.push(n);
-      if (src === 'poll') poll.push(n);
+      const atMs = e?.at ? new Date(e.at).getTime() : null;
+      if (src === 'ws') {
+        ws.push(n);
+        if (Number.isFinite(atMs) && (lastWsAtMs == null || atMs > lastWsAtMs)) {
+          lastWsAtMs = atMs;
+          lastWsLatencyMs = n;
+        }
+      }
+      if (src === 'poll') {
+        poll.push(n);
+        if (Number.isFinite(atMs) && (lastPollAtMs == null || atMs > lastPollAtMs)) {
+          lastPollAtMs = atMs;
+          lastPollLatencyMs = n;
+        }
+      }
       if (e && typeof e.preSignCacheHit === 'boolean') {
         preSignCacheTotal += 1;
         if (e.preSignCacheHit) preSignCacheHits += 1;
@@ -401,14 +437,29 @@ function getTradeLatencyStats24h() {
     }
     return {
       all: summarizeLatency(all, lastAt),
-      ws: summarizeLatency(ws, lastAt),
-      poll: summarizeLatency(poll, lastAt),
+      ws: {
+        ...summarizeLatency(ws, lastAt),
+        lastLatencyMs: lastWsLatencyMs,
+        lastLatencyAt: lastWsAtMs != null ? new Date(lastWsAtMs).toISOString() : null,
+      },
+      poll: {
+        ...summarizeLatency(poll, lastAt),
+        lastLatencyMs: lastPollLatencyMs,
+        lastLatencyAt: lastPollAtMs != null ? new Date(lastPollAtMs).toISOString() : null,
+      },
       preSignCacheHits,
       preSignCacheTotal,
       preSignCacheHitRate: preSignCacheTotal > 0 ? Math.round((100 * preSignCacheHits) / preSignCacheTotal) : null,
     };
   } catch {
-    return { all: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, preSignCacheHits: 0, preSignCacheTotal: 0, preSignCacheHitRate: null };
+    return {
+      all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+      poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+      preSignCacheHits: 0,
+      preSignCacheTotal: 0,
+      preSignCacheHitRate: null,
+    };
   }
 }
 
@@ -573,6 +624,7 @@ function getHealthAlerts(health, config) {
   const alerts = [];
   const now = Date.now();
   const wsAlertAfterSec = Number(process.env.WS_ALERT_AFTER_SEC) || 120;
+  const staleWsAfterSec = Number(process.env.WS_STALE_ALERT_AFTER_SEC) || 8;
   if (config?.useWebSocket && health) {
     const lastChangeMs = health.wsLastChangeAt ? new Date(health.wsLastChangeAt).getTime() : null;
     if (health.wsConnected === false && lastChangeMs && Number.isFinite(lastChangeMs)) {
@@ -581,12 +633,33 @@ function getHealthAlerts(health, config) {
         alerts.push({ kind: 'ws_disconnected', severity: 'warn', disconnectedForSec, thresholdSec: wsAlertAfterSec });
       }
     }
+    const lastBidAskMs = health.wsLastBidAskAt ? new Date(health.wsLastBidAskAt).getTime() : null;
+    if (health.wsConnected === true && lastBidAskMs && Number.isFinite(lastBidAskMs)) {
+      const staleForSec = Math.max(0, Math.floor((now - lastBidAskMs) / 1000));
+      if (staleForSec >= staleWsAfterSec) {
+        alerts.push({ kind: 'stale_ws_data', severity: 'warn', staleForSec, thresholdSec: staleWsAfterSec });
+      }
+    }
   }
   if (health?.killSwitchActive) {
     alerts.push({ kind: 'kill_switch', severity: 'error' });
   }
   if (health?.geoblockOk === false) {
     alerts.push({ kind: 'geoblock', severity: 'error' });
+  }
+  if (health?.polymarketDegraded) {
+    alerts.push({
+      kind: 'polymarket_degraded',
+      severity: 'error',
+      reason: health?.degradedReason ?? null,
+      until: health?.degradedUntil ?? null,
+    });
+  }
+  if (health?.staleWsData) {
+    alerts.push({ kind: 'stale_ws_data', severity: 'warn', at: health?.staleWsDataAt ?? null });
+  }
+  if (health?.executionDelayed) {
+    alerts.push({ kind: 'execution_delayed', severity: 'warn', at: health?.executionDelayedAt ?? null });
   }
   return alerts;
 }

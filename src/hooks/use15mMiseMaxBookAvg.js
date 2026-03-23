@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import {
+  countAskLevelsInBand,
+  getBestAskPriceFromRawAsks,
   liquidityUsdFromAsks,
+  ORDER_BOOK_MARKET_WORST_P,
   ORDER_BOOK_SIGNAL_MAX_P,
   ORDER_BOOK_SIGNAL_MIN_P,
 } from '@/lib/orderBookLiquidity.js';
@@ -75,6 +78,22 @@ async function fetchTokenIdsForSlotEnd(endSec) {
 function slotEndSecIsStillOpen(endSec) {
   if (endSec == null || !Number.isFinite(endSec)) return false;
   return Math.floor(Date.now() / 1000) < endSec;
+}
+
+function computeSlotBookMetrics(asksUp, asksDown) {
+  const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+  const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+  return {
+    liquidityBandUpUsd: liqUp,
+    liquidityBandDownUsd: liqDown,
+    miseMaxUsd: Math.max(liqUp, liqDown),
+    bestAskUpP: getBestAskPriceFromRawAsks(asksUp),
+    bestAskDownP: getBestAskPriceFromRawAsks(asksDown),
+    levelsBandUp: countAskLevelsInBand(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
+    levelsBandDown: countAskLevelsInBand(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
+    liquidityToWorstUpUsd: liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_MARKET_WORST_P),
+    liquidityToWorstDownUsd: liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_MARKET_WORST_P),
+  };
 }
 
 async function fetchAsks(tokenId, slotEndSecForBook = null) {
@@ -177,6 +196,18 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastAt, setLastAt] = useState(null);
+  /** Fin du créneau 15m courant (slug UTC), pour horloge / état marché. */
+  const [currentSlotEndSec, setCurrentSlotEndSec] = useState(null);
+  /** true tant que now < currentSlotEndSec (CLOB encore « actif » pour ce créneau). */
+  const [slotMarketOpen, setSlotMarketOpen] = useState(false);
+  const [liquidityBandUpUsd, setLiquidityBandUpUsd] = useState(null);
+  const [liquidityBandDownUsd, setLiquidityBandDownUsd] = useState(null);
+  const [bestAskUpP, setBestAskUpP] = useState(null);
+  const [bestAskDownP, setBestAskDownP] = useState(null);
+  const [levelsBandUp, setLevelsBandUp] = useState(0);
+  const [levelsBandDown, setLevelsBandDown] = useState(0);
+  const [liquidityToWorstUpUsd, setLiquidityToWorstUpUsd] = useState(null);
+  const [liquidityToWorstDownUsd, setLiquidityToWorstDownUsd] = useState(null);
   /** Dernier créneau résolu : { winner: 'Up'|'Down'|null, slotEndSec, label } */
   const [lastResolved15mSlot, setLastResolved15mSlot] = useState(null);
   const mounted = useRef(true);
@@ -210,17 +241,42 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         });
       }
       if (!mounted.current) return;
-      if (!tokenIdUp && !tokenIdDown) return;
-      const [asksUp, asksDown] = await Promise.all([fetchAsks(tokenIdUp), fetchAsks(tokenIdDown)]);
+      setCurrentSlotEndSec(end0);
+      setSlotMarketOpen(slotEndSecIsStillOpen(end0));
+      if (!tokenIdUp && !tokenIdDown) {
+        setCurrentSlotMiseMaxUsd(null);
+        setCurrentSlotBookAsks([]);
+        setCurrentSlotBookAsksUp([]);
+        setCurrentSlotBookAsksDown([]);
+        setLiquidityBandUpUsd(0);
+        setLiquidityBandDownUsd(0);
+        setBestAskUpP(null);
+        setBestAskDownP(null);
+        setLevelsBandUp(0);
+        setLevelsBandDown(0);
+        setLiquidityToWorstUpUsd(0);
+        setLiquidityToWorstDownUsd(0);
+        return;
+      }
+      const [asksUp, asksDown] = await Promise.all([
+        fetchAsks(tokenIdUp, end0),
+        fetchAsks(tokenIdDown, end0),
+      ]);
       if (!mounted.current) return;
-      const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
-      const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
-      const mise = Math.max(liqUp, liqDown);
-      const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
-      setCurrentSlotMiseMaxUsd(mise);
+      const m = computeSlotBookMetrics(asksUp, asksDown);
+      const dominantAsks = m.liquidityBandUpUsd >= m.liquidityBandDownUsd ? asksUp : asksDown;
+      setCurrentSlotMiseMaxUsd(m.miseMaxUsd);
       setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
       setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
       setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+      setLiquidityBandUpUsd(m.liquidityBandUpUsd);
+      setLiquidityBandDownUsd(m.liquidityBandDownUsd);
+      setBestAskUpP(m.bestAskUpP);
+      setBestAskDownP(m.bestAskDownP);
+      setLevelsBandUp(m.levelsBandUp);
+      setLevelsBandDown(m.levelsBandDown);
+      setLiquidityToWorstUpUsd(m.liquidityToWorstUpUsd);
+      setLiquidityToWorstDownUsd(m.liquidityToWorstDownUsd);
       setLastAt(new Date().toISOString());
     } catch {
       /* conserver le dernier affichage */
@@ -251,6 +307,16 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setCurrentSlotBookAsksUp([]);
       setCurrentSlotBookAsksDown([]);
       setLastResolved15mSlot(null);
+      setCurrentSlotEndSec(null);
+      setSlotMarketOpen(false);
+      setLiquidityBandUpUsd(null);
+      setLiquidityBandDownUsd(null);
+      setBestAskUpP(null);
+      setBestAskDownP(null);
+      setLevelsBandUp(0);
+      setLevelsBandDown(0);
+      setLiquidityToWorstUpUsd(null);
+      setLiquidityToWorstDownUsd(null);
       setError(null);
       return;
     }
@@ -301,6 +367,17 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
           setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
           setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+          const mm = computeSlotBookMetrics(asksUp, asksDown);
+          setCurrentSlotEndSec(endSec);
+          setSlotMarketOpen(slotEndSecIsStillOpen(endSec));
+          setLiquidityBandUpUsd(mm.liquidityBandUpUsd);
+          setLiquidityBandDownUsd(mm.liquidityBandDownUsd);
+          setBestAskUpP(mm.bestAskUpP);
+          setBestAskDownP(mm.bestAskDownP);
+          setLevelsBandUp(mm.levelsBandUp);
+          setLevelsBandDown(mm.levelsBandDown);
+          setLiquidityToWorstUpUsd(mm.liquidityToWorstUpUsd);
+          setLiquidityToWorstDownUsd(mm.liquidityToWorstDownUsd);
         }
         if (staggerMs > 0 && i < slotEnds.length - 1) await new Promise((r) => setTimeout(r, staggerMs));
       }
@@ -368,5 +445,15 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     lastAt,
     lastResolved15mSlot,
     refresh,
+    currentSlotEndSec,
+    slotMarketOpen,
+    liquidityBandUpUsd,
+    liquidityBandDownUsd,
+    bestAskUpP,
+    bestAskDownP,
+    levelsBandUp,
+    levelsBandDown,
+    liquidityToWorstUpUsd,
+    liquidityToWorstDownUsd,
   };
 }

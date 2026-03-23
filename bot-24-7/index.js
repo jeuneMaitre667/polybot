@@ -118,10 +118,18 @@ function writeHealth(updates) {
       wsConnected: false,
       wsLastChangeAt: null,
       wsLastConnectedAt: null,
+      wsLastBidAskAt: null,
       lastOrderAt: null,
       lastOrderSource: null,
       geoblockOk: null,
       killSwitchActive: false,
+      polymarketDegraded: false,
+      degradedReason: null,
+      degradedUntil: null,
+      staleWsData: false,
+      staleWsDataAt: null,
+      executionDelayed: false,
+      executionDelayedAt: null,
       at: null,
     };
     try {
@@ -296,6 +304,18 @@ const avgPriceBinIters = Number(process.env.AVG_PRICE_BIN_ITERS) || 25;
 const needLiquidityBook = recordLiquidityHistory || useLiquidityCap || useAvgPriceSizing;
 /** Réagir en temps réel aux changements de prix via WebSocket CLOB (best_bid_ask). USE_WEBSOCKET=false pour ne faire que du polling. */
 const useWebSocket = process.env.USE_WEBSOCKET !== 'false';
+/** Garde-fous incidents Polymarket (retards prix/exécution/balance). */
+const incidentDegradedModeEnabled = process.env.INCIDENT_DEGRADED_MODE !== 'false';
+const incidentBehavior = (process.env.INCIDENT_DEGRADED_BEHAVIOR || 'pause').trim().toLowerCase() === 'reduced' ? 'reduced' : 'pause';
+const incidentErrorThreshold = Math.max(1, Number(process.env.INCIDENT_ERROR_THRESHOLD) || 4);
+const incidentErrorWindowMs = Math.max(5000, Number(process.env.INCIDENT_ERROR_WINDOW_MS) || 45_000);
+const incidentDurationMs = Math.max(5000, Number(process.env.INCIDENT_DURATION_MS) || 120_000);
+const degradedSizeFactor = Math.min(1, Math.max(0.05, Number(process.env.DEGRADED_SIZE_FACTOR) || 0.25));
+const wsFreshnessMaxMs = Math.max(500, Number(process.env.WS_FRESHNESS_MAX_MS) || 3000);
+const wsPriceMismatchMaxP = Math.max(0.0001, Number(process.env.WS_PRICE_MISMATCH_MAX_P) || 0.0015); // 0.15c
+const executionErrorCooldownMinMs = Math.max(1000, Number(process.env.EXECUTION_ERROR_COOLDOWN_MIN_MS) || 15_000);
+const executionErrorCooldownMaxMs = Math.max(executionErrorCooldownMinMs, Number(process.env.EXECUTION_ERROR_COOLDOWN_MAX_MS) || 60_000);
+const executionDelayAlertMs = Math.max(1000, Number(process.env.EXECUTION_DELAY_ALERT_MS) || 5000);
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
@@ -352,9 +372,110 @@ const ORDER_RETRY_ATTEMPTS = 3;
 const ORDER_RETRY_BASE_MS = 1000;
 let consecutiveOrderErrors = 0;
 let killSwitchActive = false;
+let degradedModeUntilMs = 0;
+let degradedModeReason = null;
+const incidentErrorTimes = [];
+const executionCooldownByCondition = new Map(); // conditionId/eventSlug -> nextAllowedAtMs
+let wsLastBidAskAtMs = 0;
+const lastSkipReasonThrottle = new Map(); // reason|source -> ts
+
+function recordSkipReason(reason, source = 'unknown', details = {}) {
+  const r = String(reason || 'unknown_skip');
+  const s = String(source || 'unknown');
+  const now = Date.now();
+  const key = `${r}|${s}`;
+  const prev = lastSkipReasonThrottle.get(key);
+  if (prev && now - prev < 2000) return;
+  lastSkipReasonThrottle.set(key, now);
+  const safeDetails = {};
+  if (details && typeof details === 'object') {
+    if (details.conditionId) safeDetails.conditionId = String(details.conditionId).slice(0, 120);
+    if (details.tokenId) safeDetails.tokenId = String(details.tokenId).slice(0, 120);
+    if (Number.isFinite(Number(details.remainingMs))) safeDetails.remainingMs = Math.round(Number(details.remainingMs));
+  }
+  writeHealth({
+    lastSkipReason: r,
+    lastSkipSource: s,
+    lastSkipAt: new Date(now).toISOString(),
+    lastSkipDetails: Object.keys(safeDetails).length ? safeDetails : null,
+  });
+}
 
 function getSignalKey(signal) {
   return signal.market?.conditionId ?? signal.eventSlug ?? '';
+}
+
+function isRetryableExecutionError(errLike) {
+  const msg = String(errLike?.message || errLike || '').toLowerCase();
+  const status = Number(errLike?.response?.status);
+  if (status === 425 || status === 429 || status >= 500) return true;
+  return /timeout|network|econn|socket|temporar|gateway|service unavailable|internal server error/.test(msg);
+}
+
+function computeExecutionCooldownMs(errLike) {
+  const msg = String(errLike?.message || errLike || '').toLowerCase();
+  const status = Number(errLike?.response?.status);
+  if (status === 425) return executionErrorCooldownMaxMs;
+  if (status === 429) return Math.min(executionErrorCooldownMaxMs, Math.max(executionErrorCooldownMinMs, 30_000));
+  if (/timeout|econn|network|gateway|service unavailable|internal server error/.test(msg)) {
+    return executionErrorCooldownMaxMs;
+  }
+  return executionErrorCooldownMinMs;
+}
+
+function setExecutionCooldown(conditionKey, errLike) {
+  if (!conditionKey) return;
+  const now = Date.now();
+  const cooldownMs = computeExecutionCooldownMs(errLike);
+  const untilMs = now + cooldownMs;
+  executionCooldownByCondition.set(conditionKey, untilMs);
+  logJson('warn', 'Cooldown exécution activé', { conditionId: conditionKey, cooldownMs, until: new Date(untilMs).toISOString() });
+}
+
+function getExecutionCooldownRemainingMs(conditionKey) {
+  if (!conditionKey) return 0;
+  const untilMs = executionCooldownByCondition.get(conditionKey);
+  if (!Number.isFinite(untilMs)) return 0;
+  const remaining = untilMs - Date.now();
+  if (remaining <= 0) {
+    executionCooldownByCondition.delete(conditionKey);
+    return 0;
+  }
+  return remaining;
+}
+
+function setPolymarketDegraded(reason, durationMs = incidentDurationMs) {
+  if (!incidentDegradedModeEnabled) return;
+  const untilMs = Date.now() + Math.max(1000, durationMs);
+  degradedModeUntilMs = Math.max(degradedModeUntilMs, untilMs);
+  degradedModeReason = String(reason || 'incident');
+  writeHealth({
+    polymarketDegraded: true,
+    degradedReason: degradedModeReason,
+    degradedUntil: new Date(degradedModeUntilMs).toISOString(),
+  });
+}
+
+function clearPolymarketDegradedIfExpired() {
+  if (!degradedModeUntilMs) return;
+  if (Date.now() < degradedModeUntilMs) return;
+  degradedModeUntilMs = 0;
+  degradedModeReason = null;
+  writeHealth({ polymarketDegraded: false, degradedReason: null, degradedUntil: null });
+}
+
+function inPolymarketDegradedMode() {
+  clearPolymarketDegradedIfExpired();
+  return degradedModeUntilMs > Date.now();
+}
+
+function notePolymarketIncidentError(source, errLike) {
+  const now = Date.now();
+  incidentErrorTimes.push(now);
+  while (incidentErrorTimes.length && now - incidentErrorTimes[0] > incidentErrorWindowMs) incidentErrorTimes.shift();
+  if (incidentErrorTimes.length >= incidentErrorThreshold) {
+    setPolymarketDegraded(`${source}_errors_spike`, incidentDurationMs);
+  }
 }
 
 /** Clé de cache pour un ordre pré-signé (même signal + même montant). */
@@ -871,6 +992,7 @@ async function getFilteredAskLevels(tokenId, profile = null) {
     }
     return { levels, totalUsd: out };
   } catch (err) {
+    notePolymarketIncidentError('clob_book', err);
     logLiquidityEmptyIfThrottled(tokenId, `erreur API carnet: ${err?.message || err}`);
     bookCache.set(tokenId, { atMs: now, value: null, levels: [] });
     if (profile && typeof profile === 'object') {
@@ -955,7 +1077,8 @@ async function getBestAsk(tokenId) {
     const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'SELL' }, timeout: 3000 });
     const p = parseFloat(data?.price);
     return Number.isFinite(p) ? p : null;
-  } catch (_) {
+  } catch (err) {
+    notePolymarketIncidentError('clob_price', err);
     return null;
   }
 }
@@ -1407,7 +1530,8 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   }
 
   let lastError;
-  for (let attempt = 0; attempt < ORDER_RETRY_ATTEMPTS; attempt++) {
+  const maxAttempts = Math.max(1, Math.min(ORDER_RETRY_ATTEMPTS, Number(options?.maxAttempts) || ORDER_RETRY_ATTEMPTS));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       let client = clientOrNull;
       if (!client) {
@@ -1468,10 +1592,13 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       const is429 = status === 429 || String(err.message || status).includes('429');
       const is425 = status === 425; // Matching engine restart (mardi 7h ET, ~90s) — doc Polymarket
       const isRetryable = is429 || is425 || /timeout|network|ECONNRESET/i.test(String(err.message));
+      if (isRetryable || (Number.isFinite(Number(status)) && Number(status) >= 500)) {
+        notePolymarketIncidentError('place_order', err);
+      }
       if (is425) console.warn('CLOB: moteur de matching en redémarrage (425), retry…');
-      if (isRetryable && attempt < ORDER_RETRY_ATTEMPTS - 1) {
+      if (isRetryable && attempt < maxAttempts - 1) {
         const delay = ORDER_RETRY_BASE_MS * Math.pow(2, attempt);
-        console.warn(`Tentative ${attempt + 1}/${ORDER_RETRY_ATTEMPTS} échouée, retry dans ${delay}ms…`);
+        console.warn(`Tentative ${attempt + 1}/${maxAttempts} échouée, retry dans ${delay}ms…`);
         await new Promise((r) => setTimeout(r, delay));
       } else {
         break;
@@ -1502,7 +1629,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
  * Si la réponse du 1er POST ne donne pas filledUsdc, pas de complément (évite un double plein stake).
  */
 async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientOrNull = null, options = {}) {
-  if (!partialFillRetryEnabled) {
+  if (!partialFillRetryEnabled || options?.forceSingleAttempt) {
     return placeOrder(signal, amountUsd, clientOrNull, options);
   }
 
@@ -1609,28 +1736,72 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 /** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
 async function tryPlaceOrderForSignal(signal) {
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive || !signal?.tokenIdToBuy) return;
+  const key = getSignalKey(signal);
+  const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
+  if (cooldownRemainingMs > 0) {
+    recordSkipReason('cooldown_active', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+    return;
+  }
+  if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+    recordSkipReason('degraded_mode', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    return;
+  }
   const t0 = Date.now();
   const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
-  const key = getSignalKey(signal);
-  if (placedKeys.has(key)) return;
-  if (shouldSkipTradeTiming(signal)) return;
+  if (placedKeys.has(key)) {
+    recordSkipReason('already_placed_for_slot', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    return;
+  }
+  if (shouldSkipTradeTiming(signal)) {
+    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    return;
+  }
   let signalWithPrice = signal;
   let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
+  const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
   if (USE_WS_PRICE_ONLY) {
     // Prix déjà sur le signal (reçu par WS, filtré 97–97,5 %). Pas d'appel REST → ~50–150 ms de gagné.
     const tBestAsk0 = Date.now();
     const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
     if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
+      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
       logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
       return;
     }
     bestAskLive = wsBestAsk;
     timingsMs.bestAsk = Math.max(1, Date.now() - tBestAsk0);
+    const wsAgeMs = wsEventAtMs > 0 ? Math.max(0, Date.now() - wsEventAtMs) : (wsLastBidAskAtMs > 0 ? Math.max(0, Date.now() - wsLastBidAskAtMs) : null);
+    if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
+      const restAsk = await getBestAsk(signal.tokenIdToBuy);
+      if (restAsk == null || restAsk < MIN_P || restAsk > MAX_P) {
+        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
+        setPolymarketDegraded('stale_ws_data', incidentDurationMs);
+        logJson('warn', 'WS stale: revalidation REST indisponible/hors fenêtre, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk });
+        return;
+      }
+      const mismatch = Math.abs(restAsk - wsBestAsk);
+      if (mismatch > wsPriceMismatchMaxP) {
+        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
+        setPolymarketDegraded('ws_rest_price_mismatch', incidentDurationMs);
+        logJson('warn', 'WS stale: mismatch WS/REST, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk, restAsk, mismatch });
+        return;
+      }
+      writeHealth({ staleWsData: false });
+      bestAskLive = restAsk;
+      signalWithPrice = {
+        ...signal,
+        priceUp: signal.takeSide === 'Up' ? restAsk : 1 - restAsk,
+        priceDown: signal.takeSide === 'Down' ? restAsk : 1 - restAsk,
+      };
+    }
   } else {
     const tBestAsk0 = Date.now();
     const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
     timingsMs.bestAsk = Date.now() - tBestAsk0;
     if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
+      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
       logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
       return;
     }
@@ -1667,6 +1838,7 @@ async function tryPlaceOrderForSignal(signal) {
     clobClient = await buildClobClientCachedCreds();
     timingsMs.creds = Math.max(1, Date.now() - tCreds0);
   } catch (err) {
+    notePolymarketIncidentError('clob_creds', err);
     console.warn('WebSocket tryPlace: CLOB client:', err.message);
     return;
   }
@@ -1686,12 +1858,18 @@ async function tryPlaceOrderForSignal(signal) {
     cappedBy = true;
   }
   amountUsd = applyMaxStakeUsd(amountUsd);
+  const degradedNow = inPolymarketDegradedMode();
+  if (degradedNow && incidentBehavior === 'reduced') {
+    amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
+    allowBelowMin = true;
+  }
   if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
   if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
   // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
   // Permet d'avoir un breakdown même sans trade réel.
   if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
+    recordSkipReason('amount_below_min', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
     if (shouldLogTradeLatencyAttempt(key)) {
       logJson('info', 'Trade latency attempt (WS, no order)', {
         conditionId: key,
@@ -1724,11 +1902,21 @@ async function tryPlaceOrderForSignal(signal) {
   }
   placedKeys.add(key);
   const tPlace0 = Date.now();
-  const result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, { allowBelowMin });
+  const result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, {
+    allowBelowMin,
+    forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+    maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+  });
   timingsMs.placeOrder = Date.now() - tPlace0;
   const time = new Date().toISOString();
   if (result.ok) {
     const latencyMs = Date.now() - t0;
+    if (latencyMs >= executionDelayAlertMs) {
+      writeHealth({ executionDelayed: true, executionDelayedAt: time });
+      setPolymarketDegraded('execution_delayed', incidentDurationMs);
+    } else {
+      writeHealth({ executionDelayed: false });
+    }
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
     const fillLog = pickFillFieldsForLog(result);
     const orderData = {
@@ -1778,6 +1966,10 @@ async function tryPlaceOrderForSignal(signal) {
     );
   } else {
     placedKeys.delete(key);
+    if (isRetryableExecutionError(result?.error)) {
+      setExecutionCooldown(key, result.error);
+      notePolymarketIncidentError('ws_order_failure', result.error);
+    }
     logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
     console.error(`[${time}] [WS] Erreur ${signalWithPrice.takeSide}: ${result.error}`);
   }
@@ -1797,6 +1989,7 @@ let wsRefreshTimer = null;
 let wsPingTimer = null;
 let wsReconnectTimer = null;
 let clobWs = null;
+let wsLastBidAskHealthWriteMs = 0;
 
 function sendWsSubscribe(ws, tokenIds) {
   if (!tokenIds?.length || ws.readyState !== WebSocket.OPEN) return;
@@ -1843,6 +2036,11 @@ function startClobWs() {
     try {
       const data = JSON.parse(raw.toString());
       if (data?.event_type !== 'best_bid_ask') return;
+      wsLastBidAskAtMs = Date.now();
+      if (wsLastBidAskAtMs - wsLastBidAskHealthWriteMs >= 2000) {
+        wsLastBidAskHealthWriteMs = wsLastBidAskAtMs;
+        writeHealth({ wsLastBidAskAt: new Date(wsLastBidAskAtMs).toISOString() });
+      }
       const assetId = String(data.asset_id ?? '');
       const bestAsk = parseFloat(data.best_ask);
       if (!assetId || !Number.isFinite(bestAsk) || bestAsk < MIN_P || bestAsk > MAX_P) return;
@@ -1857,12 +2055,13 @@ function startClobWs() {
       if (entry) clearTimeout(entry.timeoutId);
       const timeoutId = setTimeout(() => {
         wsDebounceTimers.delete(assetId);
-        tryPlaceOrderForSignal(signal);
+        tryPlaceOrderForSignal({ ...signal, _wsReceivedAtMs: wsLastBidAskAtMs });
       }, WS_DEBOUNCE_MS);
       wsDebounceTimers.set(assetId, { timeoutId, signal });
     } catch (_) {}
   });
   clobWs.on('close', () => {
+    notePolymarketIncidentError('ws_close', 'close');
     writeHealth({ wsConnected: false, wsLastChangeAt: new Date().toISOString() });
     if (wsRefreshTimer) clearInterval(wsRefreshTimer);
     if (wsPingTimer) clearInterval(wsPingTimer);
@@ -1872,6 +2071,7 @@ function startClobWs() {
     wsReconnectTimer = setTimeout(startClobWs, WS_RECONNECT_MS);
   });
   clobWs.on('error', (err) => {
+    notePolymarketIncidentError('ws_error', err);
     console.warn('WebSocket CLOB erreur:', err.message);
   });
 }
@@ -2079,6 +2279,10 @@ async function run() {
     }
 
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
+    if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+      recordSkipReason('degraded_mode', 'poll');
+      return;
+    }
 
     await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
@@ -2088,6 +2292,7 @@ async function run() {
       try {
         clobClient = await buildClobClientCachedCreds();
       } catch (err) {
+        notePolymarketIncidentError('clob_creds', err);
         warnClobClientIfThrottled(err);
       }
     });
@@ -2121,7 +2326,15 @@ async function run() {
     for (const s of signals) {
     if (!s.tokenIdToBuy) continue;
     const key = getSignalKey(s);
-    if (placedKeys.has(key)) continue;
+    const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
+    if (cooldownRemainingMs > 0) {
+      recordSkipReason('cooldown_active', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+      continue;
+    }
+    if (placedKeys.has(key)) {
+      recordSkipReason('already_placed_for_slot', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      continue;
+    }
     const t0 = Date.now();
     // En poll, le "bestAsk" provient des prix déjà inclus dans le signal (pas d'appel REST dédié),
     // donc on loggue au minimum 1ms pour que le breakdown ait une granularité exploitable.
@@ -2136,6 +2349,7 @@ async function run() {
     // Même si on ne place pas d'ordre (last minute), on loggue un breakdown attempt.
     // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
     if (shouldSkipTradeTiming(s)) {
+      recordSkipReason('timing_forbidden', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
       let attemptAmountUsd = amountUsd;
       if (useBalanceAsSize) {
         const tBal0 = Date.now();
@@ -2175,6 +2389,7 @@ async function run() {
       timingsMs.balance = Math.max(1, Date.now() - tBal0);
       amountUsd = balance != null ? balance : orderSizeUsd;
       if (amountUsd < orderSizeMinUsd) {
+        recordSkipReason('amount_below_min', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
         if (recordLiquidityHistory) {
           const tBook0 = Date.now();
           const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
@@ -2244,15 +2459,30 @@ async function run() {
     }
 
     amountUsd = applyMaxStakeUsd(amountUsd);
+    const degradedNow = inPolymarketDegradedMode();
+    if (degradedNow && incidentBehavior === 'reduced') {
+      amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
+      allowBelowMin = true;
+    }
     if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
     placedKeys.add(key);
     const tPlace0 = Date.now();
-    const result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, { allowBelowMin });
+    const result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, {
+      allowBelowMin,
+      forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+      maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+    });
     timingsMs.placeOrder = Date.now() - tPlace0;
     const time = new Date().toISOString();
     if (result.ok) {
       const latencyMs = Date.now() - t0;
+      if (latencyMs >= executionDelayAlertMs) {
+        writeHealth({ executionDelayed: true, executionDelayedAt: time });
+        setPolymarketDegraded('execution_delayed', incidentDurationMs);
+      } else {
+        writeHealth({ executionDelayed: false });
+      }
       writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
       const fillLog = pickFillFieldsForLog(result);
       const orderData = {
@@ -2302,6 +2532,10 @@ async function run() {
       );
     } else {
       placedKeys.delete(key);
+      if (isRetryableExecutionError(result?.error)) {
+        setExecutionCooldown(key, result.error);
+        notePolymarketIncidentError('poll_order_failure', result.error);
+      }
       logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
       console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
     }

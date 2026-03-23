@@ -1,12 +1,45 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
 import { TradeHistory } from '@/components/TradeHistory.jsx';
+import { formatBitcoin15mSlotRangeEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
+import { isLive15mEntryForbiddenNow } from '@/lib/bitcoin15mSlotEntryTiming.js';
+import {
+  ORDER_BOOK_MARKET_WORST_P,
+  ORDER_BOOK_SIGNAL_MAX_P,
+  ORDER_BOOK_SIGNAL_MIN_P,
+} from '@/lib/orderBookLiquidity.js';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
   return `${Number(value).toFixed(2)} $`;
+}
+
+function formatAskCents(p) {
+  if (p == null || !Number.isFinite(Number(p))) return '—';
+  const c = Number(p) * 100;
+  const s = c < 10 ? c.toFixed(2) : c.toFixed(1);
+  return `${s}¢`;
+}
+
+function formatCountdownRemaining(sec) {
+  if (sec == null || !Number.isFinite(sec)) return '—';
+  if (sec <= 0) return '0 s';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m >= 1) return `${m} min ${s}s`;
+  return `${s} s`;
+}
+
+function formatSecondsAgo(iso) {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec} s`;
+  const m = Math.floor(sec / 60);
+  return `${m} min`;
 }
 
 function computePnl(balanceHistory, currentBalance) {
@@ -62,7 +95,37 @@ export function BotOverview() {
     currentSlotBookAsksUp: miseMax15mBookAsksUp,
     currentSlotBookAsksDown: miseMax15mBookAsksDown,
     lastResolved15mSlot: miseMaxLastResolved15mSlot,
+    currentSlotEndSec: miseMaxSlotEndSec,
+    slotMarketOpen: miseMaxSlotOpen,
+    liquidityBandUpUsd: miseMaxLiqBandUp,
+    liquidityBandDownUsd: miseMaxLiqBandDown,
+    bestAskUpP: miseMaxBestAskUp,
+    bestAskDownP: miseMaxBestAskDown,
+    levelsBandUp: miseMaxLevelsBandUp,
+    levelsBandDown: miseMaxLevelsBandDown,
+    liquidityToWorstUpUsd: miseMaxLiqWorstUp,
+    liquidityToWorstDownUsd: miseMaxLiqWorstDown,
   } = use15mMiseMaxBookAvg({ enabled: show15m, slotCount: 36, staggerMs: 45 });
+
+  const [miseMaxNowSec, setMiseMaxNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    if (!show15m) return undefined;
+    const id = setInterval(() => setMiseMaxNowSec(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [show15m]);
+
+  const miseMaxSecLeft =
+    miseMaxSlotEndSec != null && Number.isFinite(miseMaxSlotEndSec)
+      ? miseMaxSlotEndSec - miseMaxNowSec
+      : null;
+  const miseMaxEntryForbiddenEt = isLive15mEntryForbiddenNow(Date.now());
+  const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt);
+  const botLiqSignalUsd =
+    data15m?.liquidityStats24h?.lastUsd ?? data15m?.liquidityStats?.lastUsd ?? null;
+  const botLiqSignalAt = data15m?.liquidityStats24h?.lastAt ?? data15m?.liquidityStats?.lastAt ?? null;
+  const signalMinPct = (ORDER_BOOK_SIGNAL_MIN_P * 100).toFixed(0);
+  const signalMaxPct = (ORDER_BOOK_SIGNAL_MAX_P * 100).toFixed(1).replace(/\.0$/, '');
+  const worstPct = (ORDER_BOOK_MARKET_WORST_P * 100).toFixed(0);
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
@@ -71,6 +134,23 @@ export function BotOverview() {
   const hasActiveCycleLatency = latencyMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
   const activeSignalDecisionLatency = latencyMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
   const hasActiveSignalDecisionLatency = latencyMode === '15m' ? hasSignalDecisionLatencyStats15m : hasSignalDecisionLatencyStats;
+  const activeStatus = latencyMode === '15m' ? data15m : data;
+  const activeAlerts = Array.isArray(activeStatus?.alerts) ? activeStatus.alerts : [];
+  const hasPolymarketDelayRisk = activeAlerts.some((a) => ['polymarket_degraded', 'stale_ws_data', 'execution_delayed'].includes(String(a?.kind)));
+  const activeLastSkip = activeStatus?.health?.lastSkipReason ?? null;
+  const activeLastSkipSource = activeStatus?.health?.lastSkipSource ?? null;
+  const activeLastSkipAt = activeStatus?.health?.lastSkipAt ?? null;
+  const activeLastSkipAge = formatSecondsAgo(activeLastSkipAt);
+  const skipReasonLabels = {
+    timing_forbidden: 'Fenêtre interdite',
+    degraded_mode: 'Mode incident',
+    ws_stale: 'WS stale / mismatch REST',
+    cooldown_active: 'Cooldown exécution actif',
+    amount_below_min: 'Montant sous minimum',
+    ws_price_out_of_window: 'Prix hors fenêtre signal',
+    already_placed_for_slot: 'Déjà placé sur ce créneau',
+  };
+  const activeLastSkipLabel = activeLastSkip ? (skipReasonLabels[activeLastSkip] ?? activeLastSkip) : null;
 
   const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
   const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
@@ -214,9 +294,48 @@ export function BotOverview() {
               </button>
             </div>
           )}
+          {hasPolymarketDelayRisk && (
+            <span className="overview-alert-badge overview-alert-badge--warn">Risque retard Polymarket</span>
+          )}
+        </div>
+        <div className="overview-skip-reason">
+          <span className="overview-skip-reason__label">Dernier skip</span>
+          <span className="overview-skip-reason__value">
+            {activeLastSkipLabel ?? '—'}
+            {activeLastSkipSource ? ` · ${String(activeLastSkipSource).toUpperCase()}` : ''}
+            {activeLastSkipAge ? ` · il y a ${activeLastSkipAge}` : ''}
+          </span>
         </div>
 
         <div className="grid-main overview-latency-grid-main">
+        {/* Dernier trade WS */}
+        <div className="card latency-kpi-card">
+          <div className="card-label">Dernier trade WS</div>
+          <div
+            className={`card-value ${
+              hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'green' : ''
+            }`}
+          >
+            {hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? formatMs(activeLatency.ws.lastLatencyMs) : '—'}
+          </div>
+          <div className="card-sub latency-kpi-card__body">
+            {hasActiveLatency && (activeLatency?.ws?.count ?? 0) > 0 ? (
+              <div className="latency-kpi-card__sub">
+                {(activeLatency.ws.count ?? 0)} trade{activeLatency.ws.count !== 1 ? 's' : ''} WS sur 24 h.
+              </div>
+            ) : (
+              <div className="latency-kpi-card__sub">Mesure seulement quand un ordre WS est placé.</div>
+            )}
+          </div>
+          <span
+            className={`latency-card-pill ${
+              hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'
+            }`}
+          >
+            {hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'WS' : 'En attente'}
+          </span>
+        </div>
+
           {/* Trade */}
           <div className="card latency-kpi-card">
             <div className="card-label">Trade (24 h)</div>
@@ -436,6 +555,126 @@ export function BotOverview() {
                     <div className="mise-max-kpi-source">Gamma + CLOB</div>
                   </div>
                 </div>
+
+                <div className="mise-max-meta">
+                  <div className="mise-max-meta-row mise-max-meta-row--asks">
+                    <span className="mise-max-meta-label">Best ask (CLOB)</span>
+                    <span className="mise-max-meta-value">
+                      Up {formatAskCents(miseMaxBestAskUp)} · Down {formatAskCents(miseMaxBestAskDown)}
+                    </span>
+                  </div>
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Liquidité {signalMinPct}–{signalMaxPct} %</span>
+                    <span className="mise-max-meta-value">
+                      Up {formatUsd(miseMaxLiqBandUp)} · Down {formatUsd(miseMaxLiqBandDown)}
+                    </span>
+                  </div>
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Profondeur → {worstPct} ¢ (FAK / worst)</span>
+                    <span className="mise-max-meta-value">
+                      Up {formatUsd(miseMaxLiqWorstUp)} · Down {formatUsd(miseMaxLiqWorstDown)}
+                    </span>
+                  </div>
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Niveaux asks ({signalMinPct}–{signalMaxPct} %)</span>
+                    <span className="mise-max-meta-value">
+                      Up {miseMaxLevelsBandUp ?? '—'} · Down {miseMaxLevelsBandDown ?? '—'}
+                    </span>
+                  </div>
+
+                  <div className="mise-max-meta-row mise-max-meta-row--clock">
+                    <span className="mise-max-meta-label">Créneau (ET)</span>
+                    <span className="mise-max-meta-value mise-max-meta-value--wrap">
+                      {miseMaxSlotEndSec != null ? (
+                        <>
+                          Fin {formatSlotEndEt(miseMaxSlotEndSec)} · {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
+                          <br />
+                          <span className="mise-max-meta-sub">
+                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) : 3 premières min
+                            et 4 dernières min de chaque bloc :00 / :15 / :30 / :45
+                          </span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="mise-max-meta-row mise-max-meta-row--pills">
+                    <span className="mise-max-meta-label">État</span>
+                    <span className="mise-max-meta-pills">
+                      <span
+                        className={`mise-max-pill ${miseMaxSlotOpen ? 'mise-max-pill--ok' : 'mise-max-pill--muted'}`}
+                      >
+                        {miseMaxSlotOpen ? 'Créneau ouvert (UTC)' : 'Créneau fermé'}
+                      </span>
+                      <span
+                        className={`mise-max-pill ${miseMaxEntryForbiddenEt ? 'mise-max-pill--warn' : 'mise-max-pill--ok'}`}
+                      >
+                        {miseMaxEntryForbiddenEt ? 'Entrée interdite (grille ET)' : 'Entrée autorisée (grille ET)'}
+                      </span>
+                    </span>
+                  </div>
+
+                  {!miseMaxSlotOpen && (
+                    <p className="mise-max-meta-notice mise-max-meta-notice--resolved">
+                      Marché résolu — carnet CLOB souvent indisponible (normal, pas un bug).
+                    </p>
+                  )}
+                  {miseMaxSlotOpen &&
+                    (!miseMax15mBookAsksUp?.length && !miseMax15mBookAsksDown?.length ? (
+                      <p className="mise-max-meta-notice">
+                        Créneau ouvert mais carnet vide côté CLOB (liquidity ou latence).
+                      </p>
+                    ) : null)}
+
+                  <div className="mise-max-meta-row">
+                    <span className="mise-max-meta-label">Fraîcheur</span>
+                    <span className="mise-max-meta-value">
+                      {miseMaxBookAge != null
+                        ? `Carnet à jour il y a ${miseMaxBookAge}`
+                        : 'En attente de première lecture…'}
+                    </span>
+                  </div>
+
+                  <p className="mise-max-meta-ref">
+                    Réf. bot (CLOB) : bande signal {signalMinPct}–{signalMaxPct} % · prix max exécution marché typique{' '}
+                    {worstPct} % — la « mise max » affichée est la liquidité dans la bande, pas le plafond FAK.
+                  </p>
+
+                  {botLiqSignalUsd != null && Number(botLiqSignalUsd) > 0 && (
+                    <div className="mise-max-meta-row mise-max-meta-row--bot">
+                      <span className="mise-max-meta-label">Corrélation bot</span>
+                      <span className="mise-max-meta-value mise-max-meta-value--wrap">
+                        Dernière liquidité enregistrée au signal (status) :{' '}
+                        <strong>{formatUsd(botLiqSignalUsd)}</strong>
+                        {botLiqSignalAt ? (
+                          <>
+                            {' '}
+                            ·{' '}
+                            {new Date(botLiqSignalAt).toLocaleString('fr-FR', {
+                              dateStyle: 'short',
+                              timeStyle: 'medium',
+                            })}
+                          </>
+                        ) : null}
+                        <br />
+                        <span className="mise-max-meta-sub">
+                          Live carnet (max Up/Down, bande {signalMinPct}–{signalMaxPct} %) :{' '}
+                          <strong>
+                            {formatUsd(
+                              miseMaxLiqBandUp != null && miseMaxLiqBandDown != null
+                                ? Math.max(miseMaxLiqBandUp, miseMaxLiqBandDown)
+                                : miseMaxCurrent15m
+                            )}
+                          </strong>{' '}
+                          — utile pour debugger écarts / no-fill.
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <MiseMax15mOrderBookDepth
                   asksUp={miseMax15mBookAsksUp}
                   asksDown={miseMax15mBookAsksDown}
