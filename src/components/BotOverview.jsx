@@ -32,11 +32,12 @@ function formatCountdownRemaining(sec) {
   return `${s} s`;
 }
 
-function formatSecondsAgo(iso) {
+function formatSecondsAgo(iso, nowMs) {
   if (!iso) return null;
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return null;
-  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  const baseNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const sec = Math.max(0, Math.floor((baseNowMs - t) / 1000));
   if (sec < 60) return `${sec} s`;
   const m = Math.floor(sec / 60);
   return `${m} min`;
@@ -57,6 +58,11 @@ export function BotOverview() {
   const { data } = useBotStatus(statusUrl);
   const { data: data15m } = useBotStatus(statusUrl15m);
   const [latencyMode, setLatencyMode] = useState('1h');
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const balance = data?.balanceUsd != null ? Number(data.balanceUsd) : null;
   const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
@@ -118,8 +124,8 @@ export function BotOverview() {
     miseMaxSlotEndSec != null && Number.isFinite(miseMaxSlotEndSec)
       ? miseMaxSlotEndSec - miseMaxNowSec
       : null;
-  const miseMaxEntryForbiddenEt = isLive15mEntryForbiddenNow(Date.now());
-  const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt);
+  const miseMaxEntryForbiddenEt = isLive15mEntryForbiddenNow(nowMs);
+  const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt, nowMs);
   const botLiqSignalUsd =
     data15m?.liquidityStats24h?.lastUsd ?? data15m?.liquidityStats?.lastUsd ?? null;
   const botLiqSignalAt = data15m?.liquidityStats24h?.lastAt ?? data15m?.liquidityStats?.lastAt ?? null;
@@ -140,7 +146,7 @@ export function BotOverview() {
   const activeLastSkip = activeStatus?.health?.lastSkipReason ?? null;
   const activeLastSkipSource = activeStatus?.health?.lastSkipSource ?? null;
   const activeLastSkipAt = activeStatus?.health?.lastSkipAt ?? null;
-  const activeLastSkipAge = formatSecondsAgo(activeLastSkipAt);
+  const activeLastSkipAge = formatSecondsAgo(activeLastSkipAt, nowMs);
   const skipReasonLabels = {
     timing_forbidden: 'Fenêtre interdite',
     degraded_mode: 'Mode incident',
