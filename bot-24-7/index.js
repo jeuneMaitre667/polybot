@@ -898,6 +898,42 @@ function shouldLogTradeLatencyAttempt(conditionKey) {
   return true;
 }
 
+/**
+ * Évite de remplir bot.log avec « fetchActiveWindows: créneaux actifs » à chaque cycle (~1/s quand RECORD_LIQUIDITY_HISTORY + relevé périodique).
+ * - LOG_FETCH_ACTIVE_WINDOWS_MS : intervalle min entre deux logs si le **count** est inchangé (défaut 120_000 ms). Mettre **0** pour logger chaque cycle (ancien comportement).
+ * - Si **count** change (ex. 0 → 1), log immédiat.
+ */
+const LOG_FETCH_ACTIVE_WINDOWS_MS = (() => {
+  const raw = process.env.LOG_FETCH_ACTIVE_WINDOWS_MS;
+  if (raw === '0') return 0;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 120 * 1000;
+})();
+const fetchActiveWindowsLogState = { lastAt: 0, lastCount: null };
+function logFetchActiveWindowsIfDue(count) {
+  const now = Date.now();
+  const mode = MARKET_MODE;
+  if (fetchActiveWindowsLogState.lastCount !== count) {
+    fetchActiveWindowsLogState.lastCount = count;
+    fetchActiveWindowsLogState.lastAt = now;
+    logJson('info', 'fetchActiveWindows: créneaux actifs', { count, mode });
+    console.log(`[Mise max] Créneaux actifs: ${count} (mode ${mode})`);
+    return;
+  }
+  if (LOG_FETCH_ACTIVE_WINDOWS_MS === 0) {
+    fetchActiveWindowsLogState.lastAt = now;
+    logJson('info', 'fetchActiveWindows: créneaux actifs', { count, mode });
+    console.log(`[Mise max] Créneaux actifs: ${count} (mode ${mode})`);
+    return;
+  }
+  if (now - fetchActiveWindowsLogState.lastAt >= LOG_FETCH_ACTIVE_WINDOWS_MS) {
+    fetchActiveWindowsLogState.lastAt = now;
+    logJson('info', 'fetchActiveWindows: créneaux actifs', { count, mode });
+    console.log(`[Mise max] Créneaux actifs: ${count} (mode ${mode})`);
+  }
+}
+
 /** Throttle : éviter le spam quand la création du client CLOB échoue (ex. wallet client missing account address). */
 const clobClientWarnThrottle = { ts: 0, lastMsg: '' };
 const CLOB_CLIENT_WARN_THROTTLE_MS = 30 * 1000;
@@ -2267,8 +2303,7 @@ async function run() {
       await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
         try {
           const activeWindows = await fetchActiveWindows();
-          logJson('info', 'fetchActiveWindows: créneaux actifs', { count: activeWindows.length, mode: MARKET_MODE });
-          console.log(`[Mise max] Créneaux actifs: ${activeWindows.length} (mode ${MARKET_MODE})`);
+          logFetchActiveWindowsIfDue(activeWindows.length);
           for (const { market: m, endDate, key } of activeWindows) {
             if (recordedLiquidityWindows.has(key)) continue;
             const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();

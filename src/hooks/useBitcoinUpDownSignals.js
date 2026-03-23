@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import {
   parseUpDownTokenIdsFromMarket,
@@ -18,9 +18,20 @@ const CLOB_PRICE_URL = import.meta.env.DEV ? '/apiClob/price' : 'https://clob.po
 const CLOB_PRICE_DIRECT = 'https://clob.polymarket.com/price';
 const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
 const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
+/** Même endpoint que le bot Node (`bot-24-7/index.js`) — événements `best_bid_ask`. */
+const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+
 /** Fenêtre signal affichée / alignée bot (dashboard + `.env` bot). */
 const MIN_PRICE = 0.96;
 const MAX_SIGNAL_PRICE = 0.98;
+
+/** Mode horaire : polling complet (Gamma) — compromis charge API. */
+const HOURLY_POLL_MS = 5 * 1000;
+/** Mode 15m : Gamma + résolution marché (token IDs) — moins souvent. */
+const POLL_15M_METADATA_MS = 12 * 1000;
+/** REST plancher en 15m (en parallèle du WS) — 500 ms = plus d’appels CLOB, pics plus courts visibles. */
+const POLL_15M_PRICE_REST_MS = 500;
+const WS_RECONNECT_MS = 4000;
 
 // Uniquement les événements "Bitcoin Up or Down - Hourly" (slug du type bitcoin-up-or-down-march-14-6pm-et)
 const BITCOIN_UP_DOWN_HOURLY_SLUG = 'bitcoin-up-or-down';
@@ -34,6 +45,23 @@ function slotEndMsFrom15mSlug(slug) {
   const ts = parseInt(m[1], 10);
   if (!Number.isFinite(ts)) return null;
   return ts < 1e12 ? ts * 1000 : ts;
+}
+
+/**
+ * Choisit l’événement 15m du créneau courant (fin de slug = prochain multiple de 15 min UTC).
+ */
+function pickCurrent15mEvent(events, nowMs) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const nowSec = Math.floor(nowMs / 1000);
+  const slotEndSec = Math.ceil(nowSec / 900) * 900;
+  const preferredSlug = `${BITCOIN_UP_DOWN_15M_SLUG}-${slotEndSec}`.toLowerCase();
+  const bySlug = events.find((e) => (e.slug ?? '').toLowerCase() === preferredSlug);
+  if (bySlug) return bySlug;
+  const stillOpen = events.filter((e) => {
+    const end = slotEndMsFrom15mSlug(e.slug ?? '');
+    return end != null && Number.isFinite(end) && nowMs < end;
+  });
+  return stillOpen[0] ?? events[0];
 }
 
 async function getBestAskFromBookAtBase(bookUrl, tokenId) {
@@ -115,126 +143,387 @@ async function fetchActive15mEvents() {
 }
 
 /**
+ * Construit les objets signal à partir du marché résolu + prix live (CLOB).
+ */
+function buildSignalEntries15m({
+  ev,
+  m,
+  mm,
+  eventSlug,
+  eventEndDate,
+  slotEndMs,
+  priceUp,
+  priceDown,
+}) {
+  const results = [];
+  if (priceUp == null || priceDown == null) return results;
+
+  const upQualifies = priceUp >= MIN_PRICE && priceUp <= MAX_SIGNAL_PRICE;
+  const downQualifies = priceDown >= MIN_PRICE && priceDown <= MAX_SIGNAL_PRICE;
+  const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+  const endDateForSignal =
+    slotEndMs != null && Number.isFinite(slotEndMs) ? new Date(slotEndMs).toISOString() : marketEndDate;
+
+  if (upQualifies) {
+    results.push({
+      market: m,
+      eventSlug: ev.slug ?? eventSlug,
+      eventTitle: ev.title ?? ev.question ?? '',
+      question: m.question ?? ev.title ?? ev.slug ?? '',
+      takeSide: 'Up',
+      priceUp,
+      priceDown,
+      tokenIdToBuy: getTokenIdToBuy(mm, 'Up'),
+      marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
+      endDate: endDateForSignal,
+    });
+  } else if (downQualifies) {
+    results.push({
+      market: m,
+      eventSlug: ev.slug ?? eventSlug,
+      eventTitle: ev.title ?? ev.question ?? '',
+      question: m.question ?? ev.title ?? ev.slug ?? '',
+      takeSide: 'Down',
+      priceUp,
+      priceDown,
+      tokenIdToBuy: getTokenIdToBuy(mm, 'Down'),
+      marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
+      endDate: endDateForSignal,
+    });
+  }
+  return results;
+}
+
+/**
  * Signaux dans la fenêtre prix (MIN_PRICE–MAX_SIGNAL_PRICE, ex. 96–98 %) pour le marché horaire ou 15 min.
+ * En **15m** : prix quasi temps réel (WebSocket CLOB `best_bid_ask`) + REST ~500 ms ; métadonnées Gamma ~12 s.
+ * En **hourly** : polling complet toutes les 5 s (inchangé).
  * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, secours GET /events/slug/{slug} créneau courant.
  */
 export function useBitcoinUpDownSignals(marketMode = 'hourly') {
-  const [signals, setSignals] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [signalsHourly, setSignalsHourly] = useState([]);
+  const [loadingHourly, setLoadingHourly] = useState(true);
+  const [errorHourly, setErrorHourly] = useState(null);
 
-  const fetchSignals = useCallback(async () => {
-    setError(null);
+  /** @type {import('react').MutableRefObject<{ ev: object, m: object, mm: object, tokenIdUp: string, tokenIdDown: string, baseUp: number, baseDown: number, slotEndMs: number | null, eventEndDate: string } | null>} */
+  const base15mRef = useRef(null);
+  const [base15mVersion, setBase15mVersion] = useState(0);
+  const [askUp, setAskUp] = useState(null);
+  const [askDown, setAskDown] = useState(null);
+  const [loading15m, setLoading15m] = useState(true);
+  const [error15m, setError15m] = useState(null);
+  /** Horloge 1 s : fenêtres interdites ET + fin de créneau. */
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  const fetchSignalsHourly = useCallback(async () => {
+    setErrorHourly(null);
     try {
-      let events = [];
-      if (marketMode === '15m') {
-        events = await fetchActive15mEvents();
-      } else {
-        const { data } = await axios.get(GAMMA_EVENTS_URL, {
-          params: { active: true, closed: false, limit: 150 },
-          timeout: 15000,
-        });
-        events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-      }
-
+      const { data } = await axios.get(GAMMA_EVENTS_URL, {
+        params: { active: true, closed: false, limit: 150 },
+        timeout: 15000,
+      });
+      const events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
       const results = [];
       for (const ev of events) {
         if (!ev?.markets?.length) continue;
         const eventSlug = (ev.slug ?? '').toLowerCase();
-        if (marketMode === '15m') {
-          if (!eventSlug.includes(BITCOIN_UP_DOWN_15M_SLUG)) continue;
-        } else if (!eventSlug.includes(BITCOIN_UP_DOWN_HOURLY_SLUG)) continue;
+        if (!eventSlug.includes(BITCOIN_UP_DOWN_HOURLY_SLUG)) continue;
 
         const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
-        const slotEndMs = marketMode === '15m' ? slotEndMsFrom15mSlug(ev.slug ?? '') : null;
-        const nowMs = Date.now();
-        if (marketMode === '15m' && slotEndMs != null && Number.isFinite(slotEndMs) && nowMs >= slotEndMs) {
-          continue;
-        }
-        if (marketMode === '15m' && isLive15mEntryForbiddenNow(nowMs)) {
-          continue;
-        }
 
         for (const m of ev.markets) {
           const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
           const rawPrices = parseGammaOutcomePrices(mm);
           if (!rawPrices) continue;
           const { idxUp, idxDown } = getUpDownOutcomeIndices(mm);
-          const baseUp = rawPrices[idxUp];
-          const baseDown = rawPrices[idxDown];
-          let priceUp;
-          let priceDown;
-          if (marketMode === '15m') {
-            const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mm);
-            const [askUp, askDown] = await Promise.all([
-              tokenIdUp ? getBestAskPrice(tokenIdUp) : Promise.resolve(null),
-              tokenIdDown ? getBestAskPrice(tokenIdDown) : Promise.resolve(null),
-            ]);
-            priceUp = askUp != null ? askUp : baseUp;
-            priceDown = askDown != null ? askDown : baseDown;
-            if (priceUp == null || priceDown == null) continue;
-          } else {
-            priceUp = baseUp;
-            priceDown = baseDown;
-          }
-          /** Fenêtre signal : [MIN_PRICE, MAX_SIGNAL_PRICE] (ex. 96–98¢). */
+          const priceUp = rawPrices[idxUp];
+          const priceDown = rawPrices[idxDown];
+          if (priceUp == null || priceDown == null) continue;
+
           const upQualifies = priceUp >= MIN_PRICE && priceUp <= MAX_SIGNAL_PRICE;
           const downQualifies = priceDown >= MIN_PRICE && priceDown <= MAX_SIGNAL_PRICE;
           const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
-          /** Pour 15m : fin de créneau depuis le slug (Gamma `endDate` souvent décalé). */
-          const endDateForSignal =
-            slotEndMs != null && Number.isFinite(slotEndMs) ? new Date(slotEndMs).toISOString() : marketEndDate;
 
           if (upQualifies) {
-            const takeSide = 'Up';
             results.push({
               market: m,
               eventSlug: ev.slug ?? eventSlug,
               eventTitle: ev.title ?? ev.question ?? '',
               question: m.question ?? ev.title ?? ev.slug ?? '',
-              takeSide,
+              takeSide: 'Up',
               priceUp,
               priceDown,
-              tokenIdToBuy: getTokenIdToBuy(mm, takeSide),
+              tokenIdToBuy: getTokenIdToBuy(mm, 'Up'),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
-              endDate: endDateForSignal,
+              endDate: marketEndDate,
             });
           } else if (downQualifies) {
-            const takeSide = 'Down';
             results.push({
               market: m,
               eventSlug: ev.slug ?? eventSlug,
               eventTitle: ev.title ?? ev.question ?? '',
               question: m.question ?? ev.title ?? ev.slug ?? '',
-              takeSide,
+              takeSide: 'Down',
               priceUp,
               priceDown,
-              tokenIdToBuy: getTokenIdToBuy(mm, takeSide),
+              tokenIdToBuy: getTokenIdToBuy(mm, 'Down'),
               marketUrl: `https://polymarket.com/event/${ev.slug ?? eventSlug}`,
-              endDate: endDateForSignal,
+              endDate: marketEndDate,
             });
           }
         }
       }
-      setSignals(results);
+      setSignalsHourly(results);
     } catch (err) {
-      setError(err.message || 'Erreur lors du chargement des signaux');
-      setSignals([]);
+      setErrorHourly(err.message || 'Erreur lors du chargement des signaux');
+      setSignalsHourly([]);
     } finally {
-      setLoading(false);
+      setLoadingHourly(false);
     }
+  }, []);
+
+  const load15mMetadata = useCallback(async () => {
+    setError15m(null);
+    try {
+      const events = await fetchActive15mEvents();
+      const nowMs = Date.now();
+      const ev = pickCurrent15mEvent(events, nowMs);
+      if (!ev?.markets?.length) {
+        base15mRef.current = null;
+        setAskUp(null);
+        setAskDown(null);
+        setBase15mVersion((v) => v + 1);
+        return;
+      }
+
+      const eventSlug = (ev.slug ?? '').toLowerCase();
+      if (!eventSlug.includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+        base15mRef.current = null;
+        setBase15mVersion((v) => v + 1);
+        return;
+      }
+
+      const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+      const slotEndMs = slotEndMsFrom15mSlug(ev.slug ?? '');
+
+      for (const m of ev.markets) {
+        const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+        const rawPrices = parseGammaOutcomePrices(mm);
+        if (!rawPrices) continue;
+        const { idxUp, idxDown } = getUpDownOutcomeIndices(mm);
+        const baseUp = rawPrices[idxUp];
+        const baseDown = rawPrices[idxDown];
+        const { tokenIdUp, tokenIdDown } = parseUpDownTokenIdsFromMarket(mm);
+        const [askU, askD] = await Promise.all([
+          tokenIdUp ? getBestAskPrice(tokenIdUp) : Promise.resolve(null),
+          tokenIdDown ? getBestAskPrice(tokenIdDown) : Promise.resolve(null),
+        ]);
+        const priceUp = askU != null ? askU : baseUp;
+        const priceDown = askD != null ? askD : baseDown;
+
+        base15mRef.current = {
+          ev,
+          m,
+          mm,
+          tokenIdUp: tokenIdUp ?? '',
+          tokenIdDown: tokenIdDown ?? '',
+          baseUp,
+          baseDown,
+          slotEndMs,
+          eventEndDate,
+        };
+        setAskUp(priceUp ?? null);
+        setAskDown(priceDown ?? null);
+        setBase15mVersion((v) => v + 1);
+        return;
+      }
+
+      base15mRef.current = null;
+      setAskUp(null);
+      setAskDown(null);
+      setBase15mVersion((v) => v + 1);
+    } catch (err) {
+      setError15m(err.message || 'Erreur lors du chargement des signaux 15m');
+      base15mRef.current = null;
+      setBase15mVersion((v) => v + 1);
+    } finally {
+      setLoading15m(false);
+    }
+  }, []);
+
+  const signals15m = useMemo(() => {
+    const base = base15mRef.current;
+    if (!base) return [];
+
+    const { ev, m, mm, slotEndMs, eventEndDate, baseUp, baseDown } = base;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+
+    if (slotEndMs != null && Number.isFinite(slotEndMs) && nowTick >= slotEndMs) {
+      return [];
+    }
+    if (isLive15mEntryForbiddenNow(nowTick)) {
+      return [];
+    }
+
+    const priceUp = askUp != null ? askUp : baseUp;
+    const priceDown = askDown != null ? askDown : baseDown;
+
+    return buildSignalEntries15m({
+      ev,
+      m,
+      mm,
+      eventSlug,
+      eventEndDate,
+      slotEndMs,
+      priceUp,
+      priceDown,
+    });
+  }, [base15mVersion, askUp, askDown, nowTick]);
+
+  // ——— Hourly : polling 5 s ———
+  useEffect(() => {
+    if (marketMode !== 'hourly') return;
+    fetchSignalsHourly();
+  }, [marketMode, fetchSignalsHourly]);
+
+  useEffect(() => {
+    if (marketMode !== 'hourly') return;
+    const interval = setInterval(fetchSignalsHourly, HOURLY_POLL_MS);
+    return () => clearInterval(interval);
+  }, [marketMode, fetchSignalsHourly]);
+
+  // ——— 15m : tick 1 s (grille ET + fin créneau) ———
+  useEffect(() => {
+    if (marketMode !== '15m') return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
   }, [marketMode]);
 
+  // ——— 15m : métadonnées Gamma ———
   useEffect(() => {
-    fetchSignals();
-  }, [fetchSignals]);
+    if (marketMode !== '15m') return;
+    load15mMetadata();
+  }, [marketMode, load15mMetadata]);
 
-  // Polling toutes les 5 s pour réduire la latence de détection du signal (compromis charge API)
-  const POLL_INTERVAL_MS = 5 * 1000;
   useEffect(() => {
-    const interval = setInterval(fetchSignals, POLL_INTERVAL_MS);
+    if (marketMode !== '15m') return;
+    const interval = setInterval(load15mMetadata, POLL_15M_METADATA_MS);
     return () => clearInterval(interval);
-  }, [fetchSignals, POLL_INTERVAL_MS]);
+  }, [marketMode, load15mMetadata]);
 
-  return { signals, loading, error, refresh: fetchSignals };
+  // ——— 15m : WebSocket CLOB (instantané) + REST 500 ms (plancher si le WS saute un tick) ———
+  useEffect(() => {
+    if (marketMode !== '15m') return;
+
+    const tokenIdUp = base15mRef.current?.tokenIdUp;
+    const tokenIdDown = base15mRef.current?.tokenIdDown;
+    if (!tokenIdUp || !tokenIdDown) return;
+
+    let ws = null;
+    let reconnectTimer = null;
+    let restInterval = null;
+    let cancelled = false;
+
+    const clearReconnect = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const pollPricesRest = async () => {
+      const up = base15mRef.current?.tokenIdUp;
+      const down = base15mRef.current?.tokenIdDown;
+      if (!up || !down || cancelled) return;
+      const [u, d] = await Promise.all([getBestAskPrice(up), getBestAskPrice(down)]);
+      if (cancelled) return;
+      if (u != null) setAskUp(u);
+      if (d != null) setAskDown(d);
+    };
+
+    restInterval = setInterval(pollPricesRest, POLL_15M_PRICE_REST_MS);
+    pollPricesRest();
+
+    const subscribe = (socket, upId, downId) => {
+      try {
+        socket.send(
+          JSON.stringify({
+            type: 'market',
+            assets_ids: [upId, downId],
+            custom_feature_enabled: true,
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const connect = () => {
+      if (cancelled) return;
+      try {
+        ws = new WebSocket(CLOB_WS_URL);
+      } catch {
+        reconnectTimer = setTimeout(connect, WS_RECONNECT_MS);
+        return;
+      }
+
+      ws.onopen = () => {
+        const upId = base15mRef.current?.tokenIdUp;
+        const downId = base15mRef.current?.tokenIdDown;
+        if (upId && downId) subscribe(ws, upId, downId);
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          if (data?.event_type !== 'best_bid_ask') return;
+          const assetId = String(data.asset_id ?? '');
+          const bestAsk = parseFloat(data.best_ask);
+          if (!Number.isFinite(bestAsk)) return;
+
+          const upId = base15mRef.current?.tokenIdUp;
+          const downId = base15mRef.current?.tokenIdDown;
+          if (assetId === upId) setAskUp(bestAsk);
+          else if (assetId === downId) setAskDown(bestAsk);
+        } catch {
+          /* ignore */
+        }
+      };
+
+      ws.onclose = () => {
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, WS_RECONNECT_MS);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (restInterval) {
+        clearInterval(restInterval);
+        restInterval = null;
+      }
+      clearReconnect();
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [marketMode, base15mVersion]);
+
+  const signals = marketMode === '15m' ? signals15m : signalsHourly;
+  const loading = marketMode === '15m' ? loading15m : loadingHourly;
+  const error = marketMode === '15m' ? error15m : errorHourly;
+
+  const refresh = useCallback(() => {
+    if (marketMode === '15m') return load15mMetadata();
+    return fetchSignalsHourly();
+  }, [marketMode, load15mMetadata, fetchSignalsHourly]);
+
+  return { signals, loading, error, refresh };
 }
