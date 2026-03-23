@@ -664,6 +664,39 @@ function getHealthAlerts(health, config) {
   return alerts;
 }
 
+function getSignalInRangeNoOrderRecent(limit = 12) {
+  const filePath = path.join(BOT_DIR, 'bot.log');
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw) return [];
+    const lines = raw.trim().split('\n').filter(Boolean);
+    if (!lines.length) return [];
+    const out = [];
+    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+      try {
+        const row = JSON.parse(lines[i]);
+        if (row?.message !== 'signal_in_range_but_no_order') continue;
+        out.push({
+          ts: row?.ts ?? null,
+          source: row?.source ?? null,
+          reason: row?.reason ?? null,
+          takeSide: row?.takeSide ?? null,
+          bestAskP:
+            Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
+          conditionId: row?.conditionId ?? null,
+          tokenId: row?.tokenId ?? null,
+          remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
+          amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+          error: row?.error ?? null,
+        });
+      } catch (_) {}
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 const server = http.createServer((req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') {
@@ -702,6 +735,7 @@ const server = http.createServer((req, res) => {
     const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
     const cycleLatencyStats = getCycleLatencyStats24h();
     const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+    const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
     const health = getHealth();
     const alerts = getHealthAlerts(health, config);
     const payload = {
@@ -728,6 +762,7 @@ const server = http.createServer((req, res) => {
       tradeLatencyBreakdownStats,
       cycleLatencyStats,
       signalDecisionLatencyStats,
+      signalInRangeNoOrderRecent,
       at: new Date().toISOString(),
     };
     if (debugRequested) {

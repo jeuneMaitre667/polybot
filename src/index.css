@@ -1082,6 +1082,52 @@ body::after {
   color: var(--text-2);
 }
 
+.overview-watch-card {
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.overview-watch-card__title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.overview-watch-list {
+  display: grid;
+  gap: 6px;
+}
+
+.overview-watch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-watch-row__main {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.overview-watch-row__meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-2);
+}
+
+.overview-watch-empty {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
 .latency-kpi-card {
   min-height: 148px;
 }

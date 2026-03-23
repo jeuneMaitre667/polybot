@@ -143,6 +143,9 @@ export function BotOverview() {
   const activeStatus = latencyMode === '15m' ? data15m : data;
   const activeAlerts = Array.isArray(activeStatus?.alerts) ? activeStatus.alerts : [];
   const hasPolymarketDelayRisk = activeAlerts.some((a) => ['polymarket_degraded', 'stale_ws_data', 'execution_delayed'].includes(String(a?.kind)));
+  const activeNoOrderEvents = Array.isArray(activeStatus?.signalInRangeNoOrderRecent)
+    ? activeStatus.signalInRangeNoOrderRecent
+    : [];
   const activeLastSkip = activeStatus?.health?.lastSkipReason ?? null;
   const activeLastSkipSource = activeStatus?.health?.lastSkipSource ?? null;
   const activeLastSkipAt = activeStatus?.health?.lastSkipAt ?? null;
@@ -157,6 +160,21 @@ export function BotOverview() {
     already_placed_for_slot: 'Déjà placé sur ce créneau',
   };
   const activeLastSkipLabel = activeLastSkip ? (skipReasonLabels[activeLastSkip] ?? activeLastSkip) : null;
+  const noOrderReasonLabels = {
+    timing_forbidden: 'Fenêtre interdite',
+    cooldown_active: 'Cooldown',
+    degraded_mode_pause: 'Mode incident',
+    ws_stale_rest_invalid: 'WS stale (REST invalide)',
+    ws_stale_rest_mismatch: 'WS stale (mismatch REST)',
+    amount_below_min: 'Montant sous minimum',
+    place_order_failed: "Echec placement d'ordre",
+    already_placed_for_slot: 'Déjà placé sur ce créneau',
+    clob_creds: 'Erreur creds CLOB',
+    ws_price_out_of_window: 'Prix hors fenêtre',
+    auto_place_disabled: 'Autotrade désactivé',
+    kill_switch: 'Kill switch',
+    wallet_not_configured: 'Wallet non configuré',
+  };
 
   const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
   const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
@@ -311,6 +329,31 @@ export function BotOverview() {
             {activeLastSkipSource ? ` · ${String(activeLastSkipSource).toUpperCase()}` : ''}
             {activeLastSkipAge ? ` · il y a ${activeLastSkipAge}` : ''}
           </span>
+        </div>
+        <div className="overview-watch-card">
+          <div className="overview-watch-card__title">Watch no-order (live)</div>
+          {activeNoOrderEvents.length > 0 ? (
+            <div className="overview-watch-list">
+              {activeNoOrderEvents.slice(0, 8).map((e, idx) => {
+                const age = formatSecondsAgo(e?.ts, nowMs);
+                const reason = noOrderReasonLabels[e?.reason] ?? e?.reason ?? 'unknown';
+                const source = e?.source ? String(e.source).toUpperCase() : '—';
+                const side = e?.takeSide ?? '—';
+                const bestAsk = e?.bestAskP != null ? `${(Number(e.bestAskP) * 100).toFixed(2)}¢` : '—';
+                return (
+                  <div key={`${e?.ts || 'na'}-${idx}`} className="overview-watch-row">
+                    <span className="overview-watch-row__main">{reason}</span>
+                    <span className="overview-watch-row__meta">
+                      {source} · {side} · {bestAsk}
+                      {age ? ` · il y a ${age}` : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="overview-watch-empty">Aucun événement no-order récent.</div>
+          )}
         </div>
 
         <div className="grid-main overview-latency-grid-main">
