@@ -2839,6 +2839,14 @@ async function main() {
   }
   console.log('—');
 
+  logJson('info', 'Bot démarré — boucle poll', {
+    pid: process.pid,
+    mode: MARKET_MODE,
+    autoPlaceEnabled,
+    recordLiquidityHistory,
+    botLogPath: BOT_JSON_LOG_FILE,
+  });
+
   if (useWebSocket) startClobWs();
 
   const pollMs = pollIntervalSec * 1000;
