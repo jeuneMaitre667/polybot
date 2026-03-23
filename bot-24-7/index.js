@@ -920,10 +920,17 @@ function warnClobClientIfThrottled(errOrMessage) {
 // tokenId -> { atMs, value: totalUsd|null, levels: Array<{ p:number, s:number }> }
 const bookCache = new Map();
 
-// Cache en mémoire des credentials CLOB (évite createOrDeriveApiKey() à chaque trade).
+// Cache en mémoire des credentials CLOB (évite derive/create à chaque trade).
 let cachedCreds = null;
 let cachedCredsAt = 0;
 
+/**
+ * Obtient les creds L2 CLOB (api key + secret + passphrase).
+ * Ne pas utiliser createOrDeriveApiKey() du SDK : il appelle createApiKey() en premier ;
+ * si une clé existe déjà (nonce 0), create renvoie 400 "Could not create api key", la promesse
+ * est rejetée et deriveApiKey() n'est jamais exécuté — bruit en logs et échec au refresh du cache.
+ * Ordre correct : derive d'abord, create seulement si pas de clé. Voir Polymarket/clob-client#202.
+ */
 async function getClobCredsCached() {
   const now = Date.now();
   if (cachedCreds && now - cachedCredsAt < CREDS_CACHE_TTL_MS) return cachedCreds;
@@ -938,7 +945,21 @@ async function getClobCredsCached() {
     CLOB_SIGNATURE_TYPE,
     clobFunderAddress,
   );
-  const creds = await clientWithoutCreds.createOrDeriveApiKey();
+
+  let creds = null;
+  try {
+    creds = await clientWithoutCreds.deriveApiKey();
+  } catch (_) {
+    creds = null;
+  }
+  const k = creds && (creds.key ?? creds.apiKey);
+  const hasUsableCreds = Boolean(k && creds.secret && creds.passphrase);
+  if (!hasUsableCreds) {
+    creds = await clientWithoutCreds.createApiKey();
+  } else if (creds.apiKey && !creds.key) {
+    creds = { ...creds, key: creds.apiKey };
+  }
+
   cachedCreds = creds;
   cachedCredsAt = now;
   return creds;
