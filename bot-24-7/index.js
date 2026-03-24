@@ -6,7 +6,7 @@
  * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 97–98 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
- * 5. Au début de chaque cycle : tenter de redeem les tokens gagnants (marchés résolus) en USDC pour que le solde inclue les gains
+ * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
  *
  * Usage : npm install && PRIVATE_KEY=0x... npm start
  * Config : .env (voir .env.example)
@@ -16,6 +16,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ethers } from 'ethers';
+import { encodeFunctionData, zeroHash } from 'viem';
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { polygon } from 'viem/chains';
+import { RelayClient, RelayerTxType } from '@polymarket/builder-relayer-client';
+import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
@@ -52,6 +58,8 @@ const TRADE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'trade-latency-history.jso
 const CYCLE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'cycle-latency-history.json');
 const SIGNAL_DECISION_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'signal-decision-latency-history.json');
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
+/** `conditionId` déjà redeemés avec succès (évite de retenter indéfiniment ; remplit le bot au fil des trades). */
+const REDEEMED_CONDITION_IDS_FILE = path.join(BOT_DIR, 'redeemed-condition-ids.json');
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
 const TRADE_LATENCY_HISTORY_DAYS = 7;
@@ -68,6 +76,7 @@ function ensureJsonArrayFileExists(filePath) {
   } catch (_) {}
 }
 ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
+ensureJsonArrayFileExists(REDEEMED_CONDITION_IDS_FILE);
 
 // Cache Gamma (évite de retaper l'API Gamma deux fois par cycle : fetchSignals + fetchActiveWindows).
 const GAMMA_EVENTS_CACHE_MS = Number(process.env.GAMMA_EVENTS_CACHE_MS) || 4000;
@@ -137,6 +146,14 @@ function writeLastOrder(data) {
   try {
     fs.writeFileSync(LAST_ORDER_FILE, JSON.stringify(data), 'utf8');
   } catch (_) {}
+}
+
+function readLastOrder() {
+  try {
+    return JSON.parse(fs.readFileSync(LAST_ORDER_FILE, 'utf8'));
+  } catch (_) {
+    return null;
+  }
 }
 
 /** Met à jour health.json (lu par status-server pour /api/bot-status). Fusionne updates avec l'état existant. */
@@ -270,7 +287,14 @@ if (privateKeyRaw && looksLikeAddress) {
 }
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
 const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
-const polygonRpcFallbacks = (process.env.POLYGON_RPC_FALLBACK || 'https://polygon-rpc.com,https://rpc.ankr.com/polygon').split(',').map((u) => u.trim()).filter(Boolean);
+/** Ankr public sans clé renvoie souvent 401 — utiliser une URL avec clé ou retirer Ankr d’ici. */
+const polygonRpcFallbacks = (
+  process.env.POLYGON_RPC_FALLBACK ||
+  'https://polygon-rpc.com,https://polygon-bor-rpc.publicnode.com'
+)
+  .split(',')
+  .map((u) => u.trim())
+  .filter(Boolean);
 /** Montant minimum pour placer un ordre (USDC). En dessous, on skip. Défaut 1. */
 const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
@@ -313,8 +337,28 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 /** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
+/** Garde-fou: couper la position avant résolution si drawdown <= -30% (sur bid de sortie). */
+const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
+const stopLossDrawdownPct = Math.max(1, Math.min(95, Number(process.env.STOP_LOSS_DRAWDOWN_PCT) || 30));
+/** Prix mini accepté pour une vente stop-loss au marché (évite une exécution à 0). */
+const stopLossWorstPriceP = Math.max(0.001, Math.min(0.99, Number(process.env.STOP_LOSS_WORST_PRICE_P) || 0.01));
+/** Délai mini après entrée avant d'armer le stop-loss (évite les déclenchements instantanés). */
+const STOP_LOSS_MIN_HOLD_MS = Math.max(0, Number(process.env.STOP_LOSS_MIN_HOLD_MS) || 10_000);
+/** Backoff entre tentatives stop-loss sur le même conditionId. */
+const STOP_LOSS_RETRY_BACKOFF_MS = Math.max(5_000, Number(process.env.STOP_LOSS_RETRY_BACKOFF_MS) || 20_000);
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
+/**
+ * N’essaie pas le redeem avant `fin du marché (Gamma) + N ms` pour ce `conditionId` (évite STATE_FAILED tout de suite après la cloche).
+ * Défaut si non défini : **60_000 ms (1 min) en MARKET_MODE=15m**, **0** en hourly. `REDEEM_AFTER_MARKET_END_MS=0` désactive.
+ */
+const redeemAfterMarketEndMsRaw = process.env.REDEEM_AFTER_MARKET_END_MS;
+const REDEEM_AFTER_MARKET_END_MS =
+  redeemAfterMarketEndMsRaw !== undefined && String(redeemAfterMarketEndMsRaw).trim() !== ''
+    ? Math.max(0, Number(redeemAfterMarketEndMsRaw) || 0)
+    : MARKET_MODE === '15m'
+      ? 60_000
+      : 0;
 /** Si true : plafonner la taille d’ordre sur la liquidité MIN_P–MAX_PRICE_LIQUIDITY (désactivé par défaut ; avec FAK + worst price, inutile en général). */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP === 'true';
 /**
@@ -414,6 +458,219 @@ const ERC20_ABI = ['function balanceOf(address owner) view returns (uint256)'];
 const CTF_ABI = [
   'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external',
 ];
+/** Redeem gasless via relayer Polymarket (doc : builders / relayer) — nécessaire si les positions sont sur le proxy (Magic), pas sur l’EOA. */
+const POLY_BUILDER_API_KEY = process.env.POLY_BUILDER_API_KEY?.trim();
+const POLY_BUILDER_SECRET = process.env.POLY_BUILDER_SECRET?.trim();
+const POLY_BUILDER_PASSPHRASE = process.env.POLY_BUILDER_PASSPHRASE?.trim();
+/** Auth alternative (Paramètres → Clés API du Relayer) — doc : submit transaction relayer. */
+const RELAYER_API_KEY = process.env.RELAYER_API_KEY?.trim();
+const RELAYER_API_KEY_ADDRESS = process.env.RELAYER_API_KEY_ADDRESS?.trim();
+const POLY_RELAYER_URL = (process.env.POLY_RELAYER_URL || 'https://relayer-v2.polymarket.com').replace(/\/$/, '');
+const redeemViaRelayerEnv = (process.env.REDEEM_VIA_RELAYER || '').trim().toLowerCase();
+
+function hasPolyBuilderCreds() {
+  return !!(POLY_BUILDER_API_KEY && POLY_BUILDER_SECRET && POLY_BUILDER_PASSPHRASE);
+}
+
+function hasRelayerApiCreds() {
+  return !!(RELAYER_API_KEY && RELAYER_API_KEY_ADDRESS);
+}
+
+/** Builder HMAC **ou** clés Relayer (même API HTTP). */
+function hasRelayerSubmitAuth() {
+  return hasPolyBuilderCreds() || hasRelayerApiCreds();
+}
+
+/**
+ * Patch le client SDK : sans BuilderConfig, `sendAuthedRequest` n’envoyait aucun header ;
+ * la doc Polymarket accepte RELAYER_API_KEY + RELAYER_API_KEY_ADDRESS à la place.
+ */
+function attachRelayerApiKeyAuth(relayClient, apiKey, apiKeyAddress) {
+  relayClient.sendAuthedRequest = async function (method, path, body) {
+    if (this.canBuilderAuth()) {
+      const builderHeaders = await this._generateBuilderHeaders(method, path, body);
+      if (builderHeaders !== undefined) {
+        return this.send(path, method, { headers: builderHeaders, data: body });
+      }
+    }
+    return this.send(path, method, {
+      data: body,
+      headers: {
+        RELAYER_API_KEY: apiKey,
+        RELAYER_API_KEY_ADDRESS: apiKeyAddress,
+      },
+    });
+  };
+}
+
+/** true = utiliser le relayer ; false = redeem EOA uniquement. Auto = Proxy/Safe + (creds Builder **ou** clés Relayer). */
+function shouldRedeemViaRelayer() {
+  if (redeemViaRelayerEnv === 'false') return false;
+  const can = hasRelayerSubmitAuth() && (CLOB_SIGNATURE_TYPE === 1 || CLOB_SIGNATURE_TYPE === 2);
+  if (redeemViaRelayerEnv === 'true') return can;
+  return can;
+}
+
+function relayerTxTypeForClob() {
+  if (CLOB_SIGNATURE_TYPE === 1) return RelayerTxType.PROXY;
+  if (CLOB_SIGNATURE_TYPE === 2) return RelayerTxType.SAFE;
+  return null;
+}
+
+/** Throttle logs « redeem relayer sans succès » par conditionId (défaut : 10 min). */
+const redeemRelayerNoSuccessLogAt = new Map();
+const REDEEM_NO_SUCCESS_LOG_MS = Math.max(
+  60_000,
+  Number(process.env.REDEEM_NO_SUCCESS_LOG_MS) || 600_000
+);
+
+function shouldLogRedeemRelayerNoSuccess(cid) {
+  const now = Date.now();
+  const prev = redeemRelayerNoSuccessLogAt.get(cid) || 0;
+  if (now - prev < REDEEM_NO_SUCCESS_LOG_MS) return false;
+  redeemRelayerNoSuccessLogAt.set(cid, now);
+  return true;
+}
+
+/** Après échec redeem, prochain essai pour ce `conditionId` pas avant N ms (défaut 2 min — laisse l’oracle CTF rattraper la nuit). */
+const REDEEM_FAIL_BACKOFF_MS = Math.max(30_000, Number(process.env.REDEEM_FAIL_BACKOFF_MS) || 120_000);
+const redeemFailNextAttemptAt = new Map(); // conditionId -> timestamp ms
+
+/** @type {Set<string> | null} */
+let redeemedConditionIdsSet = null;
+
+function getRedeemedConditionIdsSet() {
+  if (redeemedConditionIdsSet) return redeemedConditionIdsSet;
+  redeemedConditionIdsSet = new Set();
+  try {
+    const raw = fs.readFileSync(REDEEMED_CONDITION_IDS_FILE, 'utf8');
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      for (const x of arr) {
+        const s = String(x || '').trim();
+        if (s) redeemedConditionIdsSet.add(s);
+      }
+    }
+  } catch (_) {}
+  return redeemedConditionIdsSet;
+}
+
+/** `REDEEM_SKIP_CONDITION_IDS=0xabc,0xdef` — skip permanent (ex. claim manuel déjà fait, tu ajoutes le conditionId). */
+function isRedeemSkippedByEnv(cid) {
+  const raw = process.env.REDEEM_SKIP_CONDITION_IDS || '';
+  if (!raw.trim()) return false;
+  const key = String(cid || '').trim();
+  for (const p of raw.split(',')) {
+    if (p.trim() === key) return true;
+  }
+  return false;
+}
+
+function markConditionRedeemedSuccess(cid) {
+  const key = String(cid || '').trim();
+  if (!key) return;
+  const set = getRedeemedConditionIdsSet();
+  if (set.has(key)) return;
+  set.add(key);
+  redeemFailNextAttemptAt.delete(key);
+  redeemRelayerNoSuccessLogAt.delete(key);
+  try {
+    const sorted = [...set].sort();
+    fs.writeFileSync(REDEEMED_CONDITION_IDS_FILE, JSON.stringify(sorted, null, 0) + '\n', 'utf8');
+  } catch (e) {
+    console.warn('[Redeem] écriture redeemed-condition-ids.json impossible:', e?.message || e);
+  }
+}
+
+function noteRedeemFailureBackoff(cid) {
+  redeemFailNextAttemptAt.set(String(cid), Date.now() + REDEEM_FAIL_BACKOFF_MS);
+}
+
+function canAttemptRedeemNow(cid) {
+  const t = redeemFailNextAttemptAt.get(String(cid)) || 0;
+  return Date.now() >= t;
+}
+
+let redeemRelayerMisconfigLogged = false;
+function logRedeemRelayerMisconfigOnce(msg) {
+  if (redeemRelayerMisconfigLogged) return;
+  redeemRelayerMisconfigLogged = true;
+  console.warn('[Redeem relayer]', msg);
+  try {
+    logJson('warn', 'Redeem relayer misconfig', { message: msg });
+  } catch (_) {}
+}
+
+/** @type {RelayClient | null | undefined} undefined = pas encore tenté */
+let relayClientCache;
+
+function createRelayClientForRedeem() {
+  if (!walletConfigured || !privateKey) return null;
+  const rtx = relayerTxTypeForClob();
+  if (!rtx || !hasRelayerSubmitAuth()) return null;
+  const pkHex = /** @type {`0x${string}`} */ (privateKey.startsWith('0x') ? privateKey : '0x' + privateKey);
+  const account = privateKeyToAccount(pkHex);
+  const walletClient = createWalletClient({
+    account,
+    chain: polygon,
+    transport: http(polygonRpc),
+  });
+  let builderConfig;
+  if (hasPolyBuilderCreds()) {
+    builderConfig = new BuilderConfig({
+      localBuilderCreds: {
+        key: POLY_BUILDER_API_KEY,
+        secret: POLY_BUILDER_SECRET,
+        passphrase: POLY_BUILDER_PASSPHRASE,
+      },
+    });
+  }
+  const client = new RelayClient(POLY_RELAYER_URL, CHAIN_ID, walletClient, builderConfig, rtx);
+  if (hasRelayerApiCreds() && !hasPolyBuilderCreds()) {
+    attachRelayerApiKeyAuth(client, RELAYER_API_KEY, RELAYER_API_KEY_ADDRESS);
+  }
+  const signerAddr = walletClient.account?.address?.toLowerCase?.();
+  const keyAddr = RELAYER_API_KEY_ADDRESS?.toLowerCase?.();
+  if (hasRelayerApiCreds() && signerAddr && keyAddr && signerAddr !== keyAddr) {
+    console.warn(
+      `[Redeem relayer] RELAYER_API_KEY_ADDRESS (${RELAYER_API_KEY_ADDRESS}) ≠ signer PRIVATE_KEY (${walletClient.account.address}). La clé Relayer doit appartenir au même signataire que le bot.`
+    );
+  }
+  return client;
+}
+
+function getRelayClientForRedeem() {
+  if (relayClientCache !== undefined) return relayClientCache;
+  try {
+    relayClientCache = createRelayClientForRedeem();
+    if (relayClientCache) {
+      const auth = hasPolyBuilderCreds() ? 'Builder HMAC' : 'Relayer API key';
+      console.log(
+        `[Redeem] Relayer Polymarket activé (${CLOB_SIGNATURE_TYPE === 1 ? 'PROXY' : 'SAFE'}, auth: ${auth}) — ${POLY_RELAYER_URL}`
+      );
+    }
+  } catch (err) {
+    logRedeemRelayerMisconfigOnce(`Init RelayClient impossible : ${err?.message || err}`);
+    relayClientCache = null;
+  }
+  return relayClientCache;
+}
+
+const CTF_REDEEM_ABI = [
+  {
+    name: 'redeemPositions',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'collateralToken', type: 'address' },
+      { name: 'parentCollectionId', type: 'bytes32' },
+      { name: 'conditionId', type: 'bytes32' },
+      { name: 'indexSets', type: 'uint256[]' },
+    ],
+    outputs: [],
+  },
+];
+
 const ORDER_RETRY_ATTEMPTS = 3;
 const ORDER_RETRY_BASE_MS = 1000;
 let consecutiveOrderErrors = 0;
@@ -422,6 +679,7 @@ let degradedModeUntilMs = 0;
 let degradedModeReason = null;
 const incidentErrorTimes = [];
 const executionCooldownByCondition = new Map(); // conditionId/eventSlug -> nextAllowedAtMs
+const stopLossNextAttemptByCondition = new Map(); // conditionId -> timestamp ms
 let wsLastBidAskAtMs = 0;
 const lastSkipReasonThrottle = new Map(); // reason|source -> ts
 
@@ -502,6 +760,13 @@ function isRetryableExecutionError(errLike) {
   const status = Number(errLike?.response?.status);
   if (status === 425 || status === 429 || status >= 500) return true;
   return /timeout|network|econn|socket|temporar|gateway|service unavailable|internal server error/.test(msg);
+}
+
+function isInsufficientBalanceOrAllowanceError(errLike) {
+  const msg = String(errLike?.message || errLike || '').toLowerCase();
+  const status = Number(errLike?.response?.status);
+  if (status !== 400 && status !== 422 && !msg) return false;
+  return /not enough balance|insufficient balance|allowance|insufficient funds|size too large/.test(msg);
 }
 
 function computeExecutionCooldownMs(errLike) {
@@ -783,6 +1048,26 @@ async function getUsdcBalanceViaClob(client) {
   }
 }
 
+/** Solde réellement utilisable via CLOB: min(balance, allowance) si allowance présent. */
+async function getUsdcSpendableViaClob(client) {
+  if (!client) return null;
+  try {
+    const out = await client.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+    const rawBalance = out?.balance ?? out?.balance_raw;
+    const rawAllowance = out?.allowance ?? out?.allowance_raw;
+    const balanceNum = rawBalance == null ? null : (typeof rawBalance === 'string' ? Number(rawBalance) : rawBalance);
+    const allowanceNum = rawAllowance == null ? null : (typeof rawAllowance === 'string' ? Number(rawAllowance) : rawAllowance);
+    const balanceUsdc = Number.isFinite(balanceNum) ? balanceNum / 1e6 : null;
+    const allowanceUsdc = Number.isFinite(allowanceNum) ? allowanceNum / 1e6 : null;
+    if (balanceUsdc == null && allowanceUsdc == null) return null;
+    if (balanceUsdc == null) return allowanceUsdc;
+    if (allowanceUsdc == null) return balanceUsdc;
+    return Math.max(0, Math.min(balanceUsdc, allowanceUsdc));
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Secours : solde USDC via eth_call RPC. Retourne null si tout échoue. */
 async function getUsdcBalanceRpc() {
   if (!wallet) return null;
@@ -842,26 +1127,258 @@ function getTradedConditionIds() {
   return [...ids];
 }
 
-/** Tente de redeem les positions (tokens gagnants → USDC) pour les conditionIds tradés. Marchés doivent être résolus. Si positions sur proxy Polymarket, ce redeem ne fera rien (claim depuis le site). */
+/** Parse `endDate` Gamma / ISO (même logique que liquidité / timing). */
+function parseMarketEndDateToMs(endDate) {
+  if (endDate == null || endDate === '') return null;
+  if (typeof endDate === 'number') {
+    return endDate > 1e12 ? endDate : endDate * 1000;
+  }
+  const t = new Date(endDate).getTime();
+  return Number.isFinite(t) && t > 0 ? t : null;
+}
+
+async function tryStopLossForOpenPosition(clobClient) {
+  if (!stopLossEnabled || !walletConfigured || !wallet || !clobClient) return;
+  const last = readLastOrder();
+  if (!last || typeof last !== 'object') return;
+  if (last.stopLossExit === true) return;
+  const conditionId = String(last.conditionId || '').trim();
+  const tokenId = String(last.tokenId || '').trim();
+  const takeSide = last.takeSide === 'Up' || last.takeSide === 'Down' ? last.takeSide : null;
+  if (!conditionId || !tokenId || !takeSide) return;
+
+  const endMs = parseMarketEndDateToMs(last.marketEndMs ?? last.endDate);
+  if (!Number.isFinite(endMs) || Date.now() >= endMs) return;
+  const enteredAtMs = last?.at ? new Date(last.at).getTime() : null;
+  if (Number.isFinite(enteredAtMs) && Date.now() - enteredAtMs < STOP_LOSS_MIN_HOLD_MS) return;
+
+  const nextAllowed = stopLossNextAttemptByCondition.get(conditionId) || 0;
+  if (Date.now() < nextAllowed) return;
+
+  const entryPriceRaw = Number(last.averageFillPriceP);
+  const entryPriceP = Number.isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null;
+  if (!(entryPriceP > 0)) return;
+
+  const bestBid = await getBestBid(tokenId);
+  if (!(bestBid > 0 && bestBid < 1)) return;
+
+  const drawdownPct = ((bestBid - entryPriceP) / entryPriceP) * 100;
+  if (drawdownPct > -Math.abs(stopLossDrawdownPct)) return;
+
+  let tokensToSell = Number(last.filledOutcomeTokens);
+  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
+    const stakeUsd = Number(last.filledUsdc ?? last.amountUsd);
+    if (Number.isFinite(stakeUsd) && stakeUsd > 0) {
+      tokensToSell = stakeUsd / entryPriceP;
+    }
+  }
+  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
+
+  try {
+    const userMarketOrder = {
+      tokenID: tokenId,
+      amount: tokensToSell,
+      side: Side.SELL,
+      price: stopLossWorstPriceP,
+    };
+    const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
+    const result = await clobClient.postOrder(signedOrder, marketOrderType);
+    const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+    const clobResponse = serializeClobPostOrderResponseForLog(result);
+    const nowIso = new Date().toISOString();
+    const exitOrder = {
+      at: nowIso,
+      conditionId,
+      tokenId,
+      takeSide,
+      orderID: result?.orderID ?? result?.id,
+      stopLossExit: true,
+      stopLossDrawdownPctTrigger: -Math.abs(stopLossDrawdownPct),
+      stopLossObservedDrawdownPct: Math.round(drawdownPct * 100) / 100,
+      stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
+      stopLossBestBidP: Math.round(bestBid * 1e6) / 1e6,
+      marketEndMs: endMs,
+      clobSignerAddress: wallet?.address ?? null,
+      clobSignatureType: CLOB_SIGNATURE_TYPE,
+      clobFunderAddress: clobFunderAddress ?? null,
+      ...pickFillFieldsForLog({ clobResponse, ...fill }),
+    };
+    writeLastOrder(exitOrder);
+    appendOrderLog(exitOrder);
+    stopLossNextAttemptByCondition.delete(conditionId);
+    executionCooldownByCondition.set(conditionId, endMs + 60_000);
+    logJson('warn', 'Stop-loss déclenché: sortie avant résolution', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      takeSide,
+      drawdownPct: Math.round(drawdownPct * 100) / 100,
+      entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
+      bestBidP: Math.round(bestBid * 1e6) / 1e6,
+      orderID: result?.orderID ?? result?.id,
+    });
+    console.warn(
+      `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — drawdown ${drawdownPct.toFixed(2)}% (entry ${(entryPriceP * 100).toFixed(2)}¢ → bid ${(bestBid * 100).toFixed(2)}¢)`
+    );
+  } catch (err) {
+    stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+    notePolymarketIncidentError('stop_loss_exit', err);
+    logJson('warn', 'Stop-loss: échec sortie', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      error: String(err?.message || err).slice(0, 220),
+    });
+  }
+}
+
+/**
+ * Dernière `marketEndMs` connue par `conditionId` (orders.log puis last-order écrase).
+ * Rempli pour les trades **après** déploiement du champ ; sinon redeem sans ce garde-fou.
+ */
+function getLatestMarketEndMsByConditionId() {
+  /** @type {Map<string, number>} */
+  const map = new Map();
+  function consider(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    const cid = String(obj.conditionId ?? obj.condition_id ?? '').trim();
+    if (!cid) return;
+    let ms = null;
+    if (obj.marketEndMs != null && Number.isFinite(Number(obj.marketEndMs))) {
+      ms = Number(obj.marketEndMs);
+    }
+    if (ms == null || !Number.isFinite(ms) || ms <= 0) return;
+    map.set(cid, ms);
+  }
+  try {
+    const raw = fs.readFileSync(ORDERS_LOG_FILE, 'utf8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        consider(JSON.parse(trimmed));
+      } catch (_) {}
+    }
+  } catch (_) {}
+  try {
+    consider(JSON.parse(fs.readFileSync(LAST_ORDER_FILE, 'utf8')));
+  } catch (_) {}
+  return map;
+}
+
+/**
+ * Redeem positions (tokens gagnants → USDC) pour les conditionIds tradés (marchés résolus).
+ * - EOA (CLOB_SIGNATURE_TYPE=0) : tx directe depuis le wallet.
+ * - Proxy / Safe : même appel CTF mais via le relayer Polymarket (gasless) — doc builders ; nécessite POLY_BUILDER_*.
+ */
 async function tryRedeemResolvedPositions() {
   if (!walletConfigured || !wallet || !redeemEnabled) return;
+
+  const wantRelayer = shouldRedeemViaRelayer();
+  if (redeemViaRelayerEnv === 'true' && !wantRelayer) {
+    logRedeemRelayerMisconfigOnce(
+      'REDEEM_VIA_RELAYER=true mais il faut CLOB_SIGNATURE_TYPE 1 ou 2 + soit POLY_BUILDER_* (Builder), soit RELAYER_API_KEY + RELAYER_API_KEY_ADDRESS (onglet Clés API du Relayer). Fallback : redeem EOA.'
+    );
+  }
+
+  let relayerClient = wantRelayer ? getRelayClientForRedeem() : null;
+  if (wantRelayer && !relayerClient) {
+    logRedeemRelayerMisconfigOnce(
+      'Relayer redeem demandé mais RelayClient indisponible — tentative redeem depuis l’EOA (souvent sans effet si positions sur proxy).'
+    );
+  }
   const ctf = new ethers.Contract(CTF_POLYGON, CTF_ABI, wallet);
-  const parentCollectionId = ethers.ZeroHash;
-  const indexSets = [1, 2];
+  const parentCollectionIdEthers = ethers.ZeroHash;
+  const indexSetsEthers = [1, 2];
+
   const tradedIds = getTradedConditionIds();
+  const marketEndByCid =
+    REDEEM_AFTER_MARKET_END_MS > 0 ? getLatestMarketEndMsByConditionId() : null;
+  const nowMs = Date.now();
   for (const cid of tradedIds) {
     const conditionIdBytes32 = conditionIdToBytes32(cid);
     if (!conditionIdBytes32) continue;
+    if (getRedeemedConditionIdsSet().has(String(cid).trim())) continue;
+    if (isRedeemSkippedByEnv(cid)) continue;
+    if (marketEndByCid) {
+      const endMs = marketEndByCid.get(String(cid).trim());
+      if (endMs != null && nowMs < endMs + REDEEM_AFTER_MARKET_END_MS) continue;
+    }
+    if (!canAttemptRedeemNow(cid)) continue;
     try {
-      const tx = await ctf.redeemPositions(USDC_POLYGON, parentCollectionId, conditionIdBytes32, indexSets);
-      const receipt = await tx.wait();
-      if (receipt?.status === 1) {
-        logJson('info', 'Redeem positions OK', { conditionId: cid.slice(0, 18) + '…', hash: receipt.hash });
-        console.log(`[${new Date().toISOString()}] Redeem OK — conditionId ${cid.slice(0, 14)}… — tx ${receipt.hash}`);
+      if (relayerClient) {
+        const data = encodeFunctionData({
+          abi: CTF_REDEEM_ABI,
+          functionName: 'redeemPositions',
+          args: [
+            /** @type {`0x${string}`} */ (USDC_POLYGON),
+            zeroHash,
+            /** @type {`0x${string}`} */ (conditionIdBytes32),
+            [1n, 2n],
+          ],
+        });
+        const resp = await relayerClient.execute(
+          [{ to: CTF_POLYGON, data, value: '0' }],
+          `Redeem bot ${cid.slice(0, 12)}…`
+        );
+        const result = await resp.wait();
+        if (result?.transactionHash) {
+          markConditionRedeemedSuccess(cid);
+          logJson('info', 'Redeem positions OK (relayer)', {
+            conditionId: cid.slice(0, 18) + '…',
+            hash: result.transactionHash,
+          });
+          console.log(
+            `[${new Date().toISOString()}] Redeem OK (relayer) — conditionId ${cid.slice(0, 14)}… — tx ${result.transactionHash}`
+          );
+        } else {
+          noteRedeemFailureBackoff(cid);
+          let detail =
+            'relayer: pas MINED/CONFIRMED (souvent STATE_FAILED on-chain — marché pas encore redeemable CTF, rien à redeem, ou revert)';
+          try {
+            const txs = await relayerClient.getTransaction(resp.transactionID);
+            const t = Array.isArray(txs) && txs[0];
+            if (t) {
+              detail = `state=${t.state || '?'} tx=${t.transactionHash || ''}`.slice(0, 280);
+            }
+          } catch (e) {
+            detail = `${detail} (${String(e?.message || e).slice(0, 120)})`;
+          }
+          if (shouldLogRedeemRelayerNoSuccess(cid)) {
+            logJson('warn', 'Redeem relayer sans succès (réessaiera au prochain cycle)', {
+              conditionId: cid.slice(0, 18) + '…',
+              detail,
+            });
+            console.warn(
+              `[${new Date().toISOString()}] Redeem relayer — pas de succès pour ${cid.slice(0, 14)}… — ${detail}`
+            );
+          }
+        }
+      } else {
+        const tx = await ctf.redeemPositions(
+          USDC_POLYGON,
+          parentCollectionIdEthers,
+          conditionIdBytes32,
+          indexSetsEthers
+        );
+        const receipt = await tx.wait();
+        if (receipt?.status === 1) {
+          markConditionRedeemedSuccess(cid);
+          logJson('info', 'Redeem positions OK', { conditionId: cid.slice(0, 18) + '…', hash: receipt.hash });
+          console.log(`[${new Date().toISOString()}] Redeem OK — conditionId ${cid.slice(0, 14)}… — tx ${receipt.hash}`);
+        } else {
+          noteRedeemFailureBackoff(cid);
+        }
       }
     } catch (err) {
-      if (!/no positions to redeem|revert|insufficient/i.test(String(err.message))) {
-        logJson('warn', 'Redeem échoué (non bloquant)', { conditionId: cid.slice(0, 18) + '…', error: err.message });
+      const em = String(err.message || err);
+      if (/no positions to redeem|nothing to redeem|payout of zero|already been redeemed/i.test(em)) {
+        markConditionRedeemedSuccess(cid);
+      } else {
+        noteRedeemFailureBackoff(cid);
+      }
+      if (!/no positions to redeem|revert|insufficient|STATE_FAILED|invalid/i.test(em)) {
+        logJson('warn', 'Redeem échoué (non bloquant)', {
+          conditionId: cid.slice(0, 18) + '…',
+          error: err.message,
+          viaRelayer: !!relayerClient,
+        });
       }
     }
   }
@@ -1375,6 +1892,38 @@ async function getBestAsk(tokenId) {
   }
 }
 
+async function getBestBidFromBookOnly(tokenId) {
+  if (!tokenId) return null;
+  try {
+    const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 3000 });
+    const bids = data?.bids;
+    if (!Array.isArray(bids) || bids.length === 0) return null;
+    let best = 0;
+    for (const level of bids) {
+      const p = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
+      if (Number.isFinite(p) && p > best) best = p;
+    }
+    return best > 0 ? best : null;
+  } catch (err) {
+    notePolymarketIncidentError('clob_book', err);
+    return null;
+  }
+}
+
+async function getBestBid(tokenId) {
+  if (!tokenId) return null;
+  const fromBook = await getBestBidFromBookOnly(tokenId);
+  if (fromBook != null) return fromBook;
+  try {
+    const { data } = await axios.get(CLOB_PRICE_URL, { params: { token_id: tokenId, side: 'SELL' }, timeout: 3000 });
+    const p = parseFloat(data?.price);
+    return Number.isFinite(p) ? p : null;
+  } catch (err) {
+    notePolymarketIncidentError('clob_price', err);
+    return null;
+  }
+}
+
 const bestAskSignalCache = new Map(); // tokenId -> { p, exp }
 
 async function getBestAskCachedForSignal(tokenId) {
@@ -1670,50 +2219,8 @@ async function fetchSignals() {
 /** Récupère les token IDs des marchés actifs (Up + Down) pour s'abonner au WebSocket CLOB. Retourne { tokenIds, tokenToSignal }. */
 async function getActiveMarketTokensForWs() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
-  let events = [];
-  try {
-    const { data } = await axios.get(GAMMA_EVENTS_URL, {
-      params: { active: true, closed: false, limit: 150, slug_contains: slugMatch },
-      timeout: 15000,
-    });
-    events = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-  } catch (err) {
-    if (err.response?.status === 422 || err.response?.status === 400) {
-      const { data } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 200 }, timeout: 15000 });
-      events = (Array.isArray(data) ? data : data?.data ?? data?.results ?? []).filter((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-    } else throw err;
-  }
-  const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
-  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
-    try {
-      const slug = getCurrent15mEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
-        events = [ev];
-        console.log(`[WS] Secours slug 15m: ${slug} — event reçu`);
-      } else {
-        console.log(`[WS] Secours slug 15m: ${slug} — event invalide ou vide`);
-      }
-    } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      console.log(`[WS] Secours slug 15m: ${getCurrent15mEventSlug()} — ${msg}`);
-    }
-  }
-  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
-    try {
-      const slug = getCurrentHourlyEventSlug();
-      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
-        events = [ev];
-        console.log(`[WS] Secours slug horaire: ${slug} — event reçu`);
-      } else {
-        console.log(`[WS] Secours slug horaire: ${slug} — event invalide ou vide`);
-      }
-    } catch (err) {
-      const msg = err.response?.status === 404 ? 'slug not found' : (err.message || 'erreur');
-      console.log(`[WS] Secours slug horaire: ${getCurrentHourlyEventSlug()} — ${msg}`);
-    }
-  }
+  const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
+  let events = gammaOut.events;
 
   if (MARKET_MODE === '15m') {
     const r = await resolve15mEventsForTrading(events, Date.now());
@@ -2019,7 +2526,12 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       consecutiveOrderErrors = 0;
       return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false, clobResponse, ...fill };
     } catch (err) {
-      lastError = err.message;
+      const apiErrorDetail =
+        err?.response?.data?.error ||
+        err?.response?.data?.errorMsg ||
+        err?.response?.data?.message ||
+        null;
+      lastError = apiErrorDetail ? `${err.message} | ${apiErrorDetail}` : err.message;
       const status = err.response?.status;
       const is429 = status === 429 || String(err.message || status).includes('429');
       const is425 = status === 425; // Matching engine restart (mardi 7h ET, ~90s) — doc Polymarket
@@ -2322,9 +2834,15 @@ async function tryPlaceOrderForSignal(signal) {
     return;
   }
   const tBal0 = Date.now();
-  const balance = await getUsdcBalanceViaClob(clobClient) ?? await getUsdcBalanceRpc();
+  const spendableBalance = await getUsdcSpendableViaClob(clobClient);
+  const rpcBalance = spendableBalance == null ? await getUsdcBalanceRpc() : null;
+  const balance = spendableBalance ?? rpcBalance;
   timingsMs.balance = Math.max(1, Date.now() - tBal0);
   let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
+  const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+  if (balance != null && Number.isFinite(balance) && balance > 0) {
+    amountUsd = Math.min(amountUsd, Math.max(0, balance - spendableBufferUsd));
+  }
 
   let allowBelowMin = false;
   let cappedBy = false;
@@ -2373,6 +2891,15 @@ async function tryPlaceOrderForSignal(signal) {
     placedKeys.delete(key); // sécurité: ne pas bloquer un éventuel trade si le wallet change
     return;
   }
+  if (!(amountUsd > 0)) {
+    recordSkipReason('amount_zero_after_clamp', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'amount_zero_after_clamp', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round((amountUsd || 0) * 100) / 100,
+      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
+    });
+    return;
+  }
   // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
   if (useMarketOrder && clobClient) {
     try {
@@ -2404,11 +2931,13 @@ async function tryPlaceOrderForSignal(signal) {
     }
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
     const fillLog = pickFillFieldsForLog(result);
+    const marketEndMs = parseMarketEndDateToMs(signalWithPrice?.endDate);
     const orderData = {
       at: time,
       takeSide: signalWithPrice.takeSide,
       amountUsd,
       conditionId: key,
+      tokenId: signalWithPrice.tokenIdToBuy ?? null,
       orderID: result.orderID,
       preSignCacheHit: result.preSignCacheHit,
       partialFillRetries: result.partialFillRetries ?? 0,
@@ -2416,6 +2945,8 @@ async function tryPlaceOrderForSignal(signal) {
       clobSignerAddress: wallet?.address ?? null,
       clobSignatureType: CLOB_SIGNATURE_TYPE,
       clobFunderAddress: clobFunderAddress ?? null,
+      ...(signalWithPrice?.eventSlug ? { eventSlug: String(signalWithPrice.eventSlug).slice(0, 120) } : {}),
+      ...(marketEndMs != null ? { marketEndMs } : {}),
       ...fillLog,
     };
     writeLastOrder(orderData);
@@ -2453,8 +2984,9 @@ async function tryPlaceOrderForSignal(signal) {
       `[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
     );
   } else {
-    placedKeys.delete(key);
-    if (isRetryableExecutionError(result?.error)) {
+    const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
+    if (!isInsufficient) placedKeys.delete(key);
+    if (isRetryableExecutionError(result?.error) || isInsufficient) {
       setExecutionCooldown(key, result.error);
       notePolymarketIncidentError('ws_order_failure', result.error);
     }
@@ -2807,9 +3339,12 @@ async function run() {
         warnClobClientIfThrottled(err);
       }
     });
+    await profiler.measure('stop_loss', async () => {
+      await tryStopLossForOpenPosition(clobClient);
+    });
 
     async function getBalance() {
-      const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
+      const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
       if (viaClob != null) return viaClob;
       return getUsdcBalanceRpc();
     }
@@ -2817,9 +3352,13 @@ async function run() {
     let amountUsd = orderSizeUsd;
     await profiler.measure('balance', async () => {
       if (useBalanceAsSize) {
-        const viaClob = clobClient ? await getUsdcBalanceViaClob(clobClient) : null;
+        const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
         const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
         amountUsd = balance != null ? balance : orderSizeUsd;
+        const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+        if (balance != null && Number.isFinite(balance) && balance > 0) {
+          amountUsd = Math.min(amountUsd, Math.max(0, balance - spendableBufferUsd));
+        }
         if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
         else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
         else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
@@ -2985,6 +3524,14 @@ async function run() {
       allowBelowMin = true;
     }
     if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
+    if (!(amountUsd > 0)) {
+      recordSkipReason('amount_zero_after_clamp', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      logSignalInRangeButNoOrder('poll', 'amount_zero_after_clamp', s, {
+        bestAskP: pickSignalBestAskP(s),
+        amountUsd: Math.round((amountUsd || 0) * 100) / 100,
+      });
+      continue;
+    }
 
     placedKeys.add(key);
     const tPlace0 = Date.now();
@@ -3005,11 +3552,13 @@ async function run() {
       }
       writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
       const fillLog = pickFillFieldsForLog(result);
+      const marketEndMs = parseMarketEndDateToMs(s?.endDate);
       const orderData = {
         at: time,
         takeSide: s.takeSide,
         amountUsd,
         conditionId: key,
+        tokenId: s.tokenIdToBuy ?? null,
         orderID: result.orderID,
         preSignCacheHit: result.preSignCacheHit,
         partialFillRetries: result.partialFillRetries ?? 0,
@@ -3017,6 +3566,8 @@ async function run() {
         clobSignerAddress: wallet?.address ?? null,
         clobSignatureType: CLOB_SIGNATURE_TYPE,
         clobFunderAddress: clobFunderAddress ?? null,
+        ...(s?.eventSlug ? { eventSlug: String(s.eventSlug).slice(0, 120) } : {}),
+        ...(marketEndMs != null ? { marketEndMs } : {}),
         ...fillLog,
       };
       writeLastOrder(orderData);
@@ -3054,8 +3605,9 @@ async function run() {
         `[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfoPoll} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
       );
     } else {
-      placedKeys.delete(key);
-      if (isRetryableExecutionError(result?.error)) {
+      const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
+      if (!isInsufficient) placedKeys.delete(key);
+      if (isRetryableExecutionError(result?.error) || isInsufficient) {
         setExecutionCooldown(key, result.error);
         notePolymarketIncidentError('poll_order_failure', result.error);
       }
@@ -3112,6 +3664,13 @@ async function main() {
           console.log('Complément FAK: revalidation best ask CLOB entre chaque envoi (PARTIAL_FILL_RETRY_REVALIDATE_PRICE=true).');
         }
       }
+    }
+    if (stopLossEnabled) {
+      console.log(
+        `Stop-loss: activé | trigger <= -${Math.abs(stopLossDrawdownPct)}% (bid) | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
+      );
+    } else {
+      console.log('Stop-loss: désactivé (STOP_LOSS_ENABLED=false).');
     }
     if (useWebSocket) console.log('WebSocket CLOB activé (best_bid_ask) — réaction en temps réel aux changements de prix.');
     if (useLiquidityCap) console.log(`USE_LIQUIDITY_CAP=true : taille d’ordre plafonnée par la liquidité ${(MIN_P * 100).toFixed(0)}–${(MAX_PRICE_LIQUIDITY * 100).toFixed(0)}¢ (legacy).`);

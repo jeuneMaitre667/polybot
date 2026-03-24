@@ -33,6 +33,12 @@ function formatCountdownRemaining(sec) {
   return `${s} s`;
 }
 
+function formatSignedUsd(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  const n = Number(value);
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)} $`;
+}
+
 function formatTimeHmsMs(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -205,6 +211,7 @@ export function BotOverview() {
     ws_stale: 'WS stale / mismatch REST',
     cooldown_active: 'Cooldown exécution actif',
     amount_below_min: 'Montant sous minimum',
+    amount_zero_after_clamp: 'Montant nul après clamp solde',
     ws_price_out_of_window: 'Prix hors fenêtre signal',
     already_placed_for_slot: 'Déjà placé sur ce créneau',
   };
@@ -216,6 +223,7 @@ export function BotOverview() {
     ws_stale_rest_invalid: 'WS stale (REST invalide)',
     ws_stale_rest_mismatch: 'WS stale (mismatch REST)',
     amount_below_min: 'Montant sous minimum',
+    amount_zero_after_clamp: 'Montant nul après clamp solde',
     place_order_failed: "Echec placement d'ordre",
     already_placed_for_slot: 'Déjà placé sur ce créneau',
     clob_creds: 'Erreur creds CLOB',
@@ -224,6 +232,53 @@ export function BotOverview() {
     kill_switch: 'Kill switch',
     wallet_not_configured: 'Wallet non configuré',
   };
+
+  const activePosition15m = useMemo(() => {
+    const last = data15m?.lastOrder;
+    if (!last || typeof last !== 'object') return null;
+    if (last.stopLossExit === true) return null;
+    const endMs = Number(last.marketEndMs);
+    if (!Number.isFinite(endMs) || endMs <= nowMs) return null;
+    const side = last.takeSide === 'Up' || last.takeSide === 'Down' ? last.takeSide : null;
+    if (!side) return null;
+
+    const entryP = Number(last.averageFillPriceP);
+    const entryPriceP = Number.isFinite(entryP) && entryP > 0 ? entryP : null;
+    const currentAskRaw = side === 'Up' ? miseMaxBestAskLiveUp ?? miseMaxBestAskUp : miseMaxBestAskLiveDown ?? miseMaxBestAskDown;
+    const currentAskP = Number.isFinite(Number(currentAskRaw)) ? Number(currentAskRaw) : null;
+    const qtyRaw = Number(last.filledOutcomeTokens);
+    const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : null;
+    const stakeRaw = Number(last.filledUsdc ?? last.amountUsd);
+    const stakeUsd = Number.isFinite(stakeRaw) && stakeRaw > 0 ? stakeRaw : null;
+    const entryValue = qty != null && entryPriceP != null ? qty * entryPriceP : stakeUsd;
+    const markValue = qty != null && currentAskP != null ? qty * currentAskP : null;
+    const unrealizedUsd =
+      markValue != null && entryValue != null && Number.isFinite(markValue) && Number.isFinite(entryValue)
+        ? markValue - entryValue
+        : null;
+    const unrealizedPct =
+      unrealizedUsd != null && entryValue != null && entryValue > 0
+        ? (unrealizedUsd / entryValue) * 100
+        : null;
+    const remainingSec = Math.max(0, Math.floor((endMs - nowMs) / 1000));
+
+    return {
+      side,
+      remainingSec,
+      entryPriceP,
+      currentAskP,
+      stakeUsd,
+      unrealizedUsd,
+      unrealizedPct,
+    };
+  }, [
+    data15m?.lastOrder,
+    nowMs,
+    miseMaxBestAskLiveUp,
+    miseMaxBestAskUp,
+    miseMaxBestAskLiveDown,
+    miseMaxBestAskDown,
+  ]);
 
   const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
   const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
@@ -304,45 +359,30 @@ export function BotOverview() {
           <div className="card-sub">{show15m && orders24h15m ? `${orders24h15m} ordre(s)` : 'Aucun trade exécuté'}</div>
         </div>
         <div className="card">
-          <div className="card-label">Prix signal</div>
-          <div className="overview-two-lines">
-            <div>
-              Horaire :{' '}
-              <span
-                className={
-                  data?.signalPriceSource === 'clob'
-                    ? 'overview-signal-source--clob'
-                    : data?.signalPriceSource === 'gamma'
-                      ? 'overview-signal-source--gamma'
-                      : 'overview-signal-source--muted'
-                }
-              >
-                {data?.signalPriceSource === 'clob'
-                  ? 'CLOB best ask'
-                  : data?.signalPriceSource === 'gamma'
-                    ? 'Gamma'
-                    : '—'}
-              </span>
-            </div>
-            <div>
-              15m :{' '}
-              <span
-                className={
-                  data15m?.signalPriceSource === 'clob'
-                    ? 'overview-signal-source--clob'
-                    : data15m?.signalPriceSource === 'gamma'
-                      ? 'overview-signal-source--gamma'
-                      : 'overview-signal-source--muted'
-                }
-              >
-                {data15m?.signalPriceSource === 'clob'
-                  ? 'CLOB best ask'
-                  : data15m?.signalPriceSource === 'gamma'
-                    ? 'Gamma'
-                    : '—'}
-              </span>
-            </div>
-          </div>
+          <div className="card-label">Position 15m en cours</div>
+          {activePosition15m ? (
+            <>
+              <div className={`card-value ${activePosition15m.unrealizedUsd != null ? (activePosition15m.unrealizedUsd >= 0 ? 'green' : 'red') : ''}`}>
+                {activePosition15m.unrealizedPct != null ? `${activePosition15m.unrealizedPct >= 0 ? '+' : ''}${activePosition15m.unrealizedPct.toFixed(1)} %` : '—'}
+              </div>
+              <div className="overview-two-lines">
+                <div>
+                  Side <span>{activePosition15m.side}</span> · PNL <span>{formatSignedUsd(activePosition15m.unrealizedUsd)}</span>
+                </div>
+                <div>
+                  Entrée <span>{formatAskCents(activePosition15m.entryPriceP)}</span> · Actuel <span>{formatAskCents(activePosition15m.currentAskP)}</span>
+                </div>
+              </div>
+              <div className="card-sub">
+                Mise {formatUsd(activePosition15m.stakeUsd)} · fin créneau dans {formatCountdownRemaining(activePosition15m.remainingSec)}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="card-value">—</div>
+              <div className="card-sub">Aucune position 15m ouverte en ce moment.</div>
+            </>
+          )}
         </div>
       </div>
 
