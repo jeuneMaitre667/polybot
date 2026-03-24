@@ -9,4 +9,4 @@ alwaysApply: true
 - **Structure** : s’appuyer sur [STRUCTURE.md](STRUCTURE.md) pour l’emplacement et le rôle des fichiers.
 - **Secrets** : ne jamais committer `.env`, `*.pem` ni de clés/tokens en dur. Ils sont dans `.gitignore`.
 - **Stack** : Dashboard = React (Vite) + Tailwind + shadcn/ui. Bot = Node.js ESM (bot-24-7/), déploiement Lightsail (Bash, PM2).
-- **SSH** : les clés Lightsail sont dans `lightsail-keys/` (ex. `LightsailDefaultKey-eu-west-1.pem`). Pour exécuter une commande sur le serveur depuis l’assistant : `ssh -i "C:\Users\cedpa\polymarket-dashboard\lightsail-keys\LightsailDefaultKey-eu-west-1.pem" -o StrictHostKeyChecking=accept-new ubuntu@34.253.187.142 "commande"`.
+- **SSH** : les clés Lightsail sont dans `lightsail-keys/` (ex. `LightsailDefaultKey-eu-west-1.pem`). Pour exécuter une commande sur le serveur depuis l’assistant : `ssh -i "C:\Users\cedpa\polymarket-dashboard\lightsail-keys\LightsailDefaultKey-eu-west-1.pem" -o StrictHostKeyChecking=accept-new ubuntu@18.203.159.101 "commande"`.

@@ -15,7 +15,7 @@ Pour afficher le statut du bot et les derniers logs dans le dashboard :
    ```
    VITE_BOT_STATUS_URL=http://TON_IP_LIGHTSAIL:3001
    ```
-(remplacer TON_IP_LIGHTSAIL par l’IP publique de l’instance, ex. 34.253.187.142)
+(remplacer TON_IP_LIGHTSAIL par l’IP publique de l’instance, ex. 18.203.159.101)
 
 4. Redémarrer le dashboard (`npm run dev`) pour que la section « Statut du bot » interroge ce serveur.
 

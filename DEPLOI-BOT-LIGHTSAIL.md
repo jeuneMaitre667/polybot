@@ -8,7 +8,7 @@
 
 ## 2. Noter l’IP de l’instance
 
-Sur la page **Connect** de ton instance, note l’**IPv4** (ex. `34.253.187.142`).
+Sur la page **Connect** de ton instance, note l’**IPv4** (ex. `18.203.159.101`).
 
 ## 3. Lancer le déploiement
 
@@ -17,7 +17,7 @@ Dans **PowerShell**, depuis le dossier du projet :
 ```powershell
 cd C:\Users\cedpa\polymarket-dashboard
 
-.\deploy-bot.ps1 -KeyPath "$env:USERPROFILE\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "34.253.187.142"
+.\deploy-bot.ps1 -KeyPath "$env:USERPROFILE\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "18.203.159.101"
 ```
 
 Remplace le nom du fichier `.pem` et l’IP si les tiens sont différents.
@@ -29,7 +29,7 @@ Le script envoie le dossier `bot-24-7` sur le serveur et exécute l’installati
 Connecte-toi en SSH :
 
 ```powershell
-ssh -i "$env:USERPROFILE\Downloads\LightsailDefaultKey-eu-west-1.pem" ubuntu@34.253.187.142
+ssh -i "$env:USERPROFILE\Downloads\LightsailDefaultKey-eu-west-1.pem" ubuntu@18.203.159.101
 ```
 
 Sur le serveur :
