@@ -3096,7 +3096,14 @@ function startClobWs() {
   }
   clobWs.on('open', async () => {
     const at = new Date().toISOString();
-    writeHealth({ wsConnected: true, wsLastChangeAt: at, wsLastConnectedAt: at });
+    wsLastBidAskAtMs = 0;
+    wsLastBidAskHealthWriteMs = 0;
+    writeHealth({
+      wsConnected: true,
+      wsLastChangeAt: at,
+      wsLastConnectedAt: at,
+      wsLastBidAskAt: null,
+    });
     console.log('WebSocket CLOB connecté — abonnement best_bid_ask (temps réel).');
     await refreshWsSubscriptions(clobWs);
     wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
