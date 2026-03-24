@@ -109,6 +109,8 @@ fi
 
 echo ""
 echo "=== Installation des dépendances ==="
+# Évite ENOTEMPTY / rmdir sur certains VPS si un ancien npm était interrompu ou concurrent.
+rm -rf "$BOT_DIR/node_modules"
 if (cd "$BOT_DIR" && npm ci --no-audit --no-fund); then
   echo "   npm ci OK"
 else
