@@ -17,12 +17,21 @@ ENV_FILE="$BOT_DIR/.env"
 
 git_reset_to_origin_default() {
   local dir="$1"
-  cd "$dir"
-  git fetch --prune || return 1
-  if git rev-parse --verify origin/main >/dev/null 2>&1; then
-    git reset --hard origin/main
-  elif git rev-parse --verify origin/master >/dev/null 2>&1; then
-    git reset --hard origin/master
+  # git -C : ne pas « cd » dans le repo — sinon, si fetch échoue puis on rm -rf ce dossier,
+  # le CWD du shell devient invalide → « Unable to read current working directory » (CI / SSH).
+  rm -f "$dir/.git/refs/remotes/origin/main.lock" "$dir/.git/refs/remotes/origin/master.lock" 2>/dev/null || true
+  # Shallow / ref désalignée : forcer la ref distante (évite « cannot lock ref ... expected ... »)
+  if git -C "$dir" rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+    git -C "$dir" fetch --prune origin "+refs/heads/main:refs/remotes/origin/main" || git -C "$dir" fetch --prune || return 1
+  elif git -C "$dir" rev-parse --verify refs/remotes/origin/master >/dev/null 2>&1; then
+    git -C "$dir" fetch --prune origin "+refs/heads/master:refs/remotes/origin/master" || git -C "$dir" fetch --prune || return 1
+  else
+    git -C "$dir" fetch --prune || return 1
+  fi
+  if git -C "$dir" rev-parse --verify origin/main >/dev/null 2>&1; then
+    git -C "$dir" reset --hard origin/main
+  elif git -C "$dir" rev-parse --verify origin/master >/dev/null 2>&1; then
+    git -C "$dir" reset --hard origin/master
   else
     echo "   (ni origin/main ni origin/master — fetch invalide ou repo vide)"
     return 1
@@ -50,6 +59,8 @@ fi
 echo "   Repo : $GIT_REPO_URL"
 echo ""
 
+cd "$HOME"
+
 # Clone ou mise à jour du repo
 if [ ! -d "$REPO_DIR/.git" ]; then
   echo "=== Premier clone du repo ==="
@@ -63,6 +74,7 @@ else
     :
   else
     echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
+    cd "$HOME"
     rm -rf "$REPO_DIR" 2>/dev/null || true
     git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
   fi
