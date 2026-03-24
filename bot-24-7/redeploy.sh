@@ -109,13 +109,23 @@ fi
 
 echo ""
 echo "=== Installation des dépendances ==="
-# Évite ENOTEMPTY / rmdir sur certains VPS si un ancien npm était interrompu ou concurrent.
-rm -rf "$BOT_DIR/node_modules"
-if (cd "$BOT_DIR" && npm ci --no-audit --no-fund); then
-  echo "   npm ci OK"
+# Petits Lightsail (512 Mo–1 Go) : « rm -rf node_modules » + « npm ci » pic RAM → processus « Killed » (OOM),
+# le script s’arrête (set -e) et PM2 n’est jamais redémarré. Par défaut : mise à jour **sans** effacer node_modules.
+# Forcer ancien comportement (clean + ci) : REDEPLOY_NPM_CLEAN=1 bash ~/bot-24-7/redeploy.sh
+cd "$BOT_DIR" || exit 1
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512}"
+if [ "${REDEPLOY_NPM_CLEAN:-}" = "1" ]; then
+  echo "   REDEPLOY_NPM_CLEAN=1 : suppression node_modules puis npm ci"
+  rm -rf node_modules
+  if npm ci --no-audit --no-fund; then
+    echo "   npm ci OK"
+  else
+    echo "   npm ci a échoué — fallback npm install"
+    npm install --no-audit --no-fund
+  fi
 else
-  echo "   npm ci a échoué (lock manquant ou désaligné) — fallback npm install"
-  (cd "$BOT_DIR" && npm install --no-audit --no-fund)
+  echo "   npm install incrémental (pas de rm -rf ; évite OOM sur petit VPS). REDEPLOY_NPM_CLEAN=1 pour forcer un clean."
+  npm install --no-audit --no-fund
 fi
 
 echo ""
