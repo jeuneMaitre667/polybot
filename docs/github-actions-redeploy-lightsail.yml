@@ -1,0 +1,61 @@
+# Copie vers polybot : .github/workflows/redeploy-bot-lightsail.yml
+# Push = 15m uniquement ; horaire = workflow_dispatch (hourly / both).
+
+name: Redeploy bot on Lightsail
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'bot-24-7/**'
+      - '.github/workflows/redeploy-bot-lightsail.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Quel bot redéployer ? (push = 15m seulement)'
+        required: true
+        default: '15m'
+        type: choice
+        options:
+          - 15m
+          - hourly
+          - both
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Deploy bot horaire via SSH
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'hourly') }}
+        env:
+          SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$SSH_HOST" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY ou LIGHTSAIL_HOST manquant. Configure les secrets du repo."
+            exit 0
+          fi
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+          timeout 3600 ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          rm -f key.pem
+
+      - name: Deploy bot 15m via SSH
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == '15m')) }}
+        env:
+          SSH_KEY_15M: ${{ secrets.LIGHTSAIL_SSH_KEY_15M }}
+          SSH_HOST_15M: ${{ secrets.LIGHTSAIL_HOST_15M }}
+        run: |
+          if [ -z "$SSH_HOST_15M" ]; then
+            echo "LIGHTSAIL_HOST_15M non configuré — skip déploiement bot 15m."
+            exit 0
+          fi
+          if [ -z "$SSH_KEY_15M" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY_15M manquant — skip déploiement bot 15m."
+            exit 0
+          fi
+          echo "$SSH_KEY_15M" > key15m.pem
+          chmod 600 key15m.pem
+          timeout 3600 ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          rm -f key15m.pem

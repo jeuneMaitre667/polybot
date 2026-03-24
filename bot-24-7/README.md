@@ -96,6 +96,7 @@ La doc indique : **Primary Servers** = `eu-west-2`, **Closest Non-Georestricted 
 | **Rate limit (429)** | `Too Many Requests` | Le CLOB limite les requêtes (ex. [Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)). Le bot fait un retry avec backoff ; en cas de 429 fréquents, augmenter `POLL_INTERVAL_SEC` (ex. 5) et éviter plusieurs bots sur le même compte. |
 | **Trading désactivé** | `Trading is currently disabled` ou `cancel-only` | Dépannage côté Polymarket ; réessayer plus tard. |
 | **RPC Polygon** | Timeouts, pas de connexion | Changer `POLYGON_RPC_URL` (ex. un autre RPC public ou Alchemy/Infura). |
+| **Relayer / Builder : 401 `invalid authorization`** | Boucle `request error` + `401 Unauthorized` dans `polymarket-bot-error.log` alors que les `POLY_BUILDER_*` sont corrects | Souvent un **décalage de version** : `@polymarket/builder-relayer-client@0.0.8` doit signer avec **`@polymarket/builder-signing-sdk@0.0.8`**. Si le projet force le SDK en **1.x** à la racine, les en-têtes HMAC ne matchent pas l’API → 401. **Fix** : dans `package.json`, garder `"@polymarket/builder-signing-sdk": "0.0.8"` (exact), puis `npm ci` sur le VPS. |
 | **Crash / redémarrage** | Le processus s’arrête | Lancer avec **PM2** (`pm2 start index.js --name polymarket-bot` + `pm2 startup`) pour redémarrage auto. |
 
 ## Recommandations (d’après la doc Polymarket) pour que les trades passent bien

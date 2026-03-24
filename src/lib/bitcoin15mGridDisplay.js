@@ -1,19 +1,21 @@
 /**
- * Grille d’affichage backtest 15m : une ligne par fin de créneau UTC (slug btc-updown-15m-{unix}).
- * Le créneau **en cours** (fin = ceil(now/900)*900) doit être la **première** ligne (récent → ancien).
+ * Grille d’affichage backtest 15m : une ligne par **fin** de créneau UTC.
+ * Slug Polymarket = `btc-updown-15m-{eventStartSec}` ; fin = start + 900 s.
+ * Créneau ouvert en tête : `topEnd = floor(now/900)*900 + 900`.
  */
 
 export const SLOT_15M_SEC = 15 * 60;
 export const MAX_15M_GRID_SLOTS = 168 * 4;
 
-/** Fin de créneau (s UTC) depuis le slug `btc-updown-15m-{unix}`. */
+/** Fin de fenêtre (s UTC) depuis le slug `btc-updown-15m-{eventStartSec}`. */
 export function slotEndSecFromBitcoin15mSlug(slug) {
   if (!slug || typeof slug !== 'string') return null;
   const m = slug.match(/btc-updown-15m-(\d+)$/i);
   if (!m) return null;
   const ts = parseInt(m[1], 10);
   if (!Number.isFinite(ts)) return null;
-  return ts < 1e12 ? ts : Math.floor(ts / 1000);
+  const startSec = ts < 1e12 ? ts : Math.floor(ts / 1000);
+  return startSec + SLOT_15M_SEC;
 }
 
 /**
@@ -65,7 +67,8 @@ export function build15mBacktestDisplayRows(resolvedRows, windowHours) {
   const SLOT = SLOT_15M_SEC;
   const maxSlots = Math.min(MAX_15M_GRID_SLOTS, Math.ceil(windowHours * 4));
   const nowSec = Math.floor(Date.now() / 1000);
-  const topEnd = Math.ceil(nowSec / SLOT) * SLOT;
+  const boundary = Math.floor(nowSec / SLOT) * SLOT;
+  const topEnd = boundary + SLOT;
   const windowBottom = topEnd - maxSlots * SLOT;
 
   const bySlot = new Map();

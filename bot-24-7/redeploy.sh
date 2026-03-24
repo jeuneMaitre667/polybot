@@ -3,10 +3,31 @@
 # À exécuter sur l'instance (SSH) : ~/bot-24-7/redeploy.sh
 # Prérequis : une fois, définir GIT_REPO_URL dans ~/bot-24-7/.env (voir .env.example).
 
-set -e
+set -euo pipefail
+
+# Pas de prompt npm (CI / SSH non interactive)
+export CI=true
+export NPM_CONFIG_FUND=false
+export NPM_CONFIG_AUDIT=false
+export NPM_CONFIG_UPDATE_NOTIFIER=false
+
 BOT_DIR="$HOME/bot-24-7"
 REPO_DIR="$HOME/polymarket-dashboard"
 ENV_FILE="$BOT_DIR/.env"
+
+git_reset_to_origin_default() {
+  local dir="$1"
+  cd "$dir"
+  git fetch --prune || return 1
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    git reset --hard origin/main
+  elif git rev-parse --verify origin/master >/dev/null 2>&1; then
+    git reset --hard origin/master
+  else
+    echo "   (ni origin/main ni origin/master — fetch invalide ou repo vide)"
+    return 1
+  fi
+}
 
 echo "=== Redéploiement du bot Polymarket depuis Git ==="
 
@@ -38,7 +59,7 @@ else
   echo "=== Mise à jour du repo (fetch + reset) ==="
   # Evite les échecs Git récents (divergent branches / lock refs) en forçant l'état local sur origin/main.
   # Si Git échoue (lock ref), on reclone pour garantir un état cohérent.
-  if (cd "$REPO_DIR" && git fetch --prune && git reset --hard origin/main); then
+  if git_reset_to_origin_default "$REPO_DIR"; then
     :
   else
     echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
@@ -70,7 +91,12 @@ fi
 
 echo ""
 echo "=== Installation des dépendances ==="
-(cd "$BOT_DIR" && npm install)
+if (cd "$BOT_DIR" && npm ci --no-audit --no-fund); then
+  echo "   npm ci OK"
+else
+  echo "   npm ci a échoué (lock manquant ou désaligné) — fallback npm install"
+  (cd "$BOT_DIR" && npm install --no-audit --no-fund)
+fi
 
 echo ""
 echo "=== Rotation logs PM2 (pm2-logrotate) ==="

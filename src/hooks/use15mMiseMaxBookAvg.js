@@ -3,6 +3,7 @@ import axios from 'axios';
 import {
   countAskLevelsInBand,
   getBestAskPriceFromRawAsks,
+  getBestAskPriceLenientFromRawAsks,
   liquidityUsdFromAsks,
   ORDER_BOOK_MARKET_WORST_P,
   ORDER_BOOK_SIGNAL_MAX_P,
@@ -11,7 +12,8 @@ import {
 import { parseUpDownTokenIdsFromMarket, resolveGammaMarketForBtcUpDown } from '@/lib/gammaPolymarket.js';
 import {
   format15mSlotEndFr,
-  getPrevious15mSlotEndSec,
+  getCurrent15mUtcBoundarySec,
+  getPrevious15mResolvedSlugStartSec,
   getResolvedWinnerFromGammaMarket,
 } from '@/lib/btc15mLastSlotWinner.js';
 
@@ -27,11 +29,11 @@ const SLOT_SEC = 15 * 60;
 const ORDERBOOK_SNAPSHOT_POLL_MS = 1000;
 
 /**
- * Fin du créneau 15m UTC (secondes) — même convention que getCurrent15mEventSlug (Polymarket / Gamma).
+ * Fin UTC **exclusive** du créneau ouvert (= début slug + 900 s). Le slug Polymarket est
+ * `btc-updown-15m-{eventStart}` avec `eventStart = floor(now/900)*900`.
  */
 function getCurrent15mSlotEndSec() {
-  const nowSec = Math.floor(Date.now() / 1000);
-  return Math.ceil(nowSec / SLOT_SEC) * SLOT_SEC;
+  return getCurrent15mUtcBoundarySec() + SLOT_SEC;
 }
 
 /** Timestamps de fin de chaque créneau : actuel puis plus anciens. */
@@ -46,14 +48,34 @@ function get15mSlotEndSecs(count) {
 }
 
 /**
- * Résout Up/Down : events/slug puis markets/slug pour btc-updown-15m-{endTs}.
+ * Résout Up/Down pour un créneau : `slotWindowEndSec` = fin de fenêtre (s Unix) ; slug = start = end − 900 s.
+ * 1) GET markets/slug/{slug} en premier (marché canonique = même slug que l’URL Polymarket) ;
+ * 2) sinon event/slug + marchés triés (slug exact du créneau avant les autres) — évite un sous-marché
+ *    avec tokens CLOB « valides » pour /price (souvent ~mid) mais carnet /book vide.
  */
-async function fetchTokenIdsForSlotEnd(endSec) {
-  const slug = `${BITCOIN_UP_DOWN_15M}-${endSec}`;
+async function fetchTokenIdsForSlotEnd(slotWindowEndSec) {
+  const slugStart = slotWindowEndSec - SLOT_SEC;
+  const slug = `${BITCOIN_UP_DOWN_15M}-${slugStart}`;
+  const slugLower = slug.toLowerCase();
+
+  try {
+    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 12000 });
+    const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, null, m);
+    const out = parseUpDownTokenIdsFromMarket(mm);
+    if (out.tokenIdUp || out.tokenIdDown) return out;
+  } catch {
+    /* 404 / réseau */
+  }
+
   try {
     const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 12000 });
-    const markets = ev?.markets;
-    if (Array.isArray(markets)) {
+    const rawMarkets = ev?.markets;
+    if (Array.isArray(rawMarkets) && rawMarkets.length > 0) {
+      const markets = [...rawMarkets].sort((a, b) => {
+        const ma = String(a?.slug ?? '').toLowerCase() === slugLower ? 0 : 1;
+        const mb = String(b?.slug ?? '').toLowerCase() === slugLower ? 0 : 1;
+        return ma - mb;
+      });
       for (const m of markets) {
         const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
         const out = parseUpDownTokenIdsFromMarket(mm);
@@ -63,13 +85,7 @@ async function fetchTokenIdsForSlotEnd(endSec) {
   } catch {
     /* 404 / réseau */
   }
-  try {
-    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 12000 });
-    const out = parseUpDownTokenIdsFromMarket(m);
-    if (out.tokenIdUp || out.tokenIdDown) return out;
-  } catch {
-    /* 404 */
-  }
+
   return { tokenIdUp: null, tokenIdDown: null };
 }
 
@@ -89,8 +105,13 @@ function computeSlotBookMetrics(asksUp, asksDown) {
     liquidityBandUpUsd: liqUp,
     liquidityBandDownUsd: liqDown,
     miseMaxUsd: Math.max(liqUp, liqDown),
-    bestAskUpP: getBestAskPriceFromRawAsks(asksUp),
-    bestAskDownP: getBestAskPriceFromRawAsks(asksDown),
+    // **Lenient d’abord** (même logique que « Best ask live » / onglet Acheter Polymarket) : le strict
+    // exige taille > 0 ; si les vrais asks ont la taille sous un champ non parsé, on gardait des niveaux
+    // « bruit » ~49¢/50¢ avec taille lisible au lieu de 38¢/63¢.
+    bestAskUpP:
+      getBestAskPriceLenientFromRawAsks(asksUp) ?? getBestAskPriceFromRawAsks(asksUp),
+    bestAskDownP:
+      getBestAskPriceLenientFromRawAsks(asksDown) ?? getBestAskPriceFromRawAsks(asksDown),
     levelsBandUp: countAskLevelsInBand(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
     levelsBandDown: countAskLevelsInBand(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
     liquidityToWorstUpUsd: liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_MARKET_WORST_P),
@@ -137,7 +158,7 @@ async function fetchBestAskLive(tokenId) {
   async function atBase(baseUrl) {
     try {
       const { data } = await axios.get(baseUrl, {
-        params: { token_id: tokenId, side: 'SELL' },
+        params: { token_id: tokenId, side: 'BUY' },
         timeout: 8000,
       });
       const p = parseFloat(data?.price);
@@ -153,10 +174,22 @@ async function fetchBestAskLive(tokenId) {
   return p;
 }
 
+/**
+ * Même logique que `useBitcoinUpDownSignals` : **carnet d’abord** (meilleur prix ask visible),
+ * puis GET `/price?side=BUY` si carnet vide — `/price` seul peut rester proche du mid (~47¢/52¢)
+ * alors que l’UI « Acheter » suit le carnet (~38¢/63¢).
+ */
+async function bestAskFromBookThenPrice(asks, tokenId) {
+  const fromBook = getBestAskPriceLenientFromRawAsks(asks);
+  if (fromBook != null) return fromBook;
+  return fetchBestAskLive(tokenId);
+}
+
 /** Dernier créneau **terminé** (pas l’actuel) : gagnant Up/Down via Gamma outcomePrices. */
 async function fetchPreviousSlotWinnerFromGamma() {
-  const slotEndSec = getPrevious15mSlotEndSec();
-  const slug = `${BITCOIN_UP_DOWN_15M}-${slotEndSec}`;
+  const boundarySec = getCurrent15mUtcBoundarySec();
+  const slugStartPrev = getPrevious15mResolvedSlugStartSec();
+  const slug = `${BITCOIN_UP_DOWN_15M}-${slugStartPrev}`;
   let winner = null;
   try {
     const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, {
@@ -182,7 +215,8 @@ async function fetchPreviousSlotWinnerFromGamma() {
       /* */
     }
   }
-  return { winner, slotEndSec, slug };
+  /** Libellé « dernier créneau » : borne entre deux slots (= fin du créneau résolu). */
+  return { winner, slotEndSec: boundarySec, slug };
 }
 
 function medianSorted(arr) {
@@ -290,8 +324,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         fetchAsks(tokenIdDown, end0),
       ]);
       const [liveAskUp, liveAskDown] = await Promise.all([
-        fetchBestAskLive(tokenIdUp),
-        fetchBestAskLive(tokenIdDown),
+        bestAskFromBookThenPrice(asksUp, tokenIdUp),
+        bestAskFromBookThenPrice(asksDown, tokenIdDown),
       ]);
       if (!mounted.current) return;
       const m = computeSlotBookMetrics(asksUp, asksDown);
@@ -399,8 +433,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         if (i === 0) {
           firstSlotMise = mise;
           const [liveAskUp, liveAskDown] = await Promise.all([
-            fetchBestAskLive(tokenIdUp),
-            fetchBestAskLive(tokenIdDown),
+            bestAskFromBookThenPrice(asksUp, tokenIdUp),
+            bestAskFromBookThenPrice(asksDown, tokenIdDown),
           ]);
           const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
           setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);

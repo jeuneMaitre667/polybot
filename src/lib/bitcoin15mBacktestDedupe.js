@@ -19,14 +19,18 @@ export function normalizeConditionId(cid) {
   return null;
 }
 
-/** Fin de créneau (ms UTC) depuis le slug Polymarket btc-updown-15m-{unixSec}. */
+/**
+ * Fin de fenêtre 15m (ms UTC) depuis le slug `btc-updown-15m-{unixSec}`.
+ * Gamma / Polymarket : `{unixSec}` = **début** du créneau (`eventStartTime`), pas la fin → on ajoute 900 s.
+ */
 export function slotEndMsFrom15mSlug(slug) {
   if (!slug || typeof slug !== 'string') return null;
   const m = slug.match(/btc-updown-15m-(\d+)$/i);
   if (!m) return null;
-  const ts = parseInt(m[1], 10);
-  if (!Number.isFinite(ts)) return null;
-  return ts < 1e12 ? ts * 1000 : ts;
+  const raw = parseInt(m[1], 10);
+  if (!Number.isFinite(raw)) return null;
+  const startSec = raw < 1e12 ? raw : Math.floor(raw / 1000);
+  return (startSec + SLOT_15M_SEC) * 1000;
 }
 
 function resultRowDedupeKey(r) {
@@ -111,7 +115,7 @@ function preferEnriched15mRow(a, b) {
 }
 
 /**
- * Après simulation : une ligne par **créneau slug** (btc-updown-15m-{fin UTC}).
+ * Après simulation : une ligne par **créneau slug** (suffixe = début fenêtre UTC, +900 s = fin).
  * Si deux enrichissements partagent la même clé, on garde celui avec **signal** et le plus de points d’historique.
  */
 export function dedupeEnrichedOnePer15mTradeWindow(enrichedRows) {

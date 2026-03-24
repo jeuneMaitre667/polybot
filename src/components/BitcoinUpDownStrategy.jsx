@@ -16,6 +16,7 @@ import {
   formatTradeTimestampEt,
   formatTimestampUtcTooltip,
 } from '../lib/polymarketDisplayTime.js';
+import { getBacktestMaxLossFractionOfStake } from '../lib/bitcoinBacktestLossFraction.js';
 import { readStratResultModeFromStorage, writeStratResultModeToStorage } from '../lib/dashboardUiPrefs.js';
 
 function formatMoney(value) {
@@ -224,6 +225,7 @@ export function BitcoinUpDownStrategy() {
       const exponent = 2;
       return stakeUsd * feeRate * Math.pow(x, exponent);
     };
+    const lossFrac = getBacktestMaxLossFractionOfStake();
     let capital = initialBalance > 0 ? initialBalance : 0;
     let peak = capital;
     let maxDrawdown = 0;
@@ -240,7 +242,7 @@ export function BitcoinUpDownStrategy() {
         const odds = p > 0 ? 1 / p - 1 : 0;
         delta = stake * odds - feeUsd;
       } else if (r.botWon === false) {
-        delta = -stake - feeUsd;
+        delta = -stake * lossFrac - feeUsd;
       }
       capital += delta;
       netPnlMap.set(`${r.eventSlug}-${r.endDate ?? ''}`, delta);
@@ -272,6 +274,7 @@ export function BitcoinUpDownStrategy() {
       const x = p * (1 - p);
       return stakeUsd * 0.25 * Math.pow(x, 2);
     };
+    const lossFrac = getBacktestMaxLossFractionOfStake();
     let capital = initialBalance > 0 ? initialBalance : 0;
     let peak = capital;
     let maxDrawdown = 0;
@@ -284,11 +287,14 @@ export function BitcoinUpDownStrategy() {
       const feeUsd = estimateCryptoTakerFeeUsd(stake, p);
       feesPaid += feeUsd;
       let delta = 0;
-      if (p != null && r.botWon === true) {
+      if (r.botStopLossExit === true) {
+        /** Perte plafonnée par la règle drawdown (comme le stop), pas une sortie worst 1¢ (−~100 %). */
+        delta = -stake * lossFrac - feeUsd;
+      } else if (p != null && r.botWon === true) {
         const odds = p > 0 ? 1 / p - 1 : 0;
         delta = stake * odds - feeUsd;
       } else if (r.botWon === false) {
-        delta = -stake - feeUsd;
+        delta = -stake * lossFrac - feeUsd;
       }
       capital += delta;
       netPnlMap.set(`${r.eventSlug}-${r.endDate ?? ''}`, delta);
@@ -304,6 +310,7 @@ export function BitcoinUpDownStrategy() {
       withSimul,
       withSignal,
       won: withSimul.filter((r) => r.botWon === true).length,
+      stopLossExits: withSimul.filter((r) => r.botStopLossExit === true).length,
     };
   }, [resolved15m, initialBalance, includeFees]);
 
@@ -971,7 +978,8 @@ export function BitcoinUpDownStrategy() {
                       </span>
                     )}
                     <span className="strat-muted-tight">
-                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
+                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). <strong>Stop-loss</strong> (backtest, défaut = bot) : proxy prix sous <strong>75¢</strong> <em>ou</em> drawdown {'≤'} <strong>−30 %</strong> depuis l’entrée ; le <strong>PNL agrégé</strong> compte une perte max par créneau = <strong>la même fraction drawdown</strong> sur la mise (pas −100 % ni sortie worst 1¢). Désactiver le stop simulé avec{' '}
+                      <code className="trade-history-code-inline">VITE_BACKTEST_STOP_LOSS_ENABLED=false</code>. Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
                     </span>
                   </p>
                   <label className="strat-15m-debug-toggle">
@@ -1071,9 +1079,35 @@ export function BitcoinUpDownStrategy() {
                                     {r.botOrderType ?? '—'}
                                   </td>
                                   <td className="strat-td">
-                                    {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
-                                    {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
-                                    {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
+                                    {r.botStopLossExit === true ? (
+                                      <span
+                                        className="strat-sim-stopped"
+                                        title={
+                                          r.botStopLossObservedPriceP != null && Number.isFinite(Number(r.botStopLossObservedPriceP))
+                                            ? `Proxy observé ${(Number(r.botStopLossObservedPriceP) * 100).toFixed(2)}¢ · ${
+                                                r.botResolutionWouldWin === true
+                                                  ? 'à la résolution ce serait un gain'
+                                                  : r.botResolutionWouldWin === false
+                                                    ? 'à la résolution ce serait une perte totale'
+                                                    : 'résolution inconnue'
+                                              }`
+                                            : undefined
+                                        }
+                                      >
+                                        Stop-loss
+                                      </span>
+                                    ) : (
+                                      <>
+                                        {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
+                                        {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
+                                        {r.botWon == null &&
+                                          (r.winner === null ? (
+                                            <span className="strat-muted">En attente</span>
+                                          ) : (
+                                            <span className="strat-muted">Données indisponibles</span>
+                                          ))}
+                                      </>
+                                    )}
                                   </td>
                                   {backtest15mDebug && (
                                     <td className="strat-td strat-td--debug">
@@ -1097,7 +1131,13 @@ export function BitcoinUpDownStrategy() {
                       <p className="strat-results-foot">
                         Simulation : <strong className="strat-text-green">{backtestResult15m.won}</strong> gagnés /{' '}
                         <strong>{backtestResult15m.withSimul.length}</strong> créneaux résolus avec entrée ·{' '}
-                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) dans {SIGNAL_BAND_PCT_LABEL} (simu CLOB + trades + complément 1−p).
+                        {backtestResult15m.stopLossExits > 0 && (
+                          <>
+                            <strong>{backtestResult15m.stopLossExits}</strong> stop-loss simulé(s) ·{' '}
+                          </>
+                        )}
+                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) dans {SIGNAL_BAND_PCT_LABEL} (CLOB +
+                        trades + complément 1−p, stop-loss hybride aligné bot si activé).
                       </p>
                     )}
                     <div className="strat-actions-row">

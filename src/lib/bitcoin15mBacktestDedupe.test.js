@@ -9,8 +9,8 @@ const SLOT = 15 * 60;
 
 describe('dedupeResultsOnePer15mSlot', () => {
   it('garde une seule ligne par fin de slug', () => {
-    const end = 1_700_000_000;
-    const slug = `btc-updown-15m-${end}`;
+    const start = 1_700_000_000;
+    const slug = `btc-updown-15m-${start}`;
     const a = { eventSlug: slug, tokenIdUp: null };
     const b = { eventSlug: slug, tokenIdUp: 'tok', winner: 'Up' };
     const out = dedupeResultsOnePer15mSlot([a, b]);
@@ -23,7 +23,8 @@ describe('dedupeEnrichedOnePer15mTradeWindow', () => {
   it('fusionne deux lignes même fenêtre d’entrée et garde celle avec signal', () => {
     const ts = 1_700_000_000 + 120;
     const periodEnd = Math.floor(ts / SLOT) * SLOT + SLOT;
-    const slug = `btc-updown-15m-${periodEnd}`;
+    const periodStart = periodEnd - SLOT;
+    const slug = `btc-updown-15m-${periodStart}`;
     const noSignal = {
       eventSlug: slug,
       slotEndSec: periodEnd,
@@ -62,8 +63,8 @@ describe('dedupeEnrichedOnePer15mTradeWindow', () => {
   it('ne fusionne pas deux marchés via botEntryTimestamp : la clé suit le slug (fin de créneau)', () => {
     const slotAEnd = 1_700_000_000;
     const slotBEnd = slotAEnd + SLOT;
-    const slugA = `btc-updown-15m-${slotAEnd}`;
-    const slugB = `btc-updown-15m-${slotBEnd}`;
+    const slugA = `btc-updown-15m-${slotAEnd - SLOT}`;
+    const slugB = `btc-updown-15m-${slotBEnd - SLOT}`;
     const rowA = {
       eventSlug: slugA,
       slotEndSec: slotAEnd,
@@ -88,8 +89,8 @@ describe('dedupeEnrichedOnePer15mTradeWindow', () => {
 });
 
 describe('slotEndMsFrom15mSlug', () => {
-  it('parse le suffixe en secondes', () => {
-    const sec = 1_711_031_700;
-    expect(slotEndMsFrom15mSlug(`btc-updown-15m-${sec}`)).toBe(sec * 1000);
+  it('suffixe = début Gamma → ms fin = (start + 900) * 1000', () => {
+    const startSec = 1_711_031_700;
+    expect(slotEndMsFrom15mSlug(`btc-updown-15m-${startSec}`)).toBe((startSec + SLOT) * 1000);
   });
 });

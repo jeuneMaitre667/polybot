@@ -17,11 +17,11 @@ describe('canonicalSlotEndSecFor15mBacktestRow', () => {
     expect(canonicalSlotEndSecFor15mBacktestRow(r)).toBe(slotEnd);
   });
 
-  it('lit le suffixe slug btc-updown-15m-*', () => {
-    const sec = 1_711_031_700;
+  it('lit le suffixe slug btc-updown-15m-* (début → fin +900 s)', () => {
+    const startSec = 1_711_031_700;
     expect(
-      canonicalSlotEndSecFor15mBacktestRow({ eventSlug: `btc-updown-15m-${sec}`, slotEndSec: 999 })
-    ).toBe(sec);
+      canonicalSlotEndSecFor15mBacktestRow({ eventSlug: `btc-updown-15m-${startSec}`, slotEndSec: 999 })
+    ).toBe(startSec + SLOT_15M_SEC);
   });
 });
 
@@ -32,18 +32,20 @@ describe('build15mBacktestDisplayRows', () => {
 
   it('met le créneau ouvert (topEnd) en première ligne', () => {
     const nowSec = 1_700_000_700;
-    const topEnd = Math.ceil(nowSec / SLOT_15M_SEC) * SLOT_15M_SEC;
+    const boundary = Math.floor(nowSec / SLOT_15M_SEC) * SLOT_15M_SEC;
+    const topEnd = boundary + SLOT_15M_SEC;
     vi.useFakeTimers();
     vi.setSystemTime(nowSec * 1000);
 
     const currentRow = {
-      eventSlug: `btc-updown-15m-${topEnd}`,
+      eventSlug: `btc-updown-15m-${boundary}`,
       winner: null,
       slotEndSec: topEnd,
     };
-    const prevEnd = topEnd - SLOT_15M_SEC;
+    const prevStart = boundary - SLOT_15M_SEC;
+    const prevEnd = prevStart + SLOT_15M_SEC;
     const prevRow = {
-      eventSlug: `btc-updown-15m-${prevEnd}`,
+      eventSlug: `btc-updown-15m-${prevStart}`,
       winner: 'Down',
       slotEndSec: prevEnd,
     };

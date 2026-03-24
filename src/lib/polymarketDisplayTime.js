@@ -1,6 +1,7 @@
 /**
  * Affichage des heures comme sur polymarket.com (Bitcoin Up/Down) : **Eastern Time (ET)**.
- * Les slugs 15m restent en fin de période UTC ; l’UI Polymarket montre la fenêtre en ET (ex. 12:30–12:45 PM ET).
+ * Slug `btc-updown-15m-{t}` : `t` = **début** fenêtre UTC (Gamma `eventStartTime`) ; `formatBitcoin15mSlotRangeEt`
+ * attend la **fin** de fenêtre (= `t + 900` s).
  */
 
 export const POLYMARKET_DISPLAY_TZ = 'America/New_York';
@@ -25,7 +26,7 @@ function dateEt(ms) {
 
 /**
  * Créneau 15m : "Mar 21, 2026, 12:30 PM – 12:45 PM ET" (style proche du bandeau Polymarket).
- * @param {number} slotEndSec fin du créneau UTC (secondes), comme dans le slug btc-updown-15m-{sec}
+ * @param {number} slotEndSec fin du créneau UTC (secondes) — **pas** le suffixe brut du slug (= début + 900 s)
  */
 export function formatBitcoin15mSlotRangeEt(slotEndSec) {
   if (slotEndSec == null || !Number.isFinite(Number(slotEndSec))) return '—';
@@ -39,6 +40,27 @@ export function formatBitcoin15mSlotRangeEt(slotEndSec) {
     return `${dEnd}, ${tStart} – ${tEnd} ET`;
   }
   return `${dStart}, ${tStart} – ${dEnd}, ${tEnd} ET`;
+}
+
+/**
+ * Horloge « maintenant » en Eastern Time avec secondes (+ abréviation fuseau) — captures / analyse timing quart d’heure.
+ * @param {number} [nowMs]
+ */
+export function formatLiveClockEt(nowMs = Date.now()) {
+  const n = Number(nowMs);
+  if (!Number.isFinite(n)) return '—';
+  return new Date(n).toLocaleString('en-US', {
+    timeZone: POLYMARKET_DISPLAY_TZ,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
 }
 
 /** Horodatage d’un trade / instant : "Mar 21, 2026, 4:48:03 PM ET" */

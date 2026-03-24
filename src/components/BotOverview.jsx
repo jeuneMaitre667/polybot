@@ -3,7 +3,7 @@ import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
 import { TradeHistory } from '@/components/TradeHistory.jsx';
-import { formatBitcoin15mSlotRangeEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
+import { formatBitcoin15mSlotRangeEt, formatLiveClockEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
 import { isLive15mEntryForbiddenNow } from '@/lib/bitcoin15mSlotEntryTiming.js';
 import {
   ORDER_BOOK_MARKET_WORST_P,
@@ -675,8 +675,19 @@ export function BotOverview() {
                 <div className="overview-watch-empty">Chargement carnet…</div>
               ) : (
                 <>
-                  <div className="overview-watch-signal-slot" title="Créneau lu comme sur Polymarket (ET)">
-                    {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
+                  <div
+                    className="overview-watch-signal-slot"
+                    title="Créneau Polymarket (ET). Heure live = horloge du navigateur en Eastern Time."
+                  >
+                    <span className="overview-watch-signal-slot__range">
+                      {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
+                    </span>
+                    <span
+                      className="overview-watch-signal-slot__live"
+                      title={`UTC (capture) : ${new Date(nowMs).toISOString()}`}
+                    >
+                      Heure live (ET) : {formatLiveClockEt(nowMs)}
+                    </span>
                   </div>
                   {!miseMaxSlotOpen && (
                     <div className="overview-watch-signal-warn">Créneau fermé ou carnet indisponible — valeurs peuvent être vides.</div>

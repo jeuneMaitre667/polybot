@@ -43,6 +43,23 @@ function loadManualEntries(historyAddress) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
     }
+    // Fallback de migration: reprendre la dernière liste existante
+    // si l'adresse source a changé (wallet -> bot funder, etc.).
+    let best = null;
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('trade-history-topups:')) continue;
+      const v = localStorage.getItem(k);
+      if (!v) continue;
+      try {
+        const arr = JSON.parse(v);
+        if (!Array.isArray(arr) || arr.length === 0) continue;
+        if (!best || arr.length > best.length) best = arr;
+      } catch {
+        // ignore parse issues
+      }
+    }
+    if (best) return best;
     return defaultManualEntries();
   } catch {
     return defaultManualEntries();
@@ -82,7 +99,8 @@ function exportCSV(trades, columns) {
  *   hideCardTitle?: boolean,
  *   botFunderCandidates?: (string|null|undefined)[],
  *   balanceHistory?: { at?: string, balance?: number|string }[] | null,
- *   currentBalanceUsd?: number|null
+ *   currentBalanceUsd?: number|null,
+ *   useRealBalancePnl?: boolean
  * }} props
  * botFunderCandidates : ex. clobFunderAddress depuis last-order (15m puis horaire) — aligné sur le compte Polymarket du bot.
  */
@@ -91,6 +109,7 @@ export function TradeHistory({
   botFunderCandidates = [],
   balanceHistory = null,
   currentBalanceUsd = null,
+  useRealBalancePnl = true,
 }) {
   const { address } = useWallet();
   const { address: historyAddress, source: historySource } = useMemo(
@@ -122,6 +141,16 @@ export function TradeHistory({
     totalApproxUsdc: bridgeTotalApproxUsdc,
     refresh: refreshBridgeDeposits,
   } = useBridgeDeposits(historyAddress);
+
+  useEffect(() => {
+    if (!historyAddress) return;
+    // setState différé: évite le pattern sync setState-in-effect
+    // tout en rechargeant correctement les entrées quand l'adresse change.
+    const id = setTimeout(() => {
+      setManualEntries(loadManualEntries(historyAddress));
+    }, 0);
+    return () => clearTimeout(id);
+  }, [historyAddress]);
 
   useEffect(() => {
     if (!historyAddress) return;
@@ -190,7 +219,24 @@ export function TradeHistory({
     return tradesToday.reduce((acc, t) => acc + tradeValue(t), 0);
   }, [tradesToday]);
 
+  const buysToday = useMemo(() => {
+    return tradesToday.reduce((acc, t) => {
+      if (t?.side !== 'BUY') return acc;
+      const stake = tradeStakeUsdc(t);
+      return acc + (stake ?? 0);
+    }, 0);
+  }, [tradesToday]);
+
+  const sellsToday = useMemo(() => {
+    return tradesToday.reduce((acc, t) => {
+      if (t?.side !== 'SELL') return acc;
+      const stake = tradeStakeUsdc(t);
+      return acc + (stake ?? 0);
+    }, 0);
+  }, [tradesToday]);
+
   const realPnlToday = useMemo(() => {
+    if (!useRealBalancePnl) return null;
     const history = Array.isArray(balanceHistory) ? balanceHistory : [];
     if (history.length === 0) return null;
     const start = today.start;
@@ -209,7 +255,7 @@ export function TradeHistory({
       : dayPoints[dayPoints.length - 1].balance;
     if (!Number.isFinite(first.balance) || !Number.isFinite(lastBalance)) return null;
     return lastBalance - first.balance;
-  }, [balanceHistory, currentBalanceUsd, today.start]);
+  }, [balanceHistory, currentBalanceUsd, today.start, useRealBalancePnl]);
 
   const manualAdjustment = useMemo(
     () =>
@@ -225,6 +271,15 @@ export function TradeHistory({
     if (!Number.isFinite(balance)) return null;
     return balance - bridgeTotalApproxUsdc - manualAdjustment;
   }, [currentBalanceUsd, bridgeTotalApproxUsdc, manualAdjustment]);
+
+  const overviewMetricValue = realPnlToday != null ? realPnlToday : netPnlSinceTopup;
+  const overviewMetricLabel =
+    realPnlToday != null
+      ? 'PnL réel du jour (solde bot)'
+      : netPnlSinceTopup != null
+        ? 'PnL net session (solde - dépôts)'
+        : 'Cashflow trades du jour (estim.)';
+  const overviewFallbackValue = overviewMetricValue ?? fluxToday;
 
   const pnlCurve = useMemo(() => {
     const sorted = [...filtered].sort((a, b) => {
@@ -345,18 +400,18 @@ export function TradeHistory({
                 <span className="trade-stat-value">{tradesToday.length}</span>
               </div>
               <div className="trade-stat-cell">
-                <span className="trade-stat-label">{realPnlToday != null ? 'PnL réel du jour (solde bot)' : 'Flux du jour (estim.)'}</span>
+                <span className="trade-stat-label">{overviewMetricLabel}</span>
                 <span
                   className={`trade-stat-value ${
-                    (realPnlToday ?? fluxToday) >= 0 ? 'trade-stat-value--green' : 'trade-stat-value--red'
+                    overviewFallbackValue >= 0 ? 'trade-stat-value--green' : 'trade-stat-value--red'
                   }`}
                 >
-                  {(realPnlToday ?? fluxToday) >= 0 ? '+' : ''}
-                  {(realPnlToday ?? fluxToday).toFixed(2)} $
+                  {overviewFallbackValue >= 0 ? '+' : ''}
+                  {overviewFallbackValue.toFixed(2)} $
                 </span>
-                {realPnlToday != null && (
-                  <span className="trade-stat-sub">Flux trades seul : {fluxToday >= 0 ? '+' : ''}{fluxToday.toFixed(2)} $</span>
-                )}
+                <span className="trade-stat-sub">
+                  Cashflow trades: {fluxToday >= 0 ? '+' : ''}{fluxToday.toFixed(2)} $ (achats {buysToday.toFixed(2)} $ / ventes {sellsToday.toFixed(2)} $)
+                </span>
               </div>
               <div className="trade-stat-cell">
                 <span className="trade-stat-label">Total trades</span>

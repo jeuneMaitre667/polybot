@@ -53,6 +53,39 @@ const DETECT_MIN_P = 0.97;
 const SIM_ENTRY_MIN_P = 0.97;
 const SIM_ENTRY_MAX_P = 0.98;
 
+/** Stop-loss backtest 15m : mêmes défauts que le bot (`STOP_LOSS_*` dans `bot-24-7/index.js`). */
+const envBacktestSl = import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED;
+const BACKTEST_STOP_LOSS_ENABLED = envBacktestSl !== 'false' && envBacktestSl !== '0';
+const BACKTEST_STOP_LOSS_TRIGGER_PRICE_P = Math.max(
+  0.01,
+  Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P) || 0.75),
+);
+const BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT = Math.max(
+  1,
+  Math.min(95, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT) || 30),
+);
+const BACKTEST_STOP_LOSS_WORST_PRICE_P = Math.max(
+  0.001,
+  Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_WORST_PRICE_P) || 0.01),
+);
+const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
+  Math.max(0, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MIN_HOLD_MS) || 10_000) / 1000;
+
+const EMPTY_BOT_SIM_15M = {
+  botWouldTake: null,
+  botWon: null,
+  botEntryPrice: null,
+  botEntryTimestamp: null,
+  botOrderType: null,
+  botStopLossExit: false,
+  botStopLossReason: null,
+  botStopLossExitPriceP: null,
+  botStopLossObservedPriceP: null,
+  botStopLossObservedDrawdownPct: null,
+  botStopLossAtTimestamp: null,
+  botResolutionWouldWin: null,
+};
+
 /** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
 function hasCrossedHighConviction(p) {
   return Number.isFinite(p) && p >= DETECT_MIN_P && p <= 1;
@@ -544,6 +577,43 @@ function mergePriceSeriesSorted(a, b) {
 }
 
 /**
+ * Après entrée : premier instant (série du token acheté) où un proxy prix déclenche le stop hybride bot
+ * (prix &lt; seuil **ou** drawdown depuis l’entrée ≤ −X %). Proxy = même `p` que la détection (mid / trades).
+ */
+function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
+  if (!BACKTEST_STOP_LOSS_ENABLED) return { triggered: false };
+  const holdEnd = entryTs + minHoldSec;
+  const arr = Array.isArray(heldSeries) ? [...heldSeries] : [];
+  arr.sort((a, b) => {
+    const ta = toSeconds(a?.t ?? a?.timestamp);
+    const tb = toSeconds(b?.t ?? b?.timestamp);
+    if (ta == null && tb == null) return 0;
+    if (ta == null) return 1;
+    if (tb == null) return -1;
+    return ta - tb;
+  });
+  for (const pt of arr) {
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (t == null || t < holdEnd) continue;
+    const bidProxy = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    if (!Number.isFinite(bidProxy)) continue;
+    const drawdownPct = ((bidProxy - entryPrice) / entryPrice) * 100;
+    const triggerByPrice = bidProxy < BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
+    const triggerByDrawdown = drawdownPct <= -Math.abs(BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT);
+    if (triggerByPrice || triggerByDrawdown) {
+      return {
+        triggered: true,
+        reason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+        t,
+        observedP: bidProxy,
+        drawdownPct: Math.round(drawdownPct * 100) / 100,
+      };
+    }
+  }
+  return { triggered: false };
+}
+
+/**
  * Filtre les points pour la simu : fenêtre autour du créneau ; **hi** large pour garder trades tardifs.
  * L’entrée simulée accepte un `ts` jusqu’à `SLOT_ENTRY_MAX_AFTER_END_SEC` après la fin slug (trades tardifs).
  */
@@ -741,23 +811,51 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit
  * (le hook 1h ne le faisait que si `down.length === 0`, ce qui bloquait la détection 15m).
  */
 function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEndSecExplicit = null) {
-  const empty = { botWouldTake: null, botWon: null, botEntryPrice: null, botEntryTimestamp: null, botOrderType: null };
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
-  if (up.length === 0 && down.length === 0) return empty;
+  if (up.length === 0 && down.length === 0) return { ...EMPTY_BOT_SIM_15M };
 
   const { candidates } = collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit);
 
-  if (candidates.length === 0) return empty;
+  if (candidates.length === 0) return { ...EMPTY_BOT_SIM_15M };
   candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
   const first = candidates[0];
   const settled = winner === 'Up' || winner === 'Down';
+  const resolutionWin = settled ? winner === first.side : null;
+  const heldSeries = first.side === 'Up' ? up : down;
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
+
+  if (sl.triggered) {
+    return {
+      botWouldTake: first.side,
+      botWon: null,
+      botEntryPrice: first.price,
+      botEntryTimestamp: first.ts,
+      botOrderType: 'Marché',
+      botStopLossExit: true,
+      botStopLossReason: sl.reason,
+      botStopLossExitPriceP: Math.round(BACKTEST_STOP_LOSS_WORST_PRICE_P * 1e6) / 1e6,
+      botStopLossObservedPriceP:
+        sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
+      botStopLossObservedDrawdownPct: sl.drawdownPct,
+      botStopLossAtTimestamp: sl.t,
+      botResolutionWouldWin: resolutionWin,
+    };
+  }
+
   return {
     botWouldTake: first.side,
-    botWon: settled ? winner === first.side : null,
+    botWon: resolutionWin,
     botEntryPrice: first.price,
     botEntryTimestamp: first.ts,
     botOrderType: 'Marché',
+    botStopLossExit: false,
+    botStopLossReason: null,
+    botStopLossExitPriceP: null,
+    botStopLossObservedPriceP: null,
+    botStopLossObservedDrawdownPct: null,
+    botStopLossAtTimestamp: null,
+    botResolutionWouldWin: null,
   };
 }
 
@@ -990,13 +1088,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
         const historyUp = filterSeriesTo15mSlot(upBeforeSlot, r.slotEndSec);
         const historyDown = filterSeriesTo15mSlot(downBeforeSlot, r.slotEndSec);
         const historyPointCount = historyUp.length + historyDown.length;
-        const emptySim = {
-          botWouldTake: null,
-          botWon: null,
-          botEntryPrice: null,
-          botEntryTimestamp: null,
-          botOrderType: null,
-        };
+        const emptySim = { ...EMPTY_BOT_SIM_15M };
         let sim =
           historyUp.length > 0 || historyDown.length > 0
             ? computeBotSimulation(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec)
@@ -1056,8 +1148,15 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               marginBeforeSec: SLOT_15M_MARGIN_SEC,
               entryForbiddenSlotFirstSec: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
               entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
+              stopLoss: {
+                enabled: BACKTEST_STOP_LOSS_ENABLED,
+                triggerPriceP: BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
+                maxDrawdownPct: BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT,
+                worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
+                minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
+              },
               label:
-                'Détection ≥97¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug',
+                'Détection ≥97¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
             },
           };
         }

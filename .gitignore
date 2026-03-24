@@ -28,3 +28,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# État runtime du bot (conditionIds déjà redeemés — local / serveur)
+bot-24-7/redeemed-condition-ids.json
