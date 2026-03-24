@@ -19,6 +19,7 @@ git_reset_to_origin_default() {
   local dir="$1"
   # git -C : ne pas « cd » dans le repo — sinon, si fetch échoue puis on rm -rf ce dossier,
   # le CWD du shell devient invalide → « Unable to read current working directory » (CI / SSH).
+  rm -f "$dir/.git/index.lock" 2>/dev/null || true
   rm -f "$dir/.git/refs/remotes/origin/main.lock" "$dir/.git/refs/remotes/origin/master.lock" 2>/dev/null || true
   # Shallow / ref désalignée : forcer la ref distante (évite « cannot lock ref ... expected ... »)
   if git -C "$dir" rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
@@ -76,7 +77,12 @@ else
     echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
     cd "$HOME"
     rm -rf "$REPO_DIR" 2>/dev/null || true
-    git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
+    sleep 1
+    git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR" || {
+      echo "   Reclone échoué — nettoyage forcé du dossier puis nouvel essai."
+      rm -rf "$REPO_DIR" 2>/dev/null || true
+      git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
+    }
   fi
 fi
 
