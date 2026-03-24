@@ -27,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import WebSocket from 'ws';
 import axios from 'axios';
-import { is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
+import { get15mSlotEntryTimingDetail, is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
   getAlignedUpDownGammaPrices,
@@ -698,6 +698,8 @@ function recordSkipReason(reason, source = 'unknown', details = {}) {
     if (details.conditionId) safeDetails.conditionId = String(details.conditionId).slice(0, 120);
     if (details.tokenId) safeDetails.tokenId = String(details.tokenId).slice(0, 120);
     if (Number.isFinite(Number(details.remainingMs))) safeDetails.remainingMs = Math.round(Number(details.remainingMs));
+    if (details.timingBlock) safeDetails.timingBlock = String(details.timingBlock).slice(0, 40);
+    if (Number.isFinite(Number(details.timingOffsetSec))) safeDetails.timingOffsetSec = Math.round(Number(details.timingOffsetSec));
   }
   writeHealth({
     lastSkipReason: r,
@@ -2002,6 +2004,16 @@ function shouldSkipTradeTiming(signal) {
   return isInLastMinute(signal);
 }
 
+function getTimingForbiddenDetails() {
+  if (MARKET_MODE !== '15m') return null;
+  const d = get15mSlotEntryTimingDetail(Math.floor(Date.now() / 1000));
+  if (!d?.forbidden) return null;
+  return {
+    timingBlock: d.block,
+    timingOffsetSec: d.offsetSec,
+  };
+}
+
 function getGammaEventsCacheKey(slugMatch) {
   // La fallback dépend du créneau courant (hourly/15m). On inclut donc le slug courant dans la clé.
   const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
@@ -2711,8 +2723,9 @@ async function tryPlaceOrderForSignal(signal) {
   const key = getSignalKey(signal);
   /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
   if (shouldSkipTradeTiming(signal)) {
-    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal.tokenIdToBuy });
-    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, {});
+    const timingDetails = getTimingForbiddenDetails();
+    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal.tokenIdToBuy, ...timingDetails });
+    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, { ...timingDetails });
     return;
   }
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
@@ -3329,8 +3342,9 @@ async function run() {
       const s0 = signals.find((x) => x?.tokenIdToBuy);
       if (s0) {
         const k = getSignalKey(s0);
-        recordSkipReason('timing_forbidden', 'poll', { conditionId: k, tokenId: s0.tokenIdToBuy });
-        logSignalInRangeButNoOrder('poll', 'timing_forbidden', s0, {});
+        const timingDetails = getTimingForbiddenDetails();
+        recordSkipReason('timing_forbidden', 'poll', { conditionId: k, tokenId: s0.tokenIdToBuy, ...timingDetails });
+        logSignalInRangeButNoOrder('poll', 'timing_forbidden', s0, { ...timingDetails });
       }
     }
 
@@ -3414,8 +3428,9 @@ async function run() {
     // Même si on ne place pas d'ordre (last minute), on loggue un breakdown attempt.
     // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
     if (shouldSkipTradeTiming(s)) {
-      recordSkipReason('timing_forbidden', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
-      logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, {});
+      const timingDetails = getTimingForbiddenDetails();
+      recordSkipReason('timing_forbidden', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy, ...timingDetails });
+      logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, { ...timingDetails });
       let attemptAmountUsd = amountUsd;
       if (useBalanceAsSize) {
         const tBal0 = Date.now();

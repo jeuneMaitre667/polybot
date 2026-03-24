@@ -37,12 +37,20 @@ function offsetSecondsInEtQuarterHour(tsSec) {
 }
 
 /**
+ * Retourne le détail de la règle de blocage 15m pour le timestamp donné (ET).
+ * @returns {{ forbidden: boolean, block: 'first_3min' | 'last_4min' | null, offsetSec: number | null }}
+ */
+export function get15mSlotEntryTimingDetail(tsSec) {
+  const o = offsetSecondsInEtQuarterHour(tsSec);
+  if (o == null) return { forbidden: false, block: null, offsetSec: null };
+  if (o < FORBID_FIRST_SEC) return { forbidden: true, block: 'first_3min', offsetSec: o };
+  if (o >= QUARTER_SEC - FORBID_LAST_SEC) return { forbidden: true, block: 'last_4min', offsetSec: o };
+  return { forbidden: false, block: null, offsetSec: o };
+}
+
+/**
  * @param {number} tsSec — typiquement Math.floor(Date.now() / 1000) au moment où le bot décide de trader
  */
 export function is15mSlotEntryTimeForbiddenNow(tsSec) {
-  const o = offsetSecondsInEtQuarterHour(tsSec);
-  if (o == null) return false;
-  if (o < FORBID_FIRST_SEC) return true;
-  if (o >= QUARTER_SEC - FORBID_LAST_SEC) return true;
-  return false;
+  return get15mSlotEntryTimingDetail(tsSec).forbidden;
 }
