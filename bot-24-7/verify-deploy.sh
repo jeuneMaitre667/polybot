@@ -36,12 +36,17 @@ echo "$STATUS_SS"
 
 # HTTP status-server
 echo -n "GET http://localhost:${PORT}/api/health : "
-HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/api/health" 2>/dev/null || echo "000")
+HEALTH=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/api/health" 2>/dev/null || echo "000")
 echo "HTTP $HEALTH"
 
 echo -n "GET http://localhost:${PORT}/api/bot-status : "
-STATUS_HTTP=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/api/bot-status" 2>/dev/null || echo "000")
+STATUS_HTTP=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/api/bot-status" 2>/dev/null || echo "000")
 echo "HTTP $STATUS_HTTP"
+
+echo ""
+echo "=== npm audit (info — ne bloque pas ce script ; vuln. transitives Polymarket souvent sans correctif npm) ==="
+( cd "$BOT_DIR" && npm audit --omit=dev --no-fund ) || true
+echo ""
 
 if [ "$STATUS_HTTP" = "200" ]; then
   echo "=== OK : status-server répond. ==="

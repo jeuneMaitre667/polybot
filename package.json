@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deps:outdated": "npm outdated",
+    "audit:report": "npm audit --omit=dev"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

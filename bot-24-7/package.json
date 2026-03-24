@@ -6,7 +6,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "deps:outdated": "npm outdated",
+    "audit:report": "npm audit --omit=dev"
   },
   "dependencies": {
     "@polymarket/builder-relayer-client": "^0.0.8",
