@@ -1,7 +1,9 @@
-import { useMemo, useState, useId } from 'react';
+import { useMemo, useState, useId, useEffect } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useWallet } from '../context/useWallet';
 import { useTradeHistory } from '../hooks/useTradeHistory';
+import { useBridgeDeposits } from '../hooks/useBridgeDeposits';
+import { resolveTradeHistoryAddress, tradeHistorySourceLabel } from '../lib/tradeHistoryAddress.js';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -19,6 +21,10 @@ function formatWalletShort(addr) {
 function formatPrice(p) {
   if (p == null || Number.isNaN(p)) return '—';
   return `${(Number(p) * 100).toFixed(1)} %`;
+}
+
+function makeEntryId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function tradeStakeUsdc(t) {
@@ -49,13 +55,78 @@ function exportCSV(trades, columns) {
   URL.revokeObjectURL(a.href);
 }
 
-export function TradeHistory({ hideCardTitle = false }) {
+/**
+ * @param {{
+ *   hideCardTitle?: boolean,
+ *   botFunderCandidates?: (string|null|undefined)[],
+ *   balanceHistory?: { at?: string, balance?: number|string }[] | null,
+ *   currentBalanceUsd?: number|null
+ * }} props
+ * botFunderCandidates : ex. clobFunderAddress depuis last-order (15m puis horaire) — aligné sur le compte Polymarket du bot.
+ */
+export function TradeHistory({
+  hideCardTitle = false,
+  botFunderCandidates = [],
+  balanceHistory = null,
+  currentBalanceUsd = null,
+}) {
   const { address } = useWallet();
-  const { trades, loading, error, refresh } = useTradeHistory(address, { limit: 200 });
+  const { address: historyAddress, source: historySource } = useMemo(
+    () =>
+      resolveTradeHistoryAddress({
+        connectedAddress: address,
+        botFunderCandidates,
+      }),
+    [address, botFunderCandidates],
+  );
+  const { trades, loading, error, refresh } = useTradeHistory(historyAddress, { limit: 200 });
   const [search, setSearch] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState('date_desc');
+  const [manualEntries, setManualEntries] = useState([]);
+  const [newManualDate, setNewManualDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [newManualAmount, setNewManualAmount] = useState('');
+  const [newManualLabel, setNewManualLabel] = useState('');
   const chartGradId = `trade-cumul-${useId().replace(/:/g, '')}`;
+  const [chartMode, setChartMode] = useState('balance');
+  const {
+    loading: bridgeLoading,
+    error: bridgeError,
+    depositAddress: bridgeDepositAddress,
+    items: bridgeDeposits,
+    unsupportedItems: bridgeUnsupportedDeposits,
+    inferredTopupItems: bridgeInferredTopups,
+    totalApproxUsdc: bridgeTotalApproxUsdc,
+    refresh: refreshBridgeDeposits,
+  } = useBridgeDeposits(historyAddress);
+
+  useEffect(() => {
+    if (!historyAddress) return;
+    try {
+      const key = `trade-history-topups:${historyAddress.toLowerCase()}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setManualEntries(parsed);
+          return;
+        }
+      }
+      // Pré-remplissage demandé par l'utilisateur.
+      setManualEntries([
+        { id: makeEntryId(), date: format(new Date(Date.now() - 24 * 60 * 60 * 1000), 'yyyy-MM-dd'), amount: 4.71, label: 'Dépôt manuel' },
+        { id: makeEntryId(), date: format(new Date(), 'yyyy-MM-dd'), amount: 10.37, label: 'Dépôt manuel' },
+      ]);
+    } catch (_) {}
+  }, [historyAddress]);
+
+  useEffect(() => {
+    if (!historyAddress) return;
+    try {
+      localStorage.setItem(`trade-history-topups:${historyAddress.toLowerCase()}`, JSON.stringify(manualEntries));
+    } catch (_) {}
+  }, [historyAddress, manualEntries]);
 
   const filtered = useMemo(() => {
     let list = Array.isArray(trades) ? [...trades] : [];
@@ -87,9 +158,14 @@ export function TradeHistory({ hideCardTitle = false }) {
     return list.sort((a, b) => {
       const ta = a.timestamp != null ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000) : 0;
       const tb = b.timestamp != null ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000) : 0;
+      const sa = tradeStakeUsdc(a) ?? 0;
+      const sb = tradeStakeUsdc(b) ?? 0;
+      if (sortBy === 'date_asc') return ta - tb;
+      if (sortBy === 'stake_desc') return sb - sa;
+      if (sortBy === 'stake_asc') return sa - sb;
       return tb - ta;
     });
-  }, [trades, search, dateFrom, dateTo]);
+  }, [trades, search, dateFrom, dateTo, sortBy]);
 
   const today = useMemo(() => {
     const start = new Date();
@@ -109,6 +185,42 @@ export function TradeHistory({ hideCardTitle = false }) {
   const fluxToday = useMemo(() => {
     return tradesToday.reduce((acc, t) => acc + tradeValue(t), 0);
   }, [tradesToday]);
+
+  const realPnlToday = useMemo(() => {
+    const history = Array.isArray(balanceHistory) ? balanceHistory : [];
+    if (history.length === 0) return null;
+    const start = today.start;
+    const dayPoints = history
+      .map((p) => ({
+        atMs: p?.at ? new Date(p.at).getTime() : NaN,
+        balance: Number(p?.balance),
+      }))
+      .filter((p) => Number.isFinite(p.atMs) && Number.isFinite(p.balance))
+      .sort((a, b) => a.atMs - b.atMs);
+    if (dayPoints.length === 0) return null;
+    const firstIdx = dayPoints.findIndex((p) => p.atMs >= start);
+    const first = firstIdx >= 0 ? dayPoints[firstIdx] : dayPoints[0];
+    const lastBalance = Number.isFinite(Number(currentBalanceUsd))
+      ? Number(currentBalanceUsd)
+      : dayPoints[dayPoints.length - 1].balance;
+    if (!Number.isFinite(first.balance) || !Number.isFinite(lastBalance)) return null;
+    return lastBalance - first.balance;
+  }, [balanceHistory, currentBalanceUsd, today.start]);
+
+  const manualAdjustment = useMemo(
+    () =>
+      (manualEntries || []).reduce((acc, e) => {
+        const n = Number(e?.amount);
+        return acc + (Number.isFinite(n) && n >= 0 ? n : 0);
+      }, 0),
+    [manualEntries],
+  );
+
+  const netPnlSinceTopup = useMemo(() => {
+    const balance = Number(currentBalanceUsd);
+    if (!Number.isFinite(balance)) return null;
+    return balance - bridgeTotalApproxUsdc - manualAdjustment;
+  }, [currentBalanceUsd, bridgeTotalApproxUsdc, manualAdjustment]);
 
   const pnlCurve = useMemo(() => {
     const sorted = [...filtered].sort((a, b) => {
@@ -132,6 +244,32 @@ export function TradeHistory({ hideCardTitle = false }) {
     }, []);
   }, [filtered]);
 
+  const realBalanceCurve = useMemo(() => {
+    const history = Array.isArray(balanceHistory) ? balanceHistory : [];
+    const points = history
+      .map((p) => {
+        const ts = p?.at ? new Date(p.at).getTime() : NaN;
+        const balance = Number(p?.balance);
+        return { ts, balance };
+      })
+      .filter((p) => Number.isFinite(p.ts) && Number.isFinite(p.balance))
+      .sort((a, b) => a.ts - b.ts);
+    return points.map((p) => ({
+      cumul: Math.round(p.balance * 100) / 100,
+      ts: p.ts,
+      date: format(new Date(p.ts), 'dd/MM/yy HH:mm', { locale: fr }),
+      axisDate: format(new Date(p.ts), 'dd/MM', { locale: fr }),
+    }));
+  }, [balanceHistory]);
+
+  const hasRealBalanceCurve = realBalanceCurve.length > 1;
+  const effectiveChartMode = chartMode === 'balance' && hasRealBalanceCurve ? 'balance' : 'flow';
+  const chartData = effectiveChartMode === 'balance' ? realBalanceCurve : pnlCurve;
+  const chartTitle =
+    effectiveChartMode === 'balance'
+      ? 'Courbe solde bot (USDC, inclut redeem)'
+      : 'Flux cumulé trades (coût achats − ventes, USDC)';
+
   const csvColumns = [
     { label: 'Date', get: (t) => formatDate(t.timestamp) },
     { label: 'Marché', get: (t) => t.title || t.slug || '' },
@@ -154,15 +292,18 @@ export function TradeHistory({ hideCardTitle = false }) {
         <div className={`trade-history-top-text${hideCardTitle ? ' trade-history-top-text--no-title' : ''}`}>
           {!hideCardTitle && <h2 className="trade-history-title">Historique des trades</h2>}
           <p className="trade-history-desc">
-            Trades exécutés sur Polymarket pour le wallet connecté (Data API). Filtres, export CSV et courbe de flux
-            (coût net cumulé).
+            Trades Polymarket (Data API) pour l’adresse affichée ci‑dessous : en priorité{' '}
+            <code className="trade-history-code-inline">VITE_TRADE_HISTORY_ADDRESS</code>, sinon le{' '}
+            <strong>funder</strong> remonté par le bot (<code className="trade-history-code-inline">last-order</code>
+            ), sinon le wallet connecté. Sur un compte email / proxy, l’adresse du <strong>profil Polymarket</strong> peut
+            différer de l’EOA MetaMask — d’où cette résolution automatique.
           </p>
         </div>
         <div className="trade-history-actions">
           <button
             type="button"
             onClick={() => exportCSV(filtered, csvColumns)}
-            disabled={!address || filtered.length === 0}
+            disabled={!historyAddress || filtered.length === 0}
             className="btn btn--default btn--outline trade-history-action-btn"
           >
             Exporter CSV
@@ -170,7 +311,7 @@ export function TradeHistory({ hideCardTitle = false }) {
           <button
             type="button"
             onClick={refresh}
-            disabled={loading || !address}
+            disabled={loading || !historyAddress}
             className="btn btn--default btn--outline trade-history-action-btn"
           >
             Rafraîchir
@@ -179,8 +320,13 @@ export function TradeHistory({ hideCardTitle = false }) {
       </div>
 
       <div className="trade-history-content">
-        {!address ? (
-          <p className="trade-history-connect-msg">Connecte ton wallet pour afficher l&apos;historique des trades.</p>
+        {!historyAddress ? (
+          <p className="trade-history-connect-msg">
+            Aucune adresse pour l’historique : définis{' '}
+            <code className="trade-history-code-inline">VITE_TRADE_HISTORY_ADDRESS</code> (adresse Profil Polymarket),
+            ou laisse le bot enregistrer un <code className="trade-history-code-inline">last-order</code> avec{' '}
+            <code className="trade-history-code-inline">clobFunderAddress</code>, ou connecte un wallet.
+          </p>
         ) : error ? (
           <p className="strat-data-window__body strat-text-red">{error}</p>
         ) : loading ? (
@@ -195,19 +341,29 @@ export function TradeHistory({ hideCardTitle = false }) {
                 <span className="trade-stat-value">{tradesToday.length}</span>
               </div>
               <div className="trade-stat-cell">
-                <span className="trade-stat-label">Flux du jour (estim.)</span>
-                <span className={`trade-stat-value ${fluxToday >= 0 ? 'trade-stat-value--green' : 'trade-stat-value--red'}`}>
-                  {fluxToday >= 0 ? '+' : ''}
-                  {fluxToday.toFixed(2)} $
+                <span className="trade-stat-label">{realPnlToday != null ? 'PnL réel du jour (solde bot)' : 'Flux du jour (estim.)'}</span>
+                <span
+                  className={`trade-stat-value ${
+                    (realPnlToday ?? fluxToday) >= 0 ? 'trade-stat-value--green' : 'trade-stat-value--red'
+                  }`}
+                >
+                  {(realPnlToday ?? fluxToday) >= 0 ? '+' : ''}
+                  {(realPnlToday ?? fluxToday).toFixed(2)} $
                 </span>
+                {realPnlToday != null && (
+                  <span className="trade-stat-sub">Flux trades seul : {fluxToday >= 0 ? '+' : ''}{fluxToday.toFixed(2)} $</span>
+                )}
               </div>
               <div className="trade-stat-cell">
                 <span className="trade-stat-label">Total trades</span>
                 <span className="trade-stat-value">{trades.length}</span>
               </div>
               <div className="trade-stat-cell">
-                <span className="trade-stat-label">Wallet</span>
-                <span className="trade-stat-value trade-stat-value--mono">{formatWalletShort(address)}</span>
+                <span className="trade-stat-label">Adresse (Data API)</span>
+                <span className="trade-stat-value trade-stat-value--mono" title={historyAddress}>
+                  {formatWalletShort(historyAddress)}
+                </span>
+                <span className="trade-stat-sub">{tradeHistorySourceLabel(historySource)}</span>
               </div>
             </div>
 
@@ -230,14 +386,232 @@ export function TradeHistory({ hideCardTitle = false }) {
                 <span>Au</span>
                 <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="input-trade" />
               </label>
+              <label className="trade-filter-label">
+                <span>Tri</span>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="input-trade">
+                  <option value="date_desc">Date (récent → ancien)</option>
+                  <option value="date_asc">Date (ancien → récent)</option>
+                  <option value="stake_desc">Stake (grand → petit)</option>
+                  <option value="stake_asc">Stake (petit → grand)</option>
+                </select>
+              </label>
             </div>
 
-            {pnlCurve.length > 0 && (
+            <div className="trade-filters-row trade-filters-row--overview">
+              <label className="trade-filter-label">
+                <span>Date apport</span>
+                <input
+                  type="date"
+                  value={newManualDate}
+                  onChange={(e) => setNewManualDate(e.target.value)}
+                  className="input-trade"
+                />
+              </label>
+              <label className="trade-filter-label">
+                <span>Montant (USDC)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="ex. 1.25"
+                  value={newManualAmount}
+                  onChange={(e) => setNewManualAmount(e.target.value)}
+                  className="input-trade"
+                />
+              </label>
+              <label className="trade-filter-label">
+                <span>Libellé</span>
+                <input
+                  type="text"
+                  placeholder="ex. Dépôt POL"
+                  value={newManualLabel}
+                  onChange={(e) => setNewManualLabel(e.target.value)}
+                  className="input-trade"
+                />
+              </label>
+              <div className="trade-filter-label">
+                <span>Ajout manuel</span>
+                <button
+                  type="button"
+                  className="btn btn--default btn--outline trade-history-action-btn"
+                  onClick={() => {
+                    const n = Number(String(newManualAmount || '').replace(',', '.').trim());
+                    if (!Number.isFinite(n) || n <= 0) return;
+                    setManualEntries((prev) => [
+                      {
+                        id: makeEntryId(),
+                        date: newManualDate || format(new Date(), 'yyyy-MM-dd'),
+                        amount: Math.round(n * 100) / 100,
+                        label: (newManualLabel || 'Dépôt manuel').trim(),
+                      },
+                      ...(prev || []),
+                    ]);
+                    setNewManualAmount('');
+                    setNewManualLabel('');
+                  }}
+                >
+                  Ajouter
+                </button>
+              </div>
+              <div className="trade-filter-label">
+                <span>Total manuel</span>
+                <div className="trade-stat-value">{manualAdjustment.toFixed(2)} $</div>
+              </div>
+              <div className="trade-filter-label">
+                <span>PNL net 15m (solde - dépôts bridge - ajustement)</span>
+                <div className={`trade-stat-value ${(netPnlSinceTopup ?? 0) >= 0 ? 'trade-stat-value--green' : 'trade-stat-value--red'}`}>
+                  {netPnlSinceTopup == null ? '—' : `${netPnlSinceTopup >= 0 ? '+' : ''}${netPnlSinceTopup.toFixed(2)} $`}
+                </div>
+              </div>
+            </div>
+
+            {manualEntries.length > 0 && (
+              <div className="strat-table-wrap trade-history-table-wrap">
+                <table className="strat-table">
+                  <thead>
+                    <tr>
+                      <th className="strat-th">Date</th>
+                      <th className="strat-th">Libellé</th>
+                      <th className="strat-th strat-th--right">Montant</th>
+                      <th className="strat-th">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {manualEntries.map((e, i) => (
+                      <tr key={e.id || `man-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                        <td className="strat-td strat-muted">{e.date || '—'}</td>
+                        <td className="strat-td">{e.label || 'Dépôt manuel'}</td>
+                        <td className="strat-td strat-td--right">{Number(e.amount || 0).toFixed(2)} $</td>
+                        <td className="strat-td">
+                          <button
+                            type="button"
+                            className="btn btn--default btn--outline trade-history-action-btn"
+                            onClick={() => setManualEntries((prev) => (prev || []).filter((x) => x.id !== e.id))}
+                          >
+                            Supprimer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="trade-filters-row trade-filters-row--overview">
+              <div className="trade-filter-label">
+                <span>Dépôts bridge détectés (auto)</span>
+                <div className="trade-stat-value">{bridgeTotalApproxUsdc.toFixed(2)} $</div>
+                <span className="trade-stat-sub">
+                  {bridgeLoading
+                    ? 'Chargement…'
+                    : `${bridgeDeposits.length} dépôt(s) bridge + ${bridgeInferredTopups.length} transfert(s) USDC entrants détectés`}
+                </span>
+                {bridgeError && <span className="trade-stat-sub strat-text-red">{bridgeError}</span>}
+                {bridgeUnsupportedDeposits.length > 0 && (
+                  <span className="trade-stat-sub">
+                    Les dépôts non résolus sont exclus du total auto ; utilise l’ajustement manuel si besoin.
+                  </span>
+                )}
+                {bridgeDepositAddress && (
+                  <span className="trade-stat-sub trade-stat-value--mono" title={bridgeDepositAddress}>
+                    adresse dépôt: {formatWalletShort(bridgeDepositAddress)}
+                  </span>
+                )}
+              </div>
+              <div className="trade-filter-label">
+                <span>Actions</span>
+                <button type="button" onClick={refreshBridgeDeposits} disabled={bridgeLoading || !historyAddress} className="btn btn--default btn--outline trade-history-action-btn">
+                  Rafraîchir dépôts
+                </button>
+              </div>
+            </div>
+
+            {bridgeDeposits.length > 0 && (
+              <div className="strat-table-wrap trade-history-table-wrap">
+                <table className="strat-table">
+                  <thead>
+                    <tr>
+                      <th className="strat-th">Date</th>
+                      <th className="strat-th">Token source</th>
+                      <th className="strat-th strat-th--right">Montant approx</th>
+                      <th className="strat-th">Tx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bridgeDeposits.slice(0, 50).map((d, i) => (
+                      <tr key={`${d.txHash || 'dep'}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                        <td className="strat-td strat-muted strat-td--nowrap">
+                          {d.createdTimeMs ? formatDate(d.createdTimeMs) : '—'}
+                        </td>
+                        <td className="strat-td strat-muted">
+                          {d.fromSymbol || 'token'} (chain {d.fromChainId || '—'})
+                        </td>
+                        <td className="strat-td strat-td--right">
+                          {d.amountUsdc != null ? `${Number(d.amountUsdc).toFixed(2)} $` : '—'}
+                        </td>
+                        <td className="strat-td trade-stat-value--mono" title={d.txHash || ''}>
+                          {d.txHash ? `${d.txHash.slice(0, 10)}…${d.txHash.slice(-6)}` : '—'}
+                          {d.valuationSource === 'onchain' ? ' (on-chain)' : d.valuationSource === 'approx_source' ? ' (approx)' : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {bridgeInferredTopups.length > 0 && (
+              <div className="strat-table-wrap trade-history-table-wrap">
+                <table className="strat-table">
+                  <thead>
+                    <tr>
+                      <th className="strat-th">Top-up détecté</th>
+                      <th className="strat-th strat-th--right">Montant</th>
+                      <th className="strat-th">Tx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bridgeInferredTopups.slice(0, 50).map((d, i) => (
+                      <tr key={`${d.txHash || 'inferred'}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                        <td className="strat-td strat-muted">Transfert entrant USDC.e (hors TRADE/REDEEM)</td>
+                        <td className="strat-td strat-td--right">{d.amountUsdc != null ? `${Number(d.amountUsdc).toFixed(2)} $` : '—'}</td>
+                        <td className="strat-td trade-stat-value--mono" title={d.txHash || ''}>
+                          {d.txHash ? `${d.txHash.slice(0, 10)}…${d.txHash.slice(-6)}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {chartData.length > 0 && (
               <div className="trade-chart-panel trade-chart-panel--overview">
-                <p className="trade-chart-panel-title">Flux cumulé (coût achats − ventes, USDC)</p>
+                <div className="trade-history-top trade-history-top--chart">
+                  <p className="trade-chart-panel-title">{chartTitle}</p>
+                  <div className="trade-history-actions">
+                    <button
+                      type="button"
+                      onClick={() => setChartMode('balance')}
+                      disabled={!hasRealBalanceCurve}
+                      className="btn btn--default btn--outline trade-history-action-btn"
+                      aria-pressed={effectiveChartMode === 'balance'}
+                    >
+                      Solde bot
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChartMode('flow')}
+                      className="btn btn--default btn--outline trade-history-action-btn"
+                      aria-pressed={effectiveChartMode === 'flow'}
+                    >
+                      Flux trades
+                    </button>
+                  </div>
+                </div>
                 <div className="trade-chart-h trade-chart-h--overview">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={pnlCurve} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                    <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                       <defs>
                         <linearGradient id={chartGradId} x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--green)" stopOpacity={0.35} />
@@ -334,7 +708,9 @@ export function TradeHistory({ hideCardTitle = false }) {
                 {filtered.length !== trades.length ? ` (${trades.length} au total chargés)` : ''}
               </span>
               <span className="trade-footer-sep"> — </span>
-              <span>wallet {formatWalletShort(address)}</span>
+              <span>
+                {tradeHistorySourceLabel(historySource)} · {formatWalletShort(historyAddress)}
+              </span>
               <span className="trade-footer-sep"> — </span>
               <span className="trade-footer-api">Data API Polymarket</span>
             </div>

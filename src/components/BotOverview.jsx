@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
@@ -105,6 +105,15 @@ export function BotOverview() {
   const hasSignalDecisionLatencyStats = (signalDecisionLatencyStats?.all?.count ?? 0) > 0;
   const hasSignalDecisionLatencyStats15m = (signalDecisionLatencyStats15m?.all?.count ?? 0) > 0;
   const show15m = !!statusUrl15m;
+
+  /** Funder Polymarket (profil) depuis last-order bot — pour aligner l’historique Data API sur le même compte que le bot. */
+  const tradeHistoryBotFunders = useMemo(
+    () =>
+      [data15m?.lastOrder?.clobFunderAddress, data?.lastOrder?.clobFunderAddress].filter(
+        (x) => typeof x === 'string' && x.startsWith('0x'),
+      ),
+    [data15m?.lastOrder?.clobFunderAddress, data?.lastOrder?.clobFunderAddress],
+  );
 
   const {
     avgUsd: miseMaxAvg15m,
@@ -267,10 +276,14 @@ export function BotOverview() {
           </div>
         </div>
         <div className="card">
-          <div className="card-label">Ordres actifs</div>
+          <div className="card-label">Trades enregistrés (24h)</div>
           <div className="overview-two-lines">
             <div>Horaire <span>{orders24h ?? '—'}</span></div>
             <div>15 Min <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
+          </div>
+          <div className="card-sub" style={{ marginTop: 6 }}>
+            Compte les lignes du fichier <code>orders.log</code> du bot — ce n’est pas le nombre d’ordres encore ouverts sur
+            Polymarket.
           </div>
         </div>
       </div>
@@ -589,7 +602,12 @@ export function BotOverview() {
             <div className="line" />
           </div>
         </div>
-        <TradeHistory hideCardTitle />
+        <TradeHistory
+          hideCardTitle
+          botFunderCandidates={tradeHistoryBotFunders}
+          balanceHistory={data15m?.balanceHistory ?? null}
+          currentBalanceUsd={balance15m}
+        />
       </div>
 
       {show15m && (
@@ -675,7 +693,7 @@ export function BotOverview() {
                     </span>
                   </div>
                   <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Best ask live (/price SELL)</span>
+                    <span className="mise-max-meta-label">Best ask live (carnet CLOB, repli /price)</span>
                     <span className="mise-max-meta-value">
                       Up {formatAskCents(miseMaxBestAskLiveUp)} · Down {formatAskCents(miseMaxBestAskLiveDown)}
                     </span>
