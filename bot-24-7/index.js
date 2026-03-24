@@ -546,6 +546,8 @@ function shouldLogRedeemRelayerNoSuccess(cid) {
 /** Après échec redeem, prochain essai pour ce `conditionId` pas avant N ms (défaut 2 min — laisse l’oracle CTF rattraper la nuit). */
 const REDEEM_FAIL_BACKOFF_MS = Math.max(30_000, Number(process.env.REDEEM_FAIL_BACKOFF_MS) || 120_000);
 const redeemFailNextAttemptAt = new Map(); // conditionId -> timestamp ms
+/** Une seule alerte Telegram « échec redeem » par conditionId jusqu’au succès (évite spam à chaque retry / cycle). */
+const redeemTelegramFailureNotified = new Set();
 
 /** @type {Set<string> | null} */
 let redeemedConditionIdsSet = null;
@@ -585,6 +587,7 @@ function markConditionRedeemedSuccess(cid) {
   set.add(key);
   redeemFailNextAttemptAt.delete(key);
   redeemRelayerNoSuccessLogAt.delete(key);
+  redeemTelegramFailureNotified.delete(key);
   try {
     const sorted = [...set].sort();
     fs.writeFileSync(REDEEMED_CONDITION_IDS_FILE, JSON.stringify(sorted, null, 0) + '\n', 'utf8');
@@ -626,8 +629,13 @@ function createRelayClientForRedeem() {
     chain: polygon,
     transport: http(polygonRpc),
   });
+  /**
+   * Redeem relayer : si RELAYER_API_KEY + RELAYER_API_KEY_ADDRESS sont définis, on les utilise seuls.
+   * Sinon Builder HMAC. (Avant : Builder + Relayer tous les deux dans .env → le SDK n’envoyait que le Builder ;
+   * des POLY_BUILDER_* faux/expirés donnaient 401 « invalid authorization » même avec de bonnes clés Relayer.)
+   */
   let builderConfig;
-  if (hasPolyBuilderCreds()) {
+  if (!hasRelayerApiCreds() && hasPolyBuilderCreds()) {
     builderConfig = new BuilderConfig({
       localBuilderCreds: {
         key: POLY_BUILDER_API_KEY,
@@ -637,7 +645,7 @@ function createRelayClientForRedeem() {
     });
   }
   const client = new RelayClient(POLY_RELAYER_URL, CHAIN_ID, walletClient, builderConfig, rtx);
-  if (hasRelayerApiCreds() && !hasPolyBuilderCreds()) {
+  if (hasRelayerApiCreds()) {
     attachRelayerApiKeyAuth(client, RELAYER_API_KEY, RELAYER_API_KEY_ADDRESS);
   }
   const signerAddr = walletClient.account?.address?.toLowerCase?.();
@@ -655,7 +663,7 @@ function getRelayClientForRedeem() {
   try {
     relayClientCache = createRelayClientForRedeem();
     if (relayClientCache) {
-      const auth = hasPolyBuilderCreds() ? 'Builder HMAC' : 'Relayer API key';
+      const auth = hasRelayerApiCreds() ? 'Relayer API key' : hasPolyBuilderCreds() ? 'Builder HMAC' : 'inconnu';
       console.log(
         `[Redeem] Relayer Polymarket activé (${CLOB_SIGNATURE_TYPE === 1 ? 'PROXY' : 'SAFE'}, auth: ${auth}) — ${POLY_RELAYER_URL}`
       );
@@ -1204,6 +1212,15 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
 /**
  * @param {{ ok: boolean, conditionId: string, hash?: string, detail?: string, error?: string, viaRelayer?: boolean }} p
  */
+/** Échec redeem : au plus un message Telegram par `conditionId` (retries et backoff silencieux côté Telegram). */
+async function notifyTelegramRedeemFailureOnce(cid, fields) {
+  if (!telegramRedeemAlertsEnabled()) return;
+  const k = String(cid || '').trim();
+  if (!k || redeemTelegramFailureNotified.has(k)) return;
+  redeemTelegramFailureNotified.add(k);
+  await notifyTelegramRedeemEvent({ ok: false, conditionId: cid, ...fields });
+}
+
 async function notifyTelegramRedeemEvent(p) {
   if (!telegramRedeemAlertsEnabled()) return;
   try {
@@ -1531,8 +1548,8 @@ async function tryRedeemResolvedPositions() {
             console.warn(
               `[${new Date().toISOString()}] Redeem relayer — pas de succès pour ${cid.slice(0, 14)}… — ${detail}`
             );
-            await notifyTelegramRedeemEvent({ ok: false, conditionId: cid, detail, viaRelayer: true });
           }
+          await notifyTelegramRedeemFailureOnce(cid, { detail, viaRelayer: true });
         }
       } else {
         const tx = await ctf.redeemPositions(
@@ -1549,9 +1566,7 @@ async function tryRedeemResolvedPositions() {
           await notifyTelegramRedeemEvent({ ok: true, conditionId: cid, hash: receipt.hash, viaRelayer: false });
         } else {
           noteRedeemFailureBackoff(cid);
-          await notifyTelegramRedeemEvent({
-            ok: false,
-            conditionId: cid,
+          await notifyTelegramRedeemFailureOnce(cid, {
             detail: `receipt status=${receipt?.status ?? '?'}`,
             viaRelayer: false,
           });
@@ -1563,7 +1578,7 @@ async function tryRedeemResolvedPositions() {
         markConditionRedeemedSuccess(cid);
       } else {
         noteRedeemFailureBackoff(cid);
-        await notifyTelegramRedeemEvent({ ok: false, conditionId: cid, error: em, viaRelayer: !!relayerClient });
+        await notifyTelegramRedeemFailureOnce(cid, { error: em, viaRelayer: !!relayerClient });
       }
       if (!/no positions to redeem|revert|insufficient|STATE_FAILED|invalid/i.test(em)) {
         logJson('warn', 'Redeem échoué (non bloquant)', {
