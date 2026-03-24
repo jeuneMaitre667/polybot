@@ -17,6 +17,31 @@ function formatUsd(value) {
   return `${Number(value).toFixed(2)} $`;
 }
 
+function formatWalletShort(addr) {
+  if (!addr || typeof addr !== 'string' || addr.length < 12) return '—';
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+const USDC_E_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+
+function encodeUsdcBalanceOf(address) {
+  const a = String(address || '').replace(/^0x/, '').toLowerCase();
+  if (!/^[a-f0-9]{40}$/.test(a)) return null;
+  return `0x70a08231${a.padStart(64, '0')}`;
+}
+
+function hexUsdcToFloat(hexValue) {
+  const h = String(hexValue || '').trim();
+  if (!/^0x[0-9a-fA-F]+$/.test(h)) return null;
+  try {
+    const bn = BigInt(h);
+    const n = Number(bn) / 1_000_000;
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function formatAskCents(p) {
   if (p == null || !Number.isFinite(Number(p))) return '—';
   const c = Number(p) * 100;
@@ -59,6 +84,18 @@ function formatSecondsAgo(iso, nowMs) {
   if (sec < 60) return `${sec} s`;
   const m = Math.floor(sec / 60);
   return `${m} min`;
+}
+
+function pickLiveBestAskP(liveP, bandP) {
+  if (Number.isFinite(Number(liveP))) return Number(liveP);
+  if (Number.isFinite(Number(bandP))) return Number(bandP);
+  return null;
+}
+
+function isPriceInSignalBand(p) {
+  if (p == null || !Number.isFinite(Number(p))) return false;
+  const n = Number(p);
+  return n >= ORDER_BOOK_SIGNAL_MIN_P && n <= ORDER_BOOK_SIGNAL_MAX_P;
 }
 
 function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
@@ -117,6 +154,69 @@ export function BotOverview() {
   const orders24h15m = data15m?.ordersLast24h ?? null;
   const pnl = computePnl(data?.balanceHistory, balance, nowMs);
   const pnl15m = computePnl(data15m?.balanceHistory, balance15m, nowMs);
+  const funder15m = data15m?.lastOrder?.clobFunderAddress ?? null;
+  const signer15m = data15m?.lastOrder?.clobSignerAddress ?? null;
+  const [walletUsdc15m, setWalletUsdc15m] = useState(null);
+  const [walletUsdcAt, setWalletUsdcAt] = useState(null);
+  const preferredWalletAddress = useMemo(() => {
+    const envAddr = String(import.meta.env.VITE_TRADE_HISTORY_ADDRESS || '').trim();
+    if (/^0x[a-fA-F0-9]{40}$/.test(envAddr)) return envAddr;
+    if (typeof funder15m === 'string' && /^0x[a-fA-F0-9]{40}$/.test(funder15m)) return funder15m;
+    return null;
+  }, [funder15m]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchWalletUsdc() {
+      if (!preferredWalletAddress) {
+        if (!cancelled) {
+          setWalletUsdc15m(null);
+          setWalletUsdcAt(null);
+        }
+        return;
+      }
+      const data = encodeUsdcBalanceOf(preferredWalletAddress);
+      if (!data) return;
+      const rpcUrls = ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'];
+      for (const url of rpcUrls) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'eth_call',
+              params: [{ to: USDC_E_POLYGON, data }, 'latest'],
+            }),
+          });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const v = hexUsdcToFloat(json?.result);
+          if (v == null) continue;
+          if (!cancelled) {
+            setWalletUsdc15m(v);
+            setWalletUsdcAt(new Date().toISOString());
+          }
+          return;
+        } catch {
+          // try next RPC
+        }
+      }
+      if (!cancelled) {
+        setWalletUsdc15m(null);
+      }
+    }
+
+    fetchWalletUsdc();
+    const id = setInterval(fetchWalletUsdc, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [preferredWalletAddress]);
+
+  const displayedBalance15m = walletUsdc15m != null ? walletUsdc15m : balance15m;
 
   const tradeLatencyStats = data?.tradeLatencyStats ?? null;
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
@@ -223,12 +323,30 @@ export function BotOverview() {
   const activeNoOrderEvents = Array.isArray(activeStatus?.signalInRangeNoOrderRecent)
     ? activeStatus.signalInRangeNoOrderRecent
     : [];
+  const signalLiveUpP = pickLiveBestAskP(miseMaxBestAskLiveUp, miseMaxBestAskUp);
+  const signalLiveDownP = pickLiveBestAskP(miseMaxBestAskLiveDown, miseMaxBestAskDown);
+  const signalLiveUpInBand = isPriceInSignalBand(signalLiveUpP);
+  const signalLiveDownInBand = isPriceInSignalBand(signalLiveDownP);
   const activeLastSkip = activeStatus?.health?.lastSkipReason ?? null;
   const activeLastSkipSource = activeStatus?.health?.lastSkipSource ?? null;
   const activeLastSkipAt = activeStatus?.health?.lastSkipAt ?? null;
   const activeLastSkipAge = formatSecondsAgo(activeLastSkipAt, nowMs);
+  const activeLastSkipDetails = activeStatus?.health?.lastSkipDetails ?? null;
+  const activeLastSkipTimingBlock =
+    activeLastSkip === 'timing_forbidden' && activeLastSkipDetails?.timingBlock
+      ? String(activeLastSkipDetails.timingBlock)
+      : null;
+  const activeLastSkipTimingSuffix =
+    activeLastSkipTimingBlock === 'first_3min'
+      ? ' · début quart ET'
+      : activeLastSkipTimingBlock === 'last_4min'
+        ? ' · fin quart ET'
+        : activeLastSkipTimingBlock
+          ? ` · ${activeLastSkipTimingBlock}`
+          : '';
   const skipReasonLabels = {
-    timing_forbidden: 'Fenêtre interdite',
+    /** Pas la « fenêtre » 97–98¢ : règle début/fin de quart d’heure en heure ET (comme le bot). */
+    timing_forbidden: 'Entrée interdite (timing ET)',
     degraded_mode: 'Mode incident',
     ws_stale: 'WS stale / mismatch REST',
     cooldown_active: 'Cooldown exécution actif',
@@ -239,7 +357,7 @@ export function BotOverview() {
   };
   const activeLastSkipLabel = activeLastSkip ? (skipReasonLabels[activeLastSkip] ?? activeLastSkip) : null;
   const noOrderReasonLabels = {
-    timing_forbidden: 'Fenêtre interdite',
+    timing_forbidden: 'Entrée interdite (timing ET)',
     cooldown_active: 'Cooldown',
     degraded_mode_pause: 'Mode incident',
     ws_stale_rest_invalid: 'WS stale (REST invalide)',
@@ -347,9 +465,17 @@ export function BotOverview() {
         </div>
         <div className="card">
           <div className="card-label">Solde 15 Min</div>
-          <div className="card-value green">{show15m && balance15m != null ? formatUsd(balance15m) : '—'}</div>
+          <div className="card-value green">{show15m && displayedBalance15m != null ? formatUsd(displayedBalance15m) : '—'}</div>
           <div className="card-sub">
             {show15m && data15m?.at ? new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} · 15m
+          </div>
+          <div className="card-sub">
+            Source: {walletUsdc15m != null ? 'wallet on-chain (USDC.e)' : 'status-server (`balance.json`)'} · Wallet: {preferredWalletAddress ? formatWalletShort(preferredWalletAddress) : '—'}
+            {walletUsdcAt ? ` · sync ${new Date(walletUsdcAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+          </div>
+          <div className="card-sub">
+            Funder bot: {funder15m ? formatWalletShort(funder15m) : '—'}
+            {signer15m ? ` · Signer: ${formatWalletShort(signer15m)}` : ''}
           </div>
         </div>
         <div className="card">
@@ -441,34 +567,109 @@ export function BotOverview() {
           <span className="overview-skip-reason__label">Dernier skip</span>
           <span className="overview-skip-reason__value">
             {activeLastSkipLabel ?? '—'}
+            {activeLastSkipTimingSuffix}
             {activeLastSkipSource ? ` · ${String(activeLastSkipSource).toUpperCase()}` : ''}
             {activeLastSkipAge ? ` · il y a ${activeLastSkipAge}` : ''}
           </span>
         </div>
         <div className="overview-watch-card">
-          <div className="overview-watch-card__title">Watch no-order (live)</div>
-          {activeNoOrderEvents.length > 0 ? (
-            <div className="overview-watch-list">
-              {activeNoOrderEvents.slice(0, 8).map((e, idx) => {
-                const age = formatSecondsAgo(e?.ts, nowMs);
-                const reason = noOrderReasonLabels[e?.reason] ?? e?.reason ?? 'unknown';
-                const source = e?.source ? String(e.source).toUpperCase() : '—';
-                const side = e?.takeSide ?? '—';
-                const bestAsk = e?.bestAskP != null ? `${(Number(e.bestAskP) * 100).toFixed(2)}¢` : '—';
-                return (
-                  <div key={`${e?.ts || 'na'}-${idx}`} className="overview-watch-row">
-                    <span className="overview-watch-row__main">{reason}</span>
-                    <span className="overview-watch-row__meta">
-                      {source} · {side} · {bestAsk}
-                      {age ? ` · il y a ${age}` : ''}
+          <div className="overview-watch-card__columns">
+            <div className="overview-watch-column">
+              <div className="overview-watch-card__title">Watch no-order (live)</div>
+              <p className="overview-watch-card__hint">
+                Signal vu mais ordre non passé (souvent <strong>timing ET</strong> début/fin de quart, pas la bande 97–98¢).
+              </p>
+              {activeNoOrderEvents.length > 0 ? (
+                <div className="overview-watch-list">
+                  {activeNoOrderEvents.slice(0, 3).map((e, idx) => {
+                    const age = formatSecondsAgo(e?.ts, nowMs);
+                    const reason = noOrderReasonLabels[e?.reason] ?? e?.reason ?? 'unknown';
+                    const source = e?.source ? String(e.source).toUpperCase() : '—';
+                    const side = e?.takeSide ?? '—';
+                    const bestAsk = e?.bestAskP != null ? `${(Number(e.bestAskP) * 100).toFixed(2)}¢` : '—';
+                    const askN = e?.bestAskP != null ? Number(e.bestAskP) : null;
+                    const askInSignalBand =
+                      askN != null &&
+                      Number.isFinite(askN) &&
+                      askN >= ORDER_BOOK_SIGNAL_MIN_P &&
+                      askN <= ORDER_BOOK_SIGNAL_MAX_P;
+                    const timingBandHint =
+                      e?.reason === 'timing_forbidden' && askInSignalBand
+                        ? ' · bande prix OK, bloqué par timing ET'
+                        : '';
+                    const timingBlock = e?.timingBlock ? String(e.timingBlock) : null;
+                    const timingDetail =
+                      e?.reason === 'timing_forbidden' && timingBlock
+                        ? ` (${timingBlock === 'first_3min' ? 'début' : timingBlock === 'last_4min' ? 'fin' : timingBlock} quart ET)`
+                        : '';
+                    return (
+                      <div key={`${e?.ts || 'na'}-${idx}`} className="overview-watch-row">
+                        <span className="overview-watch-row__main">
+                          {reason}
+                          {timingDetail}
+                        </span>
+                        <span className="overview-watch-row__meta">
+                          {source} · {side} · {bestAsk}
+                          {age ? ` · il y a ${age}` : ''}
+                          {timingBandHint}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="overview-watch-empty">Aucun événement no-order récent.</div>
+              )}
+            </div>
+            <div className="overview-watch-column overview-watch-column--signal">
+              <div className="overview-watch-card__title">Signaux live (CLOB · BTC 15m)</div>
+              {!show15m ? (
+                <div className="overview-watch-empty">
+                  Configure <code className="overview-watch-code">VITE_BOT_STATUS_URL_15M</code> pour afficher le carnet du
+                  créneau courant.
+                </div>
+              ) : miseMax15mError ? (
+                <div className="overview-watch-empty">{miseMax15mError}</div>
+              ) : miseMax15mLoading && signalLiveUpP == null && signalLiveDownP == null ? (
+                <div className="overview-watch-empty">Chargement carnet…</div>
+              ) : (
+                <>
+                  <div className="overview-watch-signal-slot" title="Créneau lu comme sur Polymarket (ET)">
+                    {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
+                  </div>
+                  {!miseMaxSlotOpen && (
+                    <div className="overview-watch-signal-warn">Créneau fermé ou carnet indisponible — valeurs peuvent être vides.</div>
+                  )}
+                  <div className="overview-watch-signal-row">
+                    <span className="overview-watch-signal-side">Up</span>
+                    <span className="overview-watch-signal-ask">
+                      {formatAskCents(signalLiveUpP)}
+                      {signalLiveUpP != null && (
+                        <span className={signalLiveUpInBand ? 'overview-watch-signal-ok' : 'overview-watch-signal-off'}>
+                          {signalLiveUpInBand ? ` · dans la bande ${signalMinPct}–${signalMaxPct}¢` : ' · hors bande signal'}
+                        </span>
+                      )}
                     </span>
                   </div>
-                );
-              })}
+                  <div className="overview-watch-signal-row">
+                    <span className="overview-watch-signal-side">Down</span>
+                    <span className="overview-watch-signal-ask">
+                      {formatAskCents(signalLiveDownP)}
+                      {signalLiveDownP != null && (
+                        <span className={signalLiveDownInBand ? 'overview-watch-signal-ok' : 'overview-watch-signal-off'}>
+                          {signalLiveDownInBand ? ` · dans la bande ${signalMinPct}–${signalMaxPct}¢` : ' · hors bande signal'}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="overview-watch-signal-meta">
+                    Bande prix signal (≠ timing entrée) : {signalMinPct}–{signalMaxPct}¢ · MAJ {miseMaxBookAge ?? '—'}
+                    {data15m?.signalPriceSource ? ` · source prix bot 15m: ${data15m.signalPriceSource}` : ''}
+                  </div>
+                </>
+              )}
             </div>
-          ) : (
-            <div className="overview-watch-empty">Aucun événement no-order récent.</div>
-          )}
+          </div>
         </div>
 
         <div className="grid-main overview-latency-grid-main">
@@ -667,8 +868,9 @@ export function BotOverview() {
         <TradeHistory
           hideCardTitle
           botFunderCandidates={tradeHistoryBotFunders}
-          balanceHistory={data15m?.balanceHistory ?? null}
-          currentBalanceUsd={balance15m}
+          balanceHistory={walletUsdc15m != null ? null : (data15m?.balanceHistory ?? null)}
+          currentBalanceUsd={displayedBalance15m}
+          useRealBalancePnl={false}
         />
       </div>
 

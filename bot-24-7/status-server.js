@@ -78,6 +78,27 @@ function readJsonFile(filePath) {
   }
 }
 
+/** Derniers `maxBytes` du fichier (UTF-8). Évite de charger tout `bot.log` / gros `orders.log` (bloque le thread HTTP). */
+function readFileTailUtf8(filePath, maxBytes) {
+  try {
+    const st = fs.statSync(filePath);
+    const size = st.size;
+    if (size === 0) return '';
+    const len = Math.min(maxBytes, size);
+    const start = size - len;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, start);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
 function getLastOrder() {
   return readJsonFile(path.join(BOT_DIR, 'last-order.json'));
 }
@@ -102,10 +123,12 @@ function getBalanceHistory(maxPoints = 500) {
 
 /**
  * Compte les ordres dans orders.log sur les 24 dernières heures + stats remplissage (fillRatio, compléments FAK).
- * Win rate : toujours sur toutes les lignes avec champ `won` (comportement historique).
+ * Si orders.log dépasse ~12 Mo, seule la fin du fichier est lue (win rate / stats = approximation sur cette fenêtre).
  */
 function getStats24h() {
   const ordersPath = path.join(BOT_DIR, 'orders.log');
+  /** Au-delà de cette taille, on ne lit que la fin du fichier (ordres récents + win rate sur cette fenêtre). */
+  const ORDERS_LOG_MAX_READ = 12 * 1024 * 1024;
   let ordersLast24h = 0;
   let won = 0;
   let totalWithResult = 0;
@@ -116,7 +139,16 @@ function getStats24h() {
   let ordersWithPartialRetries = 0;
   let partialRetriesSum = 0;
   try {
-    const raw = fs.readFileSync(ordersPath, 'utf8');
+    let raw;
+    const st = fs.statSync(ordersPath);
+    if (st.size <= ORDERS_LOG_MAX_READ) {
+      raw = fs.readFileSync(ordersPath, 'utf8');
+    } else {
+      raw = readFileTailUtf8(ordersPath, ORDERS_LOG_MAX_READ);
+      const parts = raw.split('\n');
+      parts.shift();
+      raw = parts.join('\n');
+    }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const lines = raw.trim().split('\n').filter(Boolean);
     for (const line of lines) {
@@ -666,8 +698,22 @@ function getHealthAlerts(health, config) {
 
 function getSignalInRangeNoOrderRecent(limit = 12) {
   const filePath = path.join(BOT_DIR, 'bot.log');
+  /** bot.log JSONL peut peser des dizaines de Mo — lire seulement la fin pour ne pas bloquer /api/health si /api/bot-status tourne. */
+  const BOT_LOG_TAIL_BYTES = 4 * 1024 * 1024;
   try {
-    const raw = fs.readFileSync(filePath, 'utf8');
+    let raw;
+    try {
+      const st = fs.statSync(filePath);
+      if (st.size <= BOT_LOG_TAIL_BYTES) raw = fs.readFileSync(filePath, 'utf8');
+      else {
+        raw = readFileTailUtf8(filePath, BOT_LOG_TAIL_BYTES);
+        const parts = raw.split('\n');
+        parts.shift();
+        raw = parts.join('\n');
+      }
+    } catch {
+      return [];
+    }
     if (!raw) return [];
     const lines = raw.trim().split('\n').filter(Boolean);
     if (!lines.length) return [];
@@ -688,6 +734,10 @@ function getSignalInRangeNoOrderRecent(limit = 12) {
           remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
           amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
           error: row?.error ?? null,
+          timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
+          timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
+            ? Math.round(Number(row.timingOffsetSec))
+            : null,
         });
       } catch (_) {}
     }
@@ -722,65 +772,90 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/bot-status') {
-    const pm2 = getPm2List();
-    const lastOrder = getLastOrder();
-    const balanceUsd = getBalanceFromFile();
-    const balanceHistory = getBalanceHistory();
-    const config = getBotConfig();
-    const stats = getStats24h();
-    const liquidityReport = getLiquidityReport();
-    const liquidityStats = liquidityReport.windows['72h'].all;
-    const liquidityStats24h = liquidityReport.windows['24h'].all;
-    const tradeLatencyStats = getTradeLatencyStats24h();
-    const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
-    const cycleLatencyStats = getCycleLatencyStats24h();
-    const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
-    const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
-    const health = getHealth();
-    const alerts = getHealthAlerts(health, config);
-    const payload = {
-      status: pm2.status,
-      uptime: pm2.uptime,
-      pid: pm2.pid,
-      balanceUsd,
-      lastOrder,
-      balanceHistory,
-      useMarketOrder: config.useMarketOrder,
-      pollIntervalSec: config.pollIntervalSec,
-      useWebSocket: config.useWebSocket,
-      marketMode: config.marketMode,
-      signalPriceSource: config.signalPriceSource,
-      ordersLast24h: stats.ordersLast24h,
-      winRate: stats.winRate,
-      fillExecutionStats24h: stats.fillExecutionStats24h,
-      health,
-      alerts,
-      liquidityStats,
-      liquidityStats24h,
-      liquidityReport,
-      tradeLatencyStats,
-      tradeLatencyBreakdownStats,
-      cycleLatencyStats,
-      signalDecisionLatencyStats,
-      signalInRangeNoOrderRecent,
-      at: new Date().toISOString(),
-    };
-    if (debugRequested) {
-      const balancePath = path.join(BOT_DIR, 'balance.json');
-      const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
-      const liquidityPath = path.join(BOT_DIR, 'liquidity-history.json');
-      payload._debug = {
-        balanceFileExists: fs.existsSync(balancePath),
-        lastOrderFileExists: fs.existsSync(lastOrderPath),
-        liquidityHistoryFileExists: fs.existsSync(liquidityPath),
-        healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
-        tradeLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'trade-latency-history.json')),
-        cycleLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'cycle-latency-history.json')),
-        signalDecisionLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'signal-decision-latency-history.json')),
-        botDir: BOT_DIR,
-      };
-    }
-    return json(res, payload);
+    /** Rend la main à la boucle d’événements entre blocs sync — sinon /api/health reste bloqué pendant toute la construction du JSON. */
+    const tick = () => new Promise((r) => setImmediate(r));
+    (async () => {
+      try {
+        await tick();
+        const pm2 = getPm2List();
+        await tick();
+        const lastOrder = getLastOrder();
+        await tick();
+        const balanceUsd = getBalanceFromFile();
+        await tick();
+        const balanceHistory = getBalanceHistory();
+        await tick();
+        const config = getBotConfig();
+        await tick();
+        const stats = getStats24h();
+        await tick();
+        const liquidityReport = getLiquidityReport();
+        await tick();
+        const liquidityStats = liquidityReport.windows['72h'].all;
+        const liquidityStats24h = liquidityReport.windows['24h'].all;
+        await tick();
+        const tradeLatencyStats = getTradeLatencyStats24h();
+        await tick();
+        const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
+        await tick();
+        const cycleLatencyStats = getCycleLatencyStats24h();
+        await tick();
+        const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+        await tick();
+        const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
+        await tick();
+        const health = getHealth();
+        const alerts = getHealthAlerts(health, config);
+        const payload = {
+          status: pm2.status,
+          uptime: pm2.uptime,
+          pid: pm2.pid,
+          balanceUsd,
+          lastOrder,
+          balanceHistory,
+          useMarketOrder: config.useMarketOrder,
+          pollIntervalSec: config.pollIntervalSec,
+          useWebSocket: config.useWebSocket,
+          marketMode: config.marketMode,
+          signalPriceSource: config.signalPriceSource,
+          ordersLast24h: stats.ordersLast24h,
+          winRate: stats.winRate,
+          fillExecutionStats24h: stats.fillExecutionStats24h,
+          health,
+          alerts,
+          liquidityStats,
+          liquidityStats24h,
+          liquidityReport,
+          tradeLatencyStats,
+          tradeLatencyBreakdownStats,
+          cycleLatencyStats,
+          signalDecisionLatencyStats,
+          signalInRangeNoOrderRecent,
+          at: new Date().toISOString(),
+        };
+        if (debugRequested) {
+          const balancePath = path.join(BOT_DIR, 'balance.json');
+          const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
+          const liquidityPath = path.join(BOT_DIR, 'liquidity-history.json');
+          payload._debug = {
+            balanceFileExists: fs.existsSync(balancePath),
+            lastOrderFileExists: fs.existsSync(lastOrderPath),
+            liquidityHistoryFileExists: fs.existsSync(liquidityPath),
+            healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
+            tradeLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'trade-latency-history.json')),
+            cycleLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'cycle-latency-history.json')),
+            signalDecisionLatencyHistoryFileExists: fs.existsSync(
+              path.join(BOT_DIR, 'signal-decision-latency-history.json'),
+            ),
+            botDir: BOT_DIR,
+          };
+        }
+        json(res, payload);
+      } catch (e) {
+        json(res, { error: String(e?.message || e) }, 500);
+      }
+    })();
+    return;
   }
 
   json(res, { error: 'Not found' }, 404);
