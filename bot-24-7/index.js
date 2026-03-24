@@ -184,7 +184,9 @@ function writeHealth(updates) {
     } catch (_) {}
     state = { ...state, ...updates, at: new Date().toISOString() };
     fs.writeFileSync(HEALTH_FILE, JSON.stringify(state), 'utf8');
-  } catch (_) {}
+  } catch (e) {
+    console.error('[health] writeHealth échoué:', e?.message ?? e);
+  }
 }
 
 function writeBalance(balanceUsd) {
@@ -3106,13 +3108,22 @@ function startClobWs() {
     });
     console.log('WebSocket CLOB connecté — abonnement best_bid_ask (temps réel).');
     await refreshWsSubscriptions(clobWs);
+    console.log(`[WS] Abonnements : ${wsState.tokenIds.length} jeton(s) (best_bid_ask attendu si marché actif).`);
     wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
     wsPingTimer = setInterval(() => { if (clobWs?.readyState === WebSocket.OPEN) clobWs.ping(); }, WS_PING_INTERVAL_MS);
   });
   clobWs.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString());
-      if (data?.event_type !== 'best_bid_ask') return;
+      if (data?.event_type !== 'best_bid_ask') {
+        if (clobWs._wsNonBookLogged == null) clobWs._wsNonBookLogged = 0;
+        if (clobWs._wsNonBookLogged < 8) {
+          clobWs._wsNonBookLogged += 1;
+          const et = data?.event_type ?? data?.type ?? '(aucun)';
+          console.log(`[WS] message hors best_bid_ask (aperçu) event_type=${et}`);
+        }
+        return;
+      }
       wsLastBidAskAtMs = Date.now();
       if (wsLastBidAskAtMs - wsLastBidAskHealthWriteMs >= 2000) {
         wsLastBidAskHealthWriteMs = wsLastBidAskAtMs;

@@ -658,6 +658,7 @@ function getHealthAlerts(health, config) {
   const now = Date.now();
   const wsAlertAfterSec = Number(process.env.WS_ALERT_AFTER_SEC) || 120;
   const staleWsAfterSec = Number(process.env.WS_STALE_ALERT_AFTER_SEC) || 8;
+  const noBookAfterSec = Number(process.env.WS_NO_BOOK_ALERT_AFTER_SEC) || 45;
   if (config?.useWebSocket && health) {
     const lastChangeMs = health.wsLastChangeAt ? new Date(health.wsLastChangeAt).getTime() : null;
     if (health.wsConnected === false && lastChangeMs && Number.isFinite(lastChangeMs)) {
@@ -672,6 +673,21 @@ function getHealthAlerts(health, config) {
       if (staleForSec >= staleWsAfterSec) {
         alerts.push({ kind: 'stale_ws_data', severity: 'warn', staleForSec, thresholdSec: staleWsAfterSec });
       }
+    }
+    const connectedAtMs = health.wsLastConnectedAt ? new Date(health.wsLastConnectedAt).getTime() : null;
+    if (
+      health.wsConnected === true &&
+      !health.wsLastBidAskAt &&
+      connectedAtMs &&
+      Number.isFinite(connectedAtMs) &&
+      now - connectedAtMs >= noBookAfterSec * 1000
+    ) {
+      alerts.push({
+        kind: 'ws_no_best_bid_ask_yet',
+        severity: 'warn',
+        sinceConnectedSec: Math.max(0, Math.floor((now - connectedAtMs) / 1000)),
+        thresholdSec: noBookAfterSec,
+      });
     }
   }
   if (health?.killSwitchActive) {
