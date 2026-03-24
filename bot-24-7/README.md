@@ -57,7 +57,7 @@ Commandes utiles : `pm2 logs polymarket-bot`, `pm2 restart polymarket-bot`, `pm2
 
 **Serveur de statut (optionnel)** : voir `STATUS-SERVER.md` pour exposer statut et logs au dashboard.
 
-**Alerte si le bot plante** : configurer `ALERT_DISCORD_WEBHOOK_URL` ou `ALERT_TELEGRAM_*` dans `.env`, puis mettre en cron : `*/5 * * * * bash ~/bot-24-7/check-bot-health.sh` (toutes les 5 min).
+**Alertes** : `ALERT_DISCORD_WEBHOOK_URL` ou `ALERT_TELEGRAM_BOT_TOKEN` + `ALERT_TELEGRAM_CHAT_ID` — cron `check-bot-health.sh` (voir `ALERTES.md`). Avec Telegram, le bot envoie aussi **trade**, **redeem** et optionnellement un **digest solde** (`ALERT_TELEGRAM_BALANCE_EVERY_MS`).
 
 ## Hébergement VPS — région autorisée + latence minimale
 

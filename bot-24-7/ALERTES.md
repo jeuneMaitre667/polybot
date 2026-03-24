@@ -39,3 +39,13 @@ Ajoute la ligne :
 ```
 
 Sauvegarde et quitte. Le script s’exécutera toutes les 5 minutes et enverra une alerte si le bot n’est plus « online ».
+
+## Alertes temps réel (trade, redeem, solde)
+
+Avec **`ALERT_TELEGRAM_BOT_TOKEN`** et **`ALERT_TELEGRAM_CHAT_ID`** remplis, le processus **`index.js`** envoie aussi :
+
+- **Trade** : après un ordre accepté (WS ou poll) — côté Up/Down, montant demandé / exécuté, prix moyen, `conditionId`, fin de marché, **PnL latente** estimée (valeur au best bid vs coût), **solde USDC** après trade, **Δ solde depuis le démarrage du bot** (premier solde noté).
+- **Redeem** : succès (lien implicite via hash tx dans le message) ou échec ; solde USDC via RPC après l’événement. Les échecs relayer « sans MINED » suivent le même throttle que le log console (évite le spam).
+- **Solde seul** (optionnel) : `ALERT_TELEGRAM_BALANCE_EVERY_MS` en millisecondes (ex. `3600000` = 1 h), uniquement lors des cycles où le bot exécute le bloc solde (autotrade actif).
+
+Désactiver partiellement : `ALERT_TELEGRAM_TRADE=false` ou `ALERT_TELEGRAM_REDEEM=false`. Redémarrer : `pm2 restart polymarket-bot`.

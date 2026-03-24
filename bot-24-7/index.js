@@ -27,6 +27,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import WebSocket from 'ws';
 import axios from 'axios';
+import {
+  sendTelegramAlert,
+  telegramTradeAlertsEnabled,
+  telegramRedeemAlertsEnabled,
+  telegramBalanceDigestMs,
+  telegramAlertsConfigured,
+} from './telegramAlerts.js';
 import { get15mSlotEntryTimingDetail, is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
@@ -1113,6 +1120,146 @@ async function getUsdcBalanceRpc() {
   return null;
 }
 
+/** Ligne de référence PnL « depuis démarrage process » (premier solde CLOB/RPC noté). */
+let botSessionBaselineUsdc = null;
+let lastTelegramBalanceDigestMs = 0;
+
+function noteSessionBaselineIfNeeded(bal) {
+  if (botSessionBaselineUsdc != null) return;
+  if (bal == null || !Number.isFinite(bal)) return;
+  botSessionBaselineUsdc = bal;
+}
+
+function formatSessionDeltaLine(balanceAfter) {
+  if (botSessionBaselineUsdc == null || balanceAfter == null || !Number.isFinite(balanceAfter)) return '';
+  const d = balanceAfter - botSessionBaselineUsdc;
+  const sign = d >= 0 ? '+' : '';
+  return `Δ solde depuis démarrage bot : ${sign}${d.toFixed(2)} USDC`;
+}
+
+/**
+ * Alerte Telegram après ordre accepté (WS ou poll) : position, remplissage, MTM best bid, solde.
+ * @param {'ws'|'poll'} source
+ * @param {Record<string, unknown>} orderData
+ * @param {import('@polymarket/clob-client').ClobClient | null} clobClient
+ */
+async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
+  if (!telegramTradeAlertsEnabled()) return;
+  try {
+    let balanceAfter = null;
+    if (clobClient) {
+      balanceAfter = await getUsdcSpendableViaClob(clobClient);
+    }
+    if (balanceAfter == null) {
+      balanceAfter = await getUsdcBalanceRpc();
+    }
+    noteSessionBaselineIfNeeded(balanceAfter);
+
+    const tok = orderData?.filledOutcomeTokens;
+    const usdc = orderData?.filledUsdc;
+    const tokenId = orderData?.tokenId;
+    let mtmLine = '';
+    if (tokenId && tok != null && Number.isFinite(tok) && tok > 0) {
+      const bid = await getBestBid(tokenId);
+      if (bid != null && usdc != null && Number.isFinite(usdc)) {
+        const estVal = tok * bid;
+        const mtm = estVal - usdc;
+        const sign = mtm >= 0 ? '+' : '';
+        mtmLine = `PnL latente (vs best bid): ${sign}${mtm.toFixed(2)} USDC\n  (valeur revente ~${estVal.toFixed(2)} USDC, coût ~${usdc.toFixed(2)} USDC, bid ~${(bid * 100).toFixed(2)}¢)`;
+      }
+    }
+
+    const fr = orderData?.fillRatio != null ? `${(Number(orderData.fillRatio) * 100).toFixed(1)} %` : 'n/a';
+    const avg =
+      orderData?.averageFillPriceP != null && Number.isFinite(Number(orderData.averageFillPriceP))
+        ? `${(Number(orderData.averageFillPriceP) * 100).toFixed(2)}¢`
+        : 'n/a';
+    const endMs = orderData?.marketEndMs;
+    const endStr = endMs != null ? new Date(Number(endMs)).toISOString() : 'n/a';
+    const cid = String(orderData?.conditionId || '').slice(0, 20);
+    const amt = orderData?.amountUsd;
+    const amtStr = typeof amt === 'number' && Number.isFinite(amt) ? amt.toFixed(2) : String(amt ?? '?');
+
+    const deltaLine = formatSessionDeltaLine(balanceAfter);
+    const lines = [
+      `✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`,
+      `Côté : ${orderData?.takeSide ?? '?'}`,
+      `Montant demandé : ${amtStr} USDC`,
+      `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
+      `Prix moyen ~${avg}`,
+      `conditionId : ${cid}…`,
+      `Fin marché (UTC) : ${endStr}`,
+      `Position : outcome acheté — à suivre jusqu’à résolution / redeem.`,
+    ];
+    if (mtmLine) lines.push(mtmLine);
+    lines.push(`Solde CLOB (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`);
+    if (deltaLine) lines.push(deltaLine);
+
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify trade:', e?.message || e);
+  }
+}
+
+/**
+ * @param {{ ok: boolean, conditionId: string, hash?: string, detail?: string, error?: string, viaRelayer?: boolean }} p
+ */
+async function notifyTelegramRedeemEvent(p) {
+  if (!telegramRedeemAlertsEnabled()) return;
+  try {
+    const bal = await getUsdcBalanceRpc();
+    noteSessionBaselineIfNeeded(bal);
+    const deltaLine = formatSessionDeltaLine(bal);
+    const cid = String(p.conditionId || '').slice(0, 22);
+    let msg;
+    if (p.ok) {
+      msg = [
+        `✅ Redeem OK`,
+        `conditionId : ${cid}…`,
+        p.hash ? `Tx : ${p.hash}` : '',
+        `Solde USDC (RPC proxy/wallet) : ${bal != null ? bal.toFixed(2) : '?'}`,
+        deltaLine || '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+    } else {
+      msg = [
+        `⚠️ Redeem échoué ou en attente`,
+        `conditionId : ${cid}…`,
+        p.detail ? `Détail : ${p.detail}` : '',
+        p.error ? `Erreur : ${String(p.error).slice(0, 400)}` : '',
+        p.viaRelayer != null ? `Via relayer : ${p.viaRelayer ? 'oui' : 'non'}` : '',
+        `Solde USDC (RPC) : ${bal != null ? bal.toFixed(2) : '?'}`,
+        deltaLine || '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+    await sendTelegramAlert(msg);
+  } catch (e) {
+    console.warn('[Telegram] notify redeem:', e?.message || e);
+  }
+}
+
+/** Digest solde périodique si ALERT_TELEGRAM_BALANCE_EVERY_MS > 0 */
+async function maybeTelegramBalanceDigest(balanceAfter) {
+  const iv = telegramBalanceDigestMs();
+  if (!iv || !telegramAlertsConfigured()) return;
+  const now = Date.now();
+  if (now - lastTelegramBalanceDigestMs < iv) return;
+  lastTelegramBalanceDigestMs = now;
+  noteSessionBaselineIfNeeded(balanceAfter);
+  const delta = formatSessionDeltaLine(balanceAfter);
+  const body = [
+    `📊 Solde USDC (cycle)`,
+    balanceAfter != null && Number.isFinite(balanceAfter) ? `${balanceAfter.toFixed(2)} USDC` : 'indisponible',
+    delta || '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  await sendTelegramAlert(body);
+}
+
 /** Pas de trade si l’événement se termine dans moins d’une minute. */
 /** Normalise un conditionId en bytes32 (0x + 64 hex). Retourne null si invalide. */
 function conditionIdToBytes32(cid) {
@@ -1357,6 +1504,12 @@ async function tryRedeemResolvedPositions() {
           console.log(
             `[${new Date().toISOString()}] Redeem OK (relayer) — conditionId ${cid.slice(0, 14)}… — tx ${result.transactionHash}`
           );
+          await notifyTelegramRedeemEvent({
+            ok: true,
+            conditionId: cid,
+            hash: result.transactionHash,
+            viaRelayer: true,
+          });
         } else {
           noteRedeemFailureBackoff(cid);
           let detail =
@@ -1378,6 +1531,7 @@ async function tryRedeemResolvedPositions() {
             console.warn(
               `[${new Date().toISOString()}] Redeem relayer — pas de succès pour ${cid.slice(0, 14)}… — ${detail}`
             );
+            await notifyTelegramRedeemEvent({ ok: false, conditionId: cid, detail, viaRelayer: true });
           }
         }
       } else {
@@ -1392,8 +1546,15 @@ async function tryRedeemResolvedPositions() {
           markConditionRedeemedSuccess(cid);
           logJson('info', 'Redeem positions OK', { conditionId: cid.slice(0, 18) + '…', hash: receipt.hash });
           console.log(`[${new Date().toISOString()}] Redeem OK — conditionId ${cid.slice(0, 14)}… — tx ${receipt.hash}`);
+          await notifyTelegramRedeemEvent({ ok: true, conditionId: cid, hash: receipt.hash, viaRelayer: false });
         } else {
           noteRedeemFailureBackoff(cid);
+          await notifyTelegramRedeemEvent({
+            ok: false,
+            conditionId: cid,
+            detail: `receipt status=${receipt?.status ?? '?'}`,
+            viaRelayer: false,
+          });
         }
       }
     } catch (err) {
@@ -1402,6 +1563,7 @@ async function tryRedeemResolvedPositions() {
         markConditionRedeemedSuccess(cid);
       } else {
         noteRedeemFailureBackoff(cid);
+        await notifyTelegramRedeemEvent({ ok: false, conditionId: cid, error: em, viaRelayer: !!relayerClient });
       }
       if (!/no positions to redeem|revert|insufficient|STATE_FAILED|invalid/i.test(em)) {
         logJson('warn', 'Redeem échoué (non bloquant)', {
@@ -2998,6 +3160,7 @@ async function tryPlaceOrderForSignal(signal) {
     };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
+    void notifyTelegramTradeSuccess('ws', orderData, clobClient);
     logJson('info', 'Ordre placé (WS)', {
       takeSide: signalWithPrice.takeSide,
       amountUsd,
@@ -3422,6 +3585,7 @@ async function run() {
     }
 
     let amountUsd = orderSizeUsd;
+    let balanceForDigest = null;
     await profiler.measure('balance', async () => {
       if (useBalanceAsSize) {
         const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
@@ -3435,12 +3599,16 @@ async function run() {
         else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
         else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
         writeBalance(balance);
+        balanceForDigest = balance;
         if (amountUsd < orderSizeMinUsd) return;
       } else {
         const balanceForStatus = await getBalance();
         writeBalance(balanceForStatus);
+        balanceForDigest = balanceForStatus;
       }
     });
+    noteSessionBaselineIfNeeded(balanceForDigest);
+    void maybeTelegramBalanceDigest(balanceForDigest);
     // Même si le wallet est < min et qu'aucun ordre ne sera placé, on continue pour pouvoir logger
     // des timings d'évaluation (bestAsk/creds/balance/book) dans trade-latency-history.json.
 
@@ -3651,6 +3819,7 @@ async function run() {
       };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
+      void notifyTelegramTradeSuccess('poll', orderData, clobClient);
       logJson('info', 'Ordre placé', {
         takeSide: s.takeSide,
         amountUsd,
