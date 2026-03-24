@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - uses: actions/checkout@v4
+
       - name: Deploy bot horaire via SSH
         if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'hourly') }}
         env:
@@ -41,8 +43,9 @@ jobs:
           fi
           echo "$SSH_KEY" > key.pem
           chmod 600 key.pem
-          # ServerAlive* : limite les « Broken pipe » ; timeout global 1 h (npm install sur petit VPS peut être lent).
-          timeout 3600 ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          SSH_OPTS="-i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6"
+          scp $SSH_OPTS bot-24-7/ci-redeploy-remote.sh "ubuntu@${SSH_HOST}:/tmp/ci-redeploy-remote.sh"
+          timeout 3600 ssh $SSH_OPTS "ubuntu@${SSH_HOST}" "chmod +x /tmp/ci-redeploy-remote.sh && bash /tmp/ci-redeploy-remote.sh"
           rm -f key.pem
 
       - name: Deploy bot 15m via SSH
@@ -61,5 +64,7 @@ jobs:
           fi
           echo "$SSH_KEY_15M" > key15m.pem
           chmod 600 key15m.pem
-          timeout 3600 ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          SSH_OPTS="-i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6"
+          scp $SSH_OPTS bot-24-7/ci-redeploy-remote.sh "ubuntu@${SSH_HOST_15M}:/tmp/ci-redeploy-remote.sh"
+          timeout 3600 ssh $SSH_OPTS "ubuntu@${SSH_HOST_15M}" "chmod +x /tmp/ci-redeploy-remote.sh && bash /tmp/ci-redeploy-remote.sh"
           rm -f key15m.pem
