@@ -39,76 +39,83 @@ git_reset_to_origin_default() {
   fi
 }
 
-echo "=== Redéploiement du bot Polymarket depuis Git ==="
+# Phase 1 : git + rsync. Phase 2 : npm + PM2 — relance via exec pour lire le script **après** rsync
+# (sinon bash garde l’ancienne version en mémoire et npm peut rester sur une logique obsolète).
+if [ "${REDEPLOY_PHASE:-}" != "2" ]; then
+  echo "=== Redéploiement du bot Polymarket depuis Git ==="
 
-# Lire l’URL du repo (depuis .env ou variable d’environnement)
-if [ -f "$ENV_FILE" ]; then
-  GIT_REPO_URL="${GIT_REPO_URL:-$(grep -E '^GIT_REPO_URL=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')}"
-fi
-GIT_REPO_URL="${GIT_REPO_URL:-}"
-
-if [ -z "$GIT_REPO_URL" ]; then
-  echo ""
-  echo "⚠️  GIT_REPO_URL non défini."
-  echo "   Ajoute dans $ENV_FILE une ligne, par exemple :"
-  echo "   GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git"
-  echo ""
-  echo "   Puis relance : ~/bot-24-7/redeploy.sh"
-  exit 1
-fi
-
-echo "   Repo : $GIT_REPO_URL"
-echo ""
-
-cd "$HOME"
-
-# Clone ou mise à jour du repo
-if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "=== Premier clone du repo ==="
-  rm -rf "$REPO_DIR" 2>/dev/null || true
-  git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
-else
-  echo "=== Mise à jour du repo (fetch + reset) ==="
-  # Evite les échecs Git récents (divergent branches / lock refs) en forçant l'état local sur origin/main.
-  # Si Git échoue (lock ref), on reclone pour garantir un état cohérent.
-  if git_reset_to_origin_default "$REPO_DIR"; then
-    :
-  else
-    echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
-    cd "$HOME"
-    rm -rf "$REPO_DIR" 2>/dev/null || true
-    sleep 1
-    git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR" || {
-      echo "   Reclone échoué — nettoyage forcé du dossier puis nouvel essai."
-      rm -rf "$REPO_DIR" 2>/dev/null || true
-      git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
-    }
+  # Lire l’URL du repo (depuis .env ou variable d’environnement)
+  if [ -f "$ENV_FILE" ]; then
+    GIT_REPO_URL="${GIT_REPO_URL:-$(grep -E '^GIT_REPO_URL=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')}"
   fi
+  GIT_REPO_URL="${GIT_REPO_URL:-}"
+
+  if [ -z "$GIT_REPO_URL" ]; then
+    echo ""
+    echo "⚠️  GIT_REPO_URL non défini."
+    echo "   Ajoute dans $ENV_FILE une ligne, par exemple :"
+    echo "   GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git"
+    echo ""
+    echo "   Puis relance : ~/bot-24-7/redeploy.sh"
+    exit 1
+  fi
+
+  echo "   Repo : $GIT_REPO_URL"
+  echo ""
+
+  cd "$HOME"
+
+  # Clone ou mise à jour du repo
+  if [ ! -d "$REPO_DIR/.git" ]; then
+    echo "=== Premier clone du repo ==="
+    rm -rf "$REPO_DIR" 2>/dev/null || true
+    git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
+  else
+    echo "=== Mise à jour du repo (fetch + reset) ==="
+    # Evite les échecs Git récents (divergent branches / lock refs) en forçant l'état local sur origin/main.
+    # Si Git échoue (lock ref), on reclone pour garantir un état cohérent.
+    if git_reset_to_origin_default "$REPO_DIR"; then
+      :
+    else
+      echo "   Git fetch/reset a échoué — reclone du repo pour stabiliser redeploy."
+      cd "$HOME"
+      rm -rf "$REPO_DIR" 2>/dev/null || true
+      sleep 1
+      git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR" || {
+        echo "   Reclone échoué — nettoyage forcé du dossier puis nouvel essai."
+        rm -rf "$REPO_DIR" 2>/dev/null || true
+        git clone --depth 1 "$GIT_REPO_URL" "$REPO_DIR"
+      }
+    fi
+  fi
+
+  if [ ! -d "$REPO_DIR/bot-24-7" ]; then
+    echo "Erreur : le dossier bot-24-7 est introuvable dans le repo."
+    exit 1
+  fi
+
+  # Copie du code vers ~/bot-24-7 en conservant .env
+  echo ""
+  echo "=== Copie du code (conservation de .env) ==="
+  mkdir -p "$BOT_DIR"
+  rsync -a --exclude='.env' --exclude='node_modules' "$REPO_DIR/bot-24-7/" "$BOT_DIR/"
+  if [ -f "$BOT_DIR/.env.example" ] && [ ! -f "$BOT_DIR/.env" ]; then
+    cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
+    echo "   .env créé depuis .env.example — pense à configurer PRIVATE_KEY."
+  fi
+  # Appliquer la config recommandée (ordre au marché, poll 3s) sans écraser PRIVATE_KEY
+  if [ -f "$BOT_DIR/.env" ]; then
+    grep -q '^USE_MARKET_ORDER=' "$BOT_DIR/.env" && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' "$BOT_DIR/.env" || echo "USE_MARKET_ORDER=true" >> "$BOT_DIR/.env"
+    grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=1/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=1" >> "$BOT_DIR/.env"
+    echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=1"
+  fi
+
+  export REDEPLOY_PHASE=2
+  exec bash "$BOT_DIR/redeploy.sh"
 fi
 
-if [ ! -d "$REPO_DIR/bot-24-7" ]; then
-  echo "Erreur : le dossier bot-24-7 est introuvable dans le repo."
-  exit 1
-fi
-
-# Copie du code vers ~/bot-24-7 en conservant .env
 echo ""
-echo "=== Copie du code (conservation de .env) ==="
-mkdir -p "$BOT_DIR"
-rsync -a --exclude='.env' --exclude='node_modules' "$REPO_DIR/bot-24-7/" "$BOT_DIR/"
-if [ -f "$BOT_DIR/.env.example" ] && [ ! -f "$BOT_DIR/.env" ]; then
-  cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
-  echo "   .env créé depuis .env.example — pense à configurer PRIVATE_KEY."
-fi
-# Appliquer la config recommandée (ordre au marché, poll 3s) sans écraser PRIVATE_KEY
-if [ -f "$BOT_DIR/.env" ]; then
-  grep -q '^USE_MARKET_ORDER=' "$BOT_DIR/.env" && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' "$BOT_DIR/.env" || echo "USE_MARKET_ORDER=true" >> "$BOT_DIR/.env"
-  grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=1/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=1" >> "$BOT_DIR/.env"
-  echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=1"
-fi
-
-echo ""
-echo "=== Installation des dépendances ==="
+echo "=== Installation des dépendances (phase 2) ==="
 # Petits Lightsail (512 Mo–1 Go) : « rm -rf node_modules » + « npm ci » pic RAM → processus « Killed » (OOM),
 # le script s’arrête (set -e) et PM2 n’est jamais redémarré. Par défaut : mise à jour **sans** effacer node_modules.
 # Forcer ancien comportement (clean + ci) : REDEPLOY_NPM_CLEAN=1 bash ~/bot-24-7/redeploy.sh
