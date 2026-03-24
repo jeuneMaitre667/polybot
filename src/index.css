@@ -1060,6 +1060,11 @@ body::after {
   color: var(--amber);
 }
 
+/* État créneau / grille ET (15m) — au-dessus de « Dernier skip » */
+.overview-slot-state {
+  margin: 2px 0 8px;
+}
+
 .overview-skip-reason {
   margin: -2px 0 10px;
   display: flex;

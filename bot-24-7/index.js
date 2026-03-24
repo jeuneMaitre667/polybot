@@ -370,6 +370,12 @@ const REDEEM_AFTER_MARKET_END_MS =
     : MARKET_MODE === '15m'
       ? 60_000
       : 0;
+/**
+ * Si REDEEM_AFTER_MARKET_END_MS > 0 et qu’un trade n’a ni marketEndMs ni endDate dans les logs : sans ça, le bot tentait quand même le redeem → erreurs / Telegram avant fin de créneau.
+ * Défaut **false** : sans fin de marché connue pour ce conditionId, on ne tente pas le redeem. `REDEEM_ALLOW_UNKNOWN_MARKET_END_MS=true` réactive l’ancien comportement.
+ */
+const REDEEM_ALLOW_UNKNOWN_MARKET_END_MS =
+  String(process.env.REDEEM_ALLOW_UNKNOWN_MARKET_END_MS || '').trim().toLowerCase() === 'true';
 /** Si true : plafonner la taille d’ordre sur la liquidité MIN_P–MAX_PRICE_LIQUIDITY (désactivé par défaut ; avec FAK + worst price, inutile en général). */
 const useLiquidityCap = process.env.USE_LIQUIDITY_CAP === 'true';
 /**
@@ -1423,8 +1429,8 @@ async function tryStopLossForOpenPosition(clobClient) {
 }
 
 /**
- * Dernière `marketEndMs` connue par `conditionId` (orders.log puis last-order écrase).
- * Rempli pour les trades **après** déploiement du champ ; sinon redeem sans ce garde-fou.
+ * Fin de marché par `conditionId` : `marketEndMs` ou `endDate` dans orders.log puis last-order.json (dernier écrase).
+ * Utilisé avec REDEEM_AFTER_MARKET_END_MS pour ne pas tenter le redeem avant la cloche (+ délai).
  */
 function getLatestMarketEndMsByConditionId() {
   /** @type {Map<string, number>} */
@@ -1436,6 +1442,9 @@ function getLatestMarketEndMsByConditionId() {
     let ms = null;
     if (obj.marketEndMs != null && Number.isFinite(Number(obj.marketEndMs))) {
       ms = Number(obj.marketEndMs);
+    }
+    if (ms == null || !Number.isFinite(ms) || ms <= 0) {
+      ms = parseMarketEndDateToMs(obj.endDate);
     }
     if (ms == null || !Number.isFinite(ms) || ms <= 0) return;
     map.set(cid, ms);
@@ -1492,7 +1501,11 @@ async function tryRedeemResolvedPositions() {
     if (isRedeemSkippedByEnv(cid)) continue;
     if (marketEndByCid) {
       const endMs = marketEndByCid.get(String(cid).trim());
-      if (endMs != null && nowMs < endMs + REDEEM_AFTER_MARKET_END_MS) continue;
+      if (endMs == null || !Number.isFinite(endMs)) {
+        if (!REDEEM_ALLOW_UNKNOWN_MARKET_END_MS) continue;
+      } else if (nowMs < endMs + REDEEM_AFTER_MARKET_END_MS) {
+        continue;
+      }
     }
     if (!canAttemptRedeemNow(cid)) continue;
     try {

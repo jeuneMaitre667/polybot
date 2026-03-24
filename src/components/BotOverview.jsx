@@ -584,6 +584,25 @@ export function BotOverview() {
             <span className="overview-alert-badge overview-alert-badge--warn">Risque retard Polymarket</span>
           )}
         </div>
+        {show15m && (
+          <div className="overview-slot-state">
+            <div className="mise-max-meta-row mise-max-meta-row--pills">
+              <span className="mise-max-meta-label">État</span>
+              <span className="mise-max-meta-pills">
+                <span
+                  className={`mise-max-pill ${miseMaxSlotOpen ? 'mise-max-pill--ok' : 'mise-max-pill--muted'}`}
+                >
+                  {miseMaxSlotOpen ? 'Créneau ouvert (UTC)' : 'Créneau fermé'}
+                </span>
+                <span
+                  className={`mise-max-pill ${miseMaxEntryForbiddenEt ? 'mise-max-pill--warn' : 'mise-max-pill--ok'}`}
+                >
+                  {miseMaxEntryForbiddenEt ? 'Entrée interdite (grille ET)' : 'Entrée autorisée (grille ET)'}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
         <div className="overview-skip-reason">
           <span className="overview-skip-reason__label">Dernier skip</span>
           <span className="overview-skip-reason__value">
@@ -1054,22 +1073,6 @@ export function BotOverview() {
                       ) : (
                         '—'
                       )}
-                    </span>
-                  </div>
-
-                  <div className="mise-max-meta-row mise-max-meta-row--pills">
-                    <span className="mise-max-meta-label">État</span>
-                    <span className="mise-max-meta-pills">
-                      <span
-                        className={`mise-max-pill ${miseMaxSlotOpen ? 'mise-max-pill--ok' : 'mise-max-pill--muted'}`}
-                      >
-                        {miseMaxSlotOpen ? 'Créneau ouvert (UTC)' : 'Créneau fermé'}
-                      </span>
-                      <span
-                        className={`mise-max-pill ${miseMaxEntryForbiddenEt ? 'mise-max-pill--warn' : 'mise-max-pill--ok'}`}
-                      >
-                        {miseMaxEntryForbiddenEt ? 'Entrée interdite (grille ET)' : 'Entrée autorisée (grille ET)'}
-                      </span>
                     </span>
                   </div>
 
