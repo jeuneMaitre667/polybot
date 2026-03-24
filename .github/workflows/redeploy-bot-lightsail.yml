@@ -1,7 +1,8 @@
-# Dès qu’on push du code (surtout bot-24-7), mise à jour automatique des bots sur Lightsail.
-# Prérequis : secrets dans le repo (Settings → Secrets and variables → Actions) :
-#   Bot horaire : LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST
-#   Bot 15m (optionnel) : LIGHTSAIL_SSH_KEY_15M (ou même clé que horaire), LIGHTSAIL_HOST_15M
+# Push sur main/master : déploiement **15m uniquement** (bot horaire désactivé / non utilisé).
+# Bot horaire : uniquement via Actions → Run workflow → cible « hourly » ou « both ».
+# Prérequis secrets :
+#   15m : LIGHTSAIL_SSH_KEY_15M, LIGHTSAIL_HOST_15M
+#   Horaire (manuel) : LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST
 
 name: Redeploy bot on Lightsail
 
@@ -14,21 +15,22 @@ on:
   workflow_dispatch: # Lancer à la main : Actions → Redeploy bot on Lightsail → Run workflow
     inputs:
       target:
-        description: 'Quel bot redéployer ?'
+        description: 'Quel bot redéployer ? (push = 15m seulement)'
         required: true
-        default: 'both'
+        default: '15m'
         type: choice
         options:
-          - both
-          - hourly
           - 15m
+          - hourly
+          - both
 
 jobs:
   redeploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Deploy bot horaire via SSH
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'both' || inputs.target == 'hourly' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'hourly') }}
         env:
           SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
@@ -39,11 +41,12 @@ jobs:
           fi
           echo "$SSH_KEY" > key.pem
           chmod 600 key.pem
-          ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          # ServerAlive* : limite les « Broken pipe » ; timeout global 1 h (npm install sur petit VPS peut être lent).
+          timeout 3600 ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key.pem
 
       - name: Deploy bot 15m via SSH
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'both' || inputs.target == '15m' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == '15m')) }}
         env:
           SSH_KEY_15M: ${{ secrets.LIGHTSAIL_SSH_KEY_15M }}
           SSH_HOST_15M: ${{ secrets.LIGHTSAIL_HOST_15M }}
@@ -58,5 +61,5 @@ jobs:
           fi
           echo "$SSH_KEY_15M" > key15m.pem
           chmod 600 key15m.pem
-          ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          timeout 3600 ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key15m.pem
