@@ -2,6 +2,7 @@
 # Redéploiement depuis Lightsail : récupère le code à jour depuis Git puis redémarre le bot.
 # À exécuter sur l'instance (SSH) : ~/bot-24-7/redeploy.sh
 # Prérequis : une fois, définir GIT_REPO_URL dans ~/bot-24-7/.env (voir .env.example).
+# Optionnel : GIT_REDEPLOY_FETCH_RETRIES=8 pour plus de réessais git fetch (défaut 5).
 
 set -euo pipefail
 
@@ -21,14 +22,38 @@ git_reset_to_origin_default() {
   # le CWD du shell devient invalide → « Unable to read current working directory » (CI / SSH).
   rm -f "$dir/.git/index.lock" 2>/dev/null || true
   rm -f "$dir/.git/refs/remotes/origin/main.lock" "$dir/.git/refs/remotes/origin/master.lock" 2>/dev/null || true
-  # Shallow / ref désalignée : forcer la ref distante (évite « cannot lock ref ... expected ... »)
-  if git -C "$dir" rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
-    git -C "$dir" fetch --prune origin "+refs/heads/main:refs/remotes/origin/main" || git -C "$dir" fetch --prune || return 1
-  elif git -C "$dir" rev-parse --verify refs/remotes/origin/master >/dev/null 2>&1; then
-    git -C "$dir" fetch --prune origin "+refs/heads/master:refs/remotes/origin/master" || git -C "$dir" fetch --prune || return 1
-  else
-    git -C "$dir" fetch --prune || return 1
-  fi
+
+  # Plusieurs essais : sur Lightsail, git fetch vers GitHub peut échouer avec
+  # « getpeername() failed errno 107: Transport endpoint is not connected » (socket / réseau transitoire).
+  local max="${GIT_REDEPLOY_FETCH_RETRIES:-5}"
+  local i=1
+  local fetched=0
+  while [ "$i" -le "$max" ]; do
+    if git -C "$dir" rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+      if git -C "$dir" fetch --prune origin "+refs/heads/main:refs/remotes/origin/main" || git -C "$dir" fetch --prune; then
+        fetched=1
+        break
+      fi
+    elif git -C "$dir" rev-parse --verify refs/remotes/origin/master >/dev/null 2>&1; then
+      if git -C "$dir" fetch --prune origin "+refs/heads/master:refs/remotes/origin/master" || git -C "$dir" fetch --prune; then
+        fetched=1
+        break
+      fi
+    else
+      if git -C "$dir" fetch --prune; then
+        fetched=1
+        break
+      fi
+    fi
+    echo "   git fetch échec $i/$max (réseau GitHub / errno 107…) — attente $((i * 8))s puis réessai"
+    if [ "$i" -eq "$max" ]; then
+      return 1
+    fi
+    sleep $((i * 8))
+    i=$((i + 1))
+  done
+  [ "$fetched" = 1 ] || return 1
+
   if git -C "$dir" rev-parse --verify origin/main >/dev/null 2>&1; then
     git -C "$dir" reset --hard origin/main
   elif git -C "$dir" rev-parse --verify origin/master >/dev/null 2>&1; then
