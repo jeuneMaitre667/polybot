@@ -61,13 +61,35 @@ function formatSecondsAgo(iso, nowMs) {
   return `${m} min`;
 }
 
-function computePnl(balanceHistory, currentBalance) {
-  const history = balanceHistory ?? [];
-  const firstBalance = history.length > 0 ? Number(history[0].balance) : null;
+function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
+  const history = Array.isArray(balanceHistory) ? balanceHistory : [];
+  if (!history.length) return null;
+  const sorted = [...history]
+    .filter((p) => p && p.at != null && Number.isFinite(Number(p.balance)))
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  if (!sorted.length) return null;
+
+  const windowMs = 24 * 60 * 60 * 1000;
+  const cutoff = nowMs - windowMs;
   const lastBalance =
-    currentBalance != null ? currentBalance : history.length > 0 ? Number(history[history.length - 1].balance) : null;
-  if (firstBalance == null || lastBalance == null || firstBalance <= 0) return null;
-  return ((lastBalance - firstBalance) / firstBalance) * 100;
+    currentBalance != null ? Number(currentBalance) : Number(sorted[sorted.length - 1].balance);
+  if (!Number.isFinite(lastBalance)) return null;
+
+  // Baseline "24h": dernier point <= cutoff, sinon premier point disponible.
+  const beforeOrAtCutoff = sorted.filter((p) => new Date(p.at).getTime() <= cutoff);
+  let baseline = beforeOrAtCutoff.length
+    ? Number(beforeOrAtCutoff[beforeOrAtCutoff.length - 1].balance)
+    : Number(sorted[0].balance);
+
+  // Garde-fou: éviter un % délirant si la baseline est quasi nulle.
+  const MIN_BASELINE_USD = 1;
+  if (!Number.isFinite(baseline) || baseline < MIN_BASELINE_USD) {
+    const firstUsable = sorted.find((p) => Number(p.balance) >= MIN_BASELINE_USD);
+    baseline = firstUsable ? Number(firstUsable.balance) : null;
+  }
+  if (!(Number.isFinite(baseline) && baseline > 0)) return null;
+
+  return ((lastBalance - baseline) / baseline) * 100;
 }
 
 export function BotOverview() {
@@ -93,8 +115,8 @@ export function BotOverview() {
   const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
   const orders24h = data?.ordersLast24h ?? null;
   const orders24h15m = data15m?.ordersLast24h ?? null;
-  const pnl = computePnl(data?.balanceHistory, balance);
-  const pnl15m = computePnl(data15m?.balanceHistory, balance15m);
+  const pnl = computePnl(data?.balanceHistory, balance, nowMs);
+  const pnl15m = computePnl(data15m?.balanceHistory, balance15m, nowMs);
 
   const tradeLatencyStats = data?.tradeLatencyStats ?? null;
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;

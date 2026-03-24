@@ -27,6 +27,28 @@ function makeEntryId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function defaultManualEntries() {
+  return [
+    { id: makeEntryId(), date: format(new Date(Date.now() - 24 * 60 * 60 * 1000), 'yyyy-MM-dd'), amount: 4.71, label: 'Depot manuel' },
+    { id: makeEntryId(), date: format(new Date(), 'yyyy-MM-dd'), amount: 10.37, label: 'Depot manuel' },
+  ];
+}
+
+function loadManualEntries(historyAddress) {
+  if (!historyAddress) return [];
+  try {
+    const key = `trade-history-topups:${historyAddress.toLowerCase()}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    return defaultManualEntries();
+  } catch {
+    return defaultManualEntries();
+  }
+}
+
 function tradeStakeUsdc(t) {
   const size = Number(t.size) || 0;
   const price = Number(t.price) || 0;
@@ -84,7 +106,7 @@ export function TradeHistory({
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [sortBy, setSortBy] = useState('date_desc');
-  const [manualEntries, setManualEntries] = useState([]);
+  const [manualEntries, setManualEntries] = useState(() => loadManualEntries(historyAddress));
   const [newManualDate, setNewManualDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [newManualAmount, setNewManualAmount] = useState('');
   const [newManualLabel, setNewManualLabel] = useState('');
@@ -104,28 +126,10 @@ export function TradeHistory({
   useEffect(() => {
     if (!historyAddress) return;
     try {
-      const key = `trade-history-topups:${historyAddress.toLowerCase()}`;
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setManualEntries(parsed);
-          return;
-        }
-      }
-      // Pré-remplissage demandé par l'utilisateur.
-      setManualEntries([
-        { id: makeEntryId(), date: format(new Date(Date.now() - 24 * 60 * 60 * 1000), 'yyyy-MM-dd'), amount: 4.71, label: 'Dépôt manuel' },
-        { id: makeEntryId(), date: format(new Date(), 'yyyy-MM-dd'), amount: 10.37, label: 'Dépôt manuel' },
-      ]);
-    } catch (_) {}
-  }, [historyAddress]);
-
-  useEffect(() => {
-    if (!historyAddress) return;
-    try {
       localStorage.setItem(`trade-history-topups:${historyAddress.toLowerCase()}`, JSON.stringify(manualEntries));
-    } catch (_) {}
+    } catch {
+      // ignore localStorage write errors
+    }
   }, [historyAddress, manualEntries]);
 
   const filtered = useMemo(() => {

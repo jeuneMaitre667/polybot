@@ -337,9 +337,11 @@ const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 /** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
-/** Garde-fou: couper la position avant résolution si drawdown <= -30% (sur bid de sortie). */
+/** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
-const stopLossDrawdownPct = Math.max(1, Math.min(95, Number(process.env.STOP_LOSS_DRAWDOWN_PCT) || 30));
+const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.75));
+/** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */
+const stopLossMaxDrawdownPct = Math.max(1, Math.min(95, Number(process.env.STOP_LOSS_MAX_DRAWDOWN_PCT) || 30));
 /** Prix mini accepté pour une vente stop-loss au marché (évite une exécution à 0). */
 const stopLossWorstPriceP = Math.max(0.001, Math.min(0.99, Number(process.env.STOP_LOSS_WORST_PRICE_P) || 0.01));
 /** Délai mini après entrée avant d'armer le stop-loss (évite les déclenchements instantanés). */
@@ -1163,7 +1165,9 @@ async function tryStopLossForOpenPosition(clobClient) {
   if (!(bestBid > 0 && bestBid < 1)) return;
 
   const drawdownPct = ((bestBid - entryPriceP) / entryPriceP) * 100;
-  if (drawdownPct > -Math.abs(stopLossDrawdownPct)) return;
+  const triggerByPrice = bestBid < stopLossTriggerPriceP;
+  const triggerByDrawdown = drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
+  if (!triggerByPrice && !triggerByDrawdown) return;
 
   let tokensToSell = Number(last.filledOutcomeTokens);
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
@@ -1193,7 +1197,9 @@ async function tryStopLossForOpenPosition(clobClient) {
       takeSide,
       orderID: result?.orderID ?? result?.id,
       stopLossExit: true,
-      stopLossDrawdownPctTrigger: -Math.abs(stopLossDrawdownPct),
+      stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+      stopLossMaxDrawdownPct: -Math.abs(stopLossMaxDrawdownPct),
+      stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       stopLossObservedDrawdownPct: Math.round(drawdownPct * 100) / 100,
       stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
       stopLossBestBidP: Math.round(bestBid * 1e6) / 1e6,
@@ -1211,12 +1217,19 @@ async function tryStopLossForOpenPosition(clobClient) {
       conditionId: conditionId.slice(0, 18) + '…',
       takeSide,
       drawdownPct: Math.round(drawdownPct * 100) / 100,
+      triggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+      maxDrawdownPct: -Math.abs(stopLossMaxDrawdownPct),
+      triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
       bestBidP: Math.round(bestBid * 1e6) / 1e6,
       orderID: result?.orderID ?? result?.id,
     });
     console.warn(
-      `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — drawdown ${drawdownPct.toFixed(2)}% (entry ${(entryPriceP * 100).toFixed(2)}¢ → bid ${(bestBid * 100).toFixed(2)}¢)`
+      `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
+        triggerByPrice
+          ? `bid ${(bestBid * 100).toFixed(2)}¢ < seuil ${(stopLossTriggerPriceP * 100).toFixed(2)}¢`
+          : `drawdown ${drawdownPct.toFixed(2)}% <= -${Math.abs(stopLossMaxDrawdownPct)}%`
+      }`
     );
   } catch (err) {
     stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
@@ -3667,7 +3680,7 @@ async function main() {
     }
     if (stopLossEnabled) {
       console.log(
-        `Stop-loss: activé | trigger <= -${Math.abs(stopLossDrawdownPct)}% (bid) | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
+        `Stop-loss: activé | trigger bid < ${(stopLossTriggerPriceP * 100).toFixed(2)}¢ OU drawdown <= -${Math.abs(stopLossMaxDrawdownPct)}% | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
       );
     } else {
       console.log('Stop-loss: désactivé (STOP_LOSS_ENABLED=false).');

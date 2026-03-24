@@ -32,7 +32,7 @@ function parseHexBigInt(hexValue) {
   if (!/^0x[0-9a-fA-F]+$/.test(h)) return null;
   try {
     return BigInt(h);
-  } catch (_) {
+  } catch {
     return null;
   }
 }
@@ -76,7 +76,7 @@ async function fetchReceiptViaEtherscan(txHash, apiKey) {
       timeout: 12000,
     });
     return data?.result || null;
-  } catch (_) {
+  } catch {
     return null;
   }
 }
@@ -89,7 +89,9 @@ async function fetchReceiptViaRpc(txHash, rpcUrls) {
       const provider = new ethers.providers.JsonRpcProvider(u);
       const receipt = await provider.send('eth_getTransactionReceipt', [txHash]);
       if (receipt) return receipt;
-    } catch (_) {}
+    } catch {
+      // ignore current RPC and try next one
+    }
   }
   return null;
 }
@@ -226,7 +228,9 @@ export function useBridgeDeposits(userAddress) {
             if (/^0x[a-f0-9]{64}$/.test(h)) excludedTxHashes.add(h);
           }
         }
-      } catch (_) {}
+      } catch {
+        // activity endpoint is best-effort for exclusions
+      }
 
       const includedHashes = new Set(
         supported
@@ -244,7 +248,6 @@ export function useBridgeDeposits(userAddress) {
           const step = 50_000;
           for (let from = start; from <= latest; from += step) {
             const to = Math.min(latest, from + step - 1);
-            // eslint-disable-next-line no-await-in-loop
             const logs = await provider.getLogs({
               address: USDC_E_POLYGON,
               fromBlock: from,
@@ -270,7 +273,9 @@ export function useBridgeDeposits(userAddress) {
               });
             }
           }
-        } catch (_) {}
+        } catch {
+          // fallback inference is optional
+        }
       }
 
       setItems(supported);
