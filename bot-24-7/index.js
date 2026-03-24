@@ -3391,13 +3391,15 @@ async function run() {
       }
     }
 
+    // Redeem avant le garde-fou place_orders : doit tourner même si AUTO_PLACE_ENABLED=false ou kill switch
+    // (récupération USDC), tant que wallet + REDEEM_ENABLED. tryRedeemResolvedPositions() no-op sinon.
+    await profiler.measure('redeem', () => tryRedeemResolvedPositions());
+
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
     if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
       recordSkipReason('degraded_mode', 'poll');
       return;
     }
-
-    await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
     // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
     let clobClient = null;
