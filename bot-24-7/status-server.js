@@ -222,6 +222,7 @@ function getHealth() {
     lastSkipSource: o.lastSkipSource ?? null,
     lastSkipAt: o.lastSkipAt ?? null,
     lastSkipDetails: o.lastSkipDetails ?? null,
+    lastTimingForbiddenSkip: o.lastTimingForbiddenSkip ?? null,
     at: o.at ?? null,
   };
 }

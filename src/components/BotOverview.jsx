@@ -344,6 +344,27 @@ export function BotOverview() {
         : activeLastSkipTimingBlock
           ? ` · ${activeLastSkipTimingBlock}`
           : '';
+
+  const lastTimingForbiddenSkip = activeStatus?.health?.lastTimingForbiddenSkip ?? null;
+  const lastTfAt = lastTimingForbiddenSkip?.at ?? null;
+  const lastTfAge = formatSecondsAgo(lastTfAt, nowMs);
+  const lastTfSource = lastTimingForbiddenSkip?.source ?? null;
+  const lastTfDetails = lastTimingForbiddenSkip?.details ?? null;
+  const lastTfBlock =
+    lastTfDetails?.timingBlock != null ? String(lastTfDetails.timingBlock) : null;
+  const lastTfTimingSuffix =
+    lastTfBlock === 'first_3min'
+      ? ' · début quart ET'
+      : lastTfBlock === 'last_4min'
+        ? ' · fin quart ET'
+        : lastTfBlock
+          ? ` · ${lastTfBlock}`
+          : '';
+  /** Évite doublon si le « dernier skip » global est déjà le même événement timing. */
+  const showDedicatedTimingSkipRow =
+    lastTimingForbiddenSkip != null &&
+    !(activeLastSkip === 'timing_forbidden' && activeLastSkipAt === lastTfAt);
+
   const skipReasonLabels = {
     /** Pas la « fenêtre » 97–98¢ : règle début/fin de quart d’heure en heure ET (comme le bot). */
     timing_forbidden: 'Entrée interdite (timing ET)',
@@ -572,6 +593,17 @@ export function BotOverview() {
             {activeLastSkipAge ? ` · il y a ${activeLastSkipAge}` : ''}
           </span>
         </div>
+        {showDedicatedTimingSkipRow && (
+          <div className="overview-skip-reason overview-skip-reason--timing-secondary">
+            <span className="overview-skip-reason__label">Dernier blocage timing (ET)</span>
+            <span className="overview-skip-reason__value" title="Conservé même si un autre skip a remplacé « Dernier skip »">
+              {skipReasonLabels.timing_forbidden}
+              {lastTfTimingSuffix}
+              {lastTfSource ? ` · ${String(lastTfSource).toUpperCase()}` : ''}
+              {lastTfAge ? ` · il y a ${lastTfAge}` : ''}
+            </span>
+          </div>
+        )}
         <div className="overview-watch-card">
           <div className="overview-watch-card__columns">
             <div className="overview-watch-column">

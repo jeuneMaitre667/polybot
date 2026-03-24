@@ -701,12 +701,23 @@ function recordSkipReason(reason, source = 'unknown', details = {}) {
     if (details.timingBlock) safeDetails.timingBlock = String(details.timingBlock).slice(0, 40);
     if (Number.isFinite(Number(details.timingOffsetSec))) safeDetails.timingOffsetSec = Math.round(Number(details.timingOffsetSec));
   }
-  writeHealth({
+  const skipAtIso = new Date(now).toISOString();
+  const skipDetails = Object.keys(safeDetails).length ? safeDetails : null;
+  /** `lastSkipReason` est écrasé par tout autre skip ; ce bloc reste consultable après coup (ex. fin de créneau). */
+  const healthPayload = {
     lastSkipReason: r,
     lastSkipSource: s,
-    lastSkipAt: new Date(now).toISOString(),
-    lastSkipDetails: Object.keys(safeDetails).length ? safeDetails : null,
-  });
+    lastSkipAt: skipAtIso,
+    lastSkipDetails: skipDetails,
+  };
+  if (r === 'timing_forbidden') {
+    healthPayload.lastTimingForbiddenSkip = {
+      at: skipAtIso,
+      source: s,
+      details: skipDetails,
+    };
+  }
+  writeHealth(healthPayload);
 }
 
 function getSignalKey(signal) {
