@@ -11,7 +11,7 @@ Quand tu fais **git push** (surtout si tu modifies `bot-24-7/`), une GitHub Acti
 | Nom du secret    | Valeur |
 |------------------|--------|
 | `LIGHTSAIL_SSH_KEY` | Ouvre ta clé `.pem` (Lightsail) dans un éditeur, copie **tout** le contenu (y compris `-----BEGIN ...` et `-----END ...`) et colle-le ici. |
-| `LIGHTSAIL_HOST`    | L’IP de ton instance Lightsail, ex. `34.242.214.109` |
+| `LIGHTSAIL_HOST`    | L’IP de ton instance Lightsail, ex. `34.253.187.142` |
 
 Sans ces secrets, l’Action ne fait rien (et affiche un avertissement).
 
