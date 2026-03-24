@@ -39,6 +39,26 @@ git_reset_to_origin_default() {
   fi
 }
 
+# Phase 2 : install npm ; reprise si ENOTEMPTY sur viem (install incrémentale sans rm -rf complet).
+npm_install_bot_phase2() {
+  cd "$BOT_DIR" || return 1
+  if npm install --no-audit --no-fund; then
+    echo "   npm install OK"
+    return 0
+  fi
+  echo "   npm install échoué (souvent ENOTEMPTY sur viem) — suppression viem + dossiers .viem-* puis réessai"
+  shopt -s nullglob
+  rm -rf node_modules/viem node_modules/.viem-* 2>/dev/null || true
+  shopt -u nullglob
+  if npm install --no-audit --no-fund; then
+    echo "   npm install OK (après nettoyage ciblé)"
+    return 0
+  fi
+  echo "   Échec persistant — rm -rf node_modules puis npm install (pic RAM ; ajouter 1–2 Go de swap si Killed)"
+  rm -rf node_modules
+  npm install --no-audit --no-fund
+}
+
 # Phase 1 : git + rsync. Phase 2 : npm + PM2 — relance via exec pour lire le script **après** rsync
 # (sinon bash garde l’ancienne version en mémoire et npm peut rester sur une logique obsolète).
 if [ "${REDEPLOY_PHASE:-}" != "2" ]; then
@@ -131,8 +151,8 @@ if [ "${REDEPLOY_NPM_CLEAN:-}" = "1" ]; then
     npm install --no-audit --no-fund
   fi
 else
-  echo "   npm install incrémental (pas de rm -rf ; évite OOM sur petit VPS). REDEPLOY_NPM_CLEAN=1 pour forcer un clean."
-  npm install --no-audit --no-fund
+  echo "   npm install incrémental (pas de rm -rf au départ ; reprise auto si ENOTEMPTY). REDEPLOY_NPM_CLEAN=1 pour clean + npm ci."
+  npm_install_bot_phase2
 fi
 
 echo ""
