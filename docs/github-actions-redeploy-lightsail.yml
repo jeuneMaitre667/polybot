@@ -38,7 +38,7 @@ jobs:
           fi
           echo "$SSH_KEY" > key.pem
           chmod 600 key.pem
-          timeout 3600 ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          timeout 3600 ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST "bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key.pem
 
       - name: Deploy bot 15m via SSH
@@ -57,5 +57,5 @@ jobs:
           fi
           echo "$SSH_KEY_15M" > key15m.pem
           chmod 600 key15m.pem
-          timeout 3600 ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
+          timeout 3600 ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6 ubuntu@$SSH_HOST_15M "grep -q '^GIT_REPO_URL=' ~/bot-24-7/.env 2>/dev/null || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> ~/bot-24-7/.env; bash ~/bot-24-7/redeploy.sh && bash ~/bot-24-7/verify-deploy.sh"
           rm -f key15m.pem
