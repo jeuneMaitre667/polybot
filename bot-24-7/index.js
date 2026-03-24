@@ -700,6 +700,8 @@ function recordSkipReason(reason, source = 'unknown', details = {}) {
     if (Number.isFinite(Number(details.remainingMs))) safeDetails.remainingMs = Math.round(Number(details.remainingMs));
     if (details.timingBlock) safeDetails.timingBlock = String(details.timingBlock).slice(0, 40);
     if (Number.isFinite(Number(details.timingOffsetSec))) safeDetails.timingOffsetSec = Math.round(Number(details.timingOffsetSec));
+    if (details.takeSide === 'Up' || details.takeSide === 'Down') safeDetails.takeSide = details.takeSide;
+    if (Number.isFinite(Number(details.bestAskP))) safeDetails.bestAskP = Math.round(Number(details.bestAskP) * 1e6) / 1e6;
   }
   const skipAtIso = new Date(now).toISOString();
   const skipDetails = Object.keys(safeDetails).length ? safeDetails : null;
@@ -2735,7 +2737,13 @@ async function tryPlaceOrderForSignal(signal) {
   /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
   if (shouldSkipTradeTiming(signal)) {
     const timingDetails = getTimingForbiddenDetails();
-    recordSkipReason('timing_forbidden', 'ws', { conditionId: key, tokenId: signal.tokenIdToBuy, ...timingDetails });
+    recordSkipReason('timing_forbidden', 'ws', {
+      conditionId: key,
+      tokenId: signal.tokenIdToBuy,
+      takeSide: signal.takeSide,
+      bestAskP: pickSignalBestAskP(signal),
+      ...timingDetails,
+    });
     logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, { ...timingDetails });
     return;
   }
@@ -3354,7 +3362,13 @@ async function run() {
       if (s0) {
         const k = getSignalKey(s0);
         const timingDetails = getTimingForbiddenDetails();
-        recordSkipReason('timing_forbidden', 'poll', { conditionId: k, tokenId: s0.tokenIdToBuy, ...timingDetails });
+        recordSkipReason('timing_forbidden', 'poll', {
+          conditionId: k,
+          tokenId: s0.tokenIdToBuy,
+          takeSide: s0.takeSide,
+          bestAskP: pickSignalBestAskP(s0),
+          ...timingDetails,
+        });
         logSignalInRangeButNoOrder('poll', 'timing_forbidden', s0, { ...timingDetails });
       }
     }
@@ -3440,7 +3454,13 @@ async function run() {
     // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
     if (shouldSkipTradeTiming(s)) {
       const timingDetails = getTimingForbiddenDetails();
-      recordSkipReason('timing_forbidden', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy, ...timingDetails });
+      recordSkipReason('timing_forbidden', 'poll', {
+        conditionId: key,
+        tokenId: s?.tokenIdToBuy,
+        takeSide: s?.takeSide,
+        bestAskP: pickSignalBestAskP(s),
+        ...timingDetails,
+      });
       logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, { ...timingDetails });
       let attemptAmountUsd = amountUsd;
       if (useBalanceAsSize) {

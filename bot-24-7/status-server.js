@@ -697,6 +697,64 @@ function getHealthAlerts(health, config) {
   return alerts;
 }
 
+/**
+ * Aligne l’API avec health.json : quand le dernier skip timing est plus récent que la dernière ligne
+ * `signal_in_range_but_no_order` dans bot.log (throttle / rotation logs), on préfixe une entrée synthétique.
+ * Sinon on enrichit la ligne log si même fenêtre temporelle mais sans timingBlock.
+ */
+function mergeHealthTimingIntoNoOrderRecent(out, health, limit) {
+  const cap = Array.isArray(out) ? out.slice(0, limit) : [];
+  if (!health || health.lastSkipReason !== 'timing_forbidden' || !health.lastSkipAt) return cap;
+  const d = health.lastSkipDetails;
+  if (!d || typeof d !== 'object') return cap;
+  const synMs = new Date(health.lastSkipAt).getTime();
+  if (!Number.isFinite(synMs)) return cap;
+  const bestAskP = Number.isFinite(Number(d.bestAskP)) ? Math.round(Number(d.bestAskP) * 1e6) / 1e6 : null;
+  const synthetic = {
+    ts: health.lastSkipAt,
+    source: health.lastSkipSource ?? null,
+    reason: 'timing_forbidden',
+    takeSide: d.takeSide === 'Up' || d.takeSide === 'Down' ? d.takeSide : null,
+    bestAskP,
+    conditionId: d.conditionId ?? null,
+    tokenId: d.tokenId != null ? String(d.tokenId).slice(0, 32) : null,
+    remainingMs: Number.isFinite(Number(d.remainingMs)) ? Math.round(Number(d.remainingMs)) : null,
+    amountUsd: null,
+    error: null,
+    timingBlock: d.timingBlock != null ? String(d.timingBlock).slice(0, 40) : null,
+    timingOffsetSec: Number.isFinite(Number(d.timingOffsetSec)) ? Math.round(Number(d.timingOffsetSec)) : null,
+    fromHealthSnapshot: true,
+  };
+  const first = cap[0];
+  const firstMs = first?.ts ? new Date(first.ts).getTime() : null;
+  if (firstMs == null || !Number.isFinite(firstMs)) {
+    return [synthetic, ...cap].slice(0, limit);
+  }
+  if (synMs > firstMs + 500) {
+    return [synthetic, ...cap].slice(0, limit);
+  }
+  if (
+    first &&
+    first.reason === 'timing_forbidden' &&
+    !first.timingBlock &&
+    synthetic.timingBlock &&
+    (Math.abs(synMs - firstMs) < 10 * 60 * 1000 ||
+      (d.conditionId &&
+        first.conditionId &&
+        String(d.conditionId).toLowerCase() === String(first.conditionId).toLowerCase()))
+  ) {
+    cap[0] = {
+      ...first,
+      timingBlock: synthetic.timingBlock,
+      timingOffsetSec: synthetic.timingOffsetSec,
+      takeSide: first.takeSide ?? synthetic.takeSide,
+      bestAskP: first.bestAskP ?? synthetic.bestAskP,
+      fromHealthEnriched: true,
+    };
+  }
+  return cap.slice(0, limit);
+}
+
 function getSignalInRangeNoOrderRecent(limit = 12) {
   const filePath = path.join(BOT_DIR, 'bot.log');
   /** bot.log JSONL peut peser des dizaines de Mo — lire seulement la fin pour ne pas bloquer /api/health si /api/bot-status tourne. */
@@ -742,7 +800,7 @@ function getSignalInRangeNoOrderRecent(limit = 12) {
         });
       } catch (_) {}
     }
-    return out;
+    return mergeHealthTimingIntoNoOrderRecent(out, getHealth(), limit);
   } catch {
     return [];
   }

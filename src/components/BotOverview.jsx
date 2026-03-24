@@ -639,7 +639,10 @@ export function BotOverview() {
                         ? ` (${timingBlock === 'first_3min' ? 'début' : timingBlock === 'last_4min' ? 'fin' : timingBlock} quart ET)`
                         : '';
                     return (
-                      <div key={`${e?.ts || 'na'}-${idx}`} className="overview-watch-row">
+                      <div
+                        key={`${e?.ts || 'na'}-${idx}-${e?.fromHealthSnapshot ? 'snap' : ''}${e?.fromHealthEnriched ? 'enr' : ''}`}
+                        className="overview-watch-row"
+                      >
                         <span className="overview-watch-row__main">
                           {reason}
                           {timingDetail}
@@ -648,6 +651,8 @@ export function BotOverview() {
                           {source} · {side} · {bestAsk}
                           {age ? ` · il y a ${age}` : ''}
                           {timingBandHint}
+                          {e?.fromHealthSnapshot ? ' · aligné health.json' : ''}
+                          {e?.fromHealthEnriched ? ' · timing complété depuis health' : ''}
                         </span>
                       </div>
                     );
