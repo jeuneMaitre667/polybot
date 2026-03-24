@@ -609,7 +609,11 @@ export function BotOverview() {
             <div className="overview-watch-column">
               <div className="overview-watch-card__title">Watch no-order (live)</div>
               <p className="overview-watch-card__hint">
-                Signal vu mais ordre non passé (souvent <strong>timing ET</strong> début/fin de quart, pas la bande 97–98¢).
+                <strong>≠ Signaux live</strong> : ici ce sont les <strong>3 dernières lignes</strong> écrites dans{' '}
+                <code className="overview-watch-code">bot.log</code> sur le <strong>serveur du bot</strong> (anti-spam ~5 s par
+                marché / raison). La colonne de droite lit le carnet CLOB <strong>depuis ton navigateur</strong> : les deux ne
+                sont pas synchronisées seconde par seconde. Souvent <strong>timing ET</strong> (début/fin de quart), pas la
+                bande 97–98¢.
               </p>
               {activeNoOrderEvents.length > 0 ? (
                 <div className="overview-watch-list">
