@@ -1529,7 +1529,10 @@ async function tryStopLossForOpenPosition(clobClient) {
   if (!conditionId || !tokenId || !takeSide) return;
 
   const endMs = parseMarketEndDateToMs(last.marketEndMs ?? last.endDate);
-  if (!Number.isFinite(endMs) || Date.now() >= endMs) return;
+  // Si fin de marché connue et déjà passée : plus de carnet / sortie gérée ailleurs (redeem).
+  // Si endMs absent (vieux last-order sans marketEndMs) : ne pas bloquer le SL — avant ça on sortait
+  // toujours (`!Number.isFinite(endMs)` → aucun stop-loss possible → perte totale à la résolution).
+  if (Number.isFinite(endMs) && Date.now() >= endMs) return;
   const enteredAtMs = last?.at ? new Date(last.at).getTime() : null;
   if (Number.isFinite(enteredAtMs) && Date.now() - enteredAtMs < STOP_LOSS_MIN_HOLD_MS) return;
 
@@ -1557,11 +1560,24 @@ async function tryStopLossForOpenPosition(clobClient) {
   }
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
 
+  const filledUsdForDust = Number(last.filledUsdc);
+  if (Number.isFinite(filledUsdForDust) && filledUsdForDust >= 0 && filledUsdForDust < 0.05) {
+    logJson('warn', 'Stop-loss: ignoré — exécution d’entrée négligeable (pas de position vendable au CLOB)', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      takeSide,
+      filledUsdc: filledUsdForDust,
+      amountUsd: last.amountUsd,
+    });
+    return;
+  }
+
   try {
     // Polymarket CLOB exige que maker & taker (fixed-point 6 décimales côté CLOB) soient > 0.
     // Avec des positions très petites, un `STOP_LOSS_WORST_PRICE_P` trop bas peut rendre le taker amount
     // ~0 après arrondi -> erreur 400: "maker and taker amount must be higher than 0".
     const minRawAmount = 1; // seuil minimal en unités fixed-point (1e-6)
+    // Marge : ~1 unité brute peut être arrondie à 0 côté API → rejets 400 en rafale (dust + SL).
+    const minRawSafe = 2;
     const rawMaker = tokensToSell * 1e6; // maker = tokens outcome côté SELL
     if (!(rawMaker >= minRawAmount)) {
       logJson('warn', 'Stop-loss: tokensToSell trop petits pour CLOB (maker < 1 raw)', {
@@ -1587,6 +1603,18 @@ async function tryStopLossForOpenPosition(clobClient) {
         worstPricePUsed,
         rawTaker: Math.round(rawTaker * 1000) / 1000,
         stopLossWorstPriceP,
+      });
+      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      return;
+    }
+    if (rawMaker < minRawSafe || rawTaker < minRawSafe) {
+      logJson('warn', 'Stop-loss: montants raw trop faibles pour le CLOB (éviter 400 invalid amounts)', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        tokensToSell,
+        rawMaker: Math.round(rawMaker * 1000) / 1000,
+        rawTaker: Math.round(rawTaker * 1000) / 1000,
+        worstPricePUsed,
       });
       stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
       return;
@@ -3877,25 +3905,40 @@ async function run() {
     // (récupération USDC), tant que wallet + REDEEM_ENABLED. tryRedeemResolvedPositions() no-op sinon.
     await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
+    // Stop-loss : doit tourner même si AUTO_PLACE_ENABLED=false (sinon une position ouverte n’a aucune protection).
+    // Avant : le garde-fou ci-dessous empêchait tout le bloc creds+SL quand autotrade était off.
+    let clobClient = null;
+    if (walletConfigured) {
+      await profiler.measure('clob_creds', async () => {
+        try {
+          clobClient = await buildClobClientCachedCreds();
+        } catch (err) {
+          notePolymarketIncidentError('clob_creds', err);
+          warnClobClientIfThrottled(err);
+        }
+      });
+      await profiler.measure('stop_loss', async () => {
+        await tryStopLossForOpenPosition(clobClient);
+      });
+    }
+
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
     if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
       recordSkipReason('degraded_mode', 'poll');
       return;
     }
 
-    // Client CLOB une fois par cycle : solde via API balance-allowance (doc Polymarket), plus d’erreur RPC "could not detect network"
-    let clobClient = null;
-    await profiler.measure('clob_creds', async () => {
-      try {
-        clobClient = await buildClobClientCachedCreds();
-      } catch (err) {
-        notePolymarketIncidentError('clob_creds', err);
-        warnClobClientIfThrottled(err);
-      }
-    });
-    await profiler.measure('stop_loss', async () => {
-      await tryStopLossForOpenPosition(clobClient);
-    });
+    // Réutilise le client CLOB du bloc stop-loss ; sinon reconstruction (ex. premier build raté).
+    if (!clobClient) {
+      await profiler.measure('clob_creds_reuse', async () => {
+        try {
+          clobClient = await buildClobClientCachedCreds();
+        } catch (err) {
+          notePolymarketIncidentError('clob_creds', err);
+          warnClobClientIfThrottled(err);
+        }
+      });
+    }
 
     async function getBalance() {
       const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
