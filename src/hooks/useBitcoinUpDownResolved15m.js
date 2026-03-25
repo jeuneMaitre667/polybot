@@ -48,10 +48,30 @@ function formatAxiosError(err) {
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
  * Seuil détection : ≥ 97¢ (aligné bot 15m) ; entrée simulée **97–98¢**.
  */
-const DETECT_MIN_P = 0.97;
-/** Prix d’entrée simulé : plancher 97¢ (aligné fenêtre signal bot / dashboard). */
-const SIM_ENTRY_MIN_P = 0.97;
-const SIM_ENTRY_MAX_P = 0.98;
+const DEFAULT_DETECT_MIN_P = 0.97;
+const DEFAULT_SIM_ENTRY_MIN_P = 0.97;
+const DEFAULT_SIM_ENTRY_MAX_P = 0.98;
+
+function resolve15mSimConfig(options) {
+  const cfg = options?.simulation ?? options?.simConfig ?? null;
+  const detectMinP = Number(cfg?.detectMinP);
+  const entryMinP = Number(cfg?.entryMinP);
+  const entryMaxP = Number(cfg?.entryMaxP);
+  const out = {
+    detectMinP:
+      Number.isFinite(detectMinP) && detectMinP > 0 && detectMinP < 1 ? detectMinP : DEFAULT_DETECT_MIN_P,
+    entryMinP: Number.isFinite(entryMinP) && entryMinP > 0 && entryMinP < 1 ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P,
+    entryMaxP: Number.isFinite(entryMaxP) && entryMaxP > 0 && entryMaxP < 1 ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P,
+  };
+  if (out.entryMaxP < out.entryMinP) {
+    const tmp = out.entryMaxP;
+    out.entryMaxP = out.entryMinP;
+    out.entryMinP = tmp;
+  }
+  // La détection ne peut pas être plus haute que l’entrée mini (sinon “pas de signal” artificiel).
+  out.detectMinP = Math.min(out.detectMinP, out.entryMinP);
+  return out;
+}
 
 /** Stop-loss backtest 15m : mêmes défauts que le bot (`STOP_LOSS_*` dans `bot-24-7/index.js`). */
 const envBacktestSl = import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED;
@@ -83,18 +103,23 @@ const EMPTY_BOT_SIM_15M = {
   botStopLossObservedPriceP: null,
   botStopLossObservedDrawdownPct: null,
   botStopLossAtTimestamp: null,
+  /** Plus bas proxy prix observé après l’entrée (utile pour analyser des SL absolus). */
+  botMinObservedAfterEntryP: null,
   botResolutionWouldWin: null,
 };
 
 /** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
-function hasCrossedHighConviction(p) {
-  return Number.isFinite(p) && p >= DETECT_MIN_P && p <= 1;
+function hasCrossedHighConviction(p, detectMinP) {
+  const d = Number.isFinite(detectMinP) ? detectMinP : DEFAULT_DETECT_MIN_P;
+  return Number.isFinite(p) && p >= d && p <= 1;
 }
 
 /** Prix d’entrée reporté : plancher 96¢, plafond 98¢. */
-function clampEntryPrice(p) {
-  if (!Number.isFinite(p) || p < SIM_ENTRY_MIN_P) return SIM_ENTRY_MIN_P;
-  return Math.min(p, SIM_ENTRY_MAX_P);
+function clampEntryPrice(p, entryMinP, entryMaxP) {
+  const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
+  const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
+  if (!Number.isFinite(p) || p < lo) return lo;
+  return Math.min(p, hi);
 }
 
 /** Meilleur max(p, 1−p) sur une série token (conviction max d’un côté du binaire). */
@@ -614,6 +639,24 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
 }
 
 /**
+ * Plus bas prix (proxy) observé après l’entrée, après le délai min hold.
+ * Proxy = même `p` que la détection (mid / trades normalisés).
+ */
+function minObservedPriceAfterEntry(heldSeries, entryTs, minHoldSec) {
+  const holdEnd = entryTs + minHoldSec;
+  const arr = Array.isArray(heldSeries) ? heldSeries : [];
+  let minP = Infinity;
+  for (const pt of arr) {
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (t == null || t < holdEnd) continue;
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    if (!Number.isFinite(p)) continue;
+    minP = Math.min(minP, p);
+  }
+  return Number.isFinite(minP) ? Math.round(minP * 1e6) / 1e6 : null;
+}
+
+/**
  * Filtre les points pour la simu : fenêtre autour du créneau ; **hi** large pour garder trades tardifs.
  * L’entrée simulée accepte un `ts` jusqu’à `SLOT_ENTRY_MAX_AFTER_END_SEC` après la fin slug (trades tardifs).
  */
@@ -656,7 +699,7 @@ function summarizeSeriesForDebug(series) {
     if (!Number.isFinite(p) || t == null) continue;
     minP = Math.min(minP, p);
     maxP = Math.max(maxP, p);
-    if (hasCrossedHighConviction(p)) inBand += 1;
+    if (hasCrossedHighConviction(p, DEFAULT_DETECT_MIN_P)) inBand += 1;
     const cur = { t, p };
     if (first == null) first = cur;
     last = cur;
@@ -718,7 +761,7 @@ function collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSe
   const candidates = [];
   for (const ev of events) {
     const { t, side, price } = ev;
-    if (!hasCrossedHighConviction(price)) {
+    if (!hasCrossedHighConviction(price, DEFAULT_DETECT_MIN_P)) {
       lastBySide[side] = { t, price };
       continue;
     }
@@ -740,7 +783,67 @@ function collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSe
         continue;
       }
     }
-    candidates.push({ side, price: clampEntryPrice(price), ts: tsUsed });
+    candidates.push({ side, price: clampEntryPrice(price, DEFAULT_SIM_ENTRY_MIN_P, DEFAULT_SIM_ENTRY_MAX_P), ts: tsUsed });
+    lastBySide[side] = { t, price };
+  }
+  return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
+}
+
+function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
+  const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  let endTsSec = null;
+  if (slotEndSecExplicit != null && Number.isFinite(Number(slotEndSecExplicit))) {
+    endTsSec = Math.floor(Number(slotEndSecExplicit));
+  } else if (endDateStr) {
+    const raw = endDateStr;
+    const endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
+    if (Number.isFinite(endMs)) endTsSec = Math.floor(endMs / 1000);
+  }
+  const events = [];
+  for (const pt of up) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (!Number.isFinite(p) || t == null) continue;
+    events.push({ t, side: 'Up', price: p });
+    events.push({ t, side: 'Down', price: 1 - p });
+  }
+  for (const pt of down) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    if (!Number.isFinite(p) || t == null) continue;
+    events.push({ t, side: 'Down', price: p });
+    events.push({ t, side: 'Up', price: 1 - p });
+  }
+  events.sort((a, b) => a.t - b.t);
+  const lastBySide = { Up: null, Down: null };
+  const candidates = [];
+  for (const ev of events) {
+    const { t, side, price } = ev;
+    if (!hasCrossedHighConviction(price, detectMinP)) {
+      lastBySide[side] = { t, price };
+      continue;
+    }
+    const prev = lastBySide[side];
+    let tsUsed = t;
+    if (prev != null && prev.price < detectMinP && price > prev.price) {
+      const numer = detectMinP - prev.price;
+      const denom = price - prev.price;
+      if (denom > 0) tsUsed = prev.t + (t - prev.t) * (numer / denom);
+    }
+    if (endTsSec != null && Number.isFinite(endTsSec)) {
+      const slotStartSec = endTsSec - SLOT_15M_SEC;
+      if (tsUsed > endTsSec + SLOT_ENTRY_MAX_AFTER_END_SEC || tsUsed < slotStartSec) {
+        lastBySide[side] = { t, price };
+        continue;
+      }
+      if (is15mSlotEntryTimeForbidden(tsUsed)) {
+        lastBySide[side] = { t, price };
+        continue;
+      }
+    }
+    candidates.push({ side, price: clampEntryPrice(price, entryMinP, entryMaxP), ts: tsUsed });
     lastBySide[side] = { t, price };
   }
   return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
@@ -756,12 +859,7 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit
     return { code: 'empty_after_slot_filter', detail: 'Aucun point après filtre créneau (voir slotBounds dans simDebug).' };
   }
 
-  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(
-    historyUp,
-    historyDown,
-    endDateStr,
-    slotEndSecExplicit
-  );
+  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit);
 
   if (candidates.length > 0) {
     const touchesBand = candidates.slice(0, 5).map((c) => ({
@@ -778,12 +876,12 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit
   const maxD = maxBinaryConvictionInSeries(down);
   const maxBin = [maxU, maxD].filter((x) => x != null && Number.isFinite(x));
   const peak = maxBin.length ? Math.max(...maxBin) : null;
-  const hadHigh = peak != null && peak >= DETECT_MIN_P;
+  const hadHigh = peak != null && peak >= DEFAULT_DETECT_MIN_P;
 
   if (hadHigh) {
     return {
       code: 'excluded_by_15m_slot_forbidden_window',
-      detail: `Franchissement ≥ ${DETECT_MIN_P} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
+      detail: `Franchissement ≥ ${DEFAULT_DETECT_MIN_P} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
       forbiddenMinuteRule,
       endTsSec,
       maxUp: su.maxP,
@@ -795,11 +893,56 @@ function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit
 
   return {
     code: 'no_price_in_band',
-    detail: `Aucun franchissement ≥ ${DETECT_MIN_P} après filtre créneau (entrée simulée ${SIM_ENTRY_MIN_P}–${SIM_ENTRY_MAX_P}).`,
+    detail: `Aucun franchissement ≥ ${DEFAULT_DETECT_MIN_P} après filtre créneau (entrée simulée ${DEFAULT_SIM_ENTRY_MIN_P}–${DEFAULT_SIM_ENTRY_MAX_P}).`,
     maxUp: su.maxP,
     maxDown: sd.maxP,
     minUp: su.minP,
     minDown: sd.minP,
+    maxBinaryConvictionUpToken: maxU,
+    maxBinaryConvictionDownToken: maxD,
+  };
+}
+
+function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
+  const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  if (up.length === 0 && down.length === 0) {
+    return { code: 'empty_after_slot_filter', detail: 'Aucun point après filtre créneau (voir slotBounds dans simDebug).' };
+  }
+  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidatesWithConfig(
+    historyUp,
+    historyDown,
+    endDateStr,
+    slotEndSecExplicit,
+    simCfg
+  );
+  if (candidates.length > 0) {
+    const touchesBand = candidates.slice(0, 5).map((c) => ({
+      side: c.side,
+      p: Math.round(c.price * 10000) / 10000,
+      ts: c.ts,
+    }));
+    return { code: 'would_signal', touchesBand };
+  }
+  const maxU = maxBinaryConvictionInSeries(up);
+  const maxD = maxBinaryConvictionInSeries(down);
+  const maxBin = [maxU, maxD].filter((x) => x != null && Number.isFinite(x));
+  const peak = maxBin.length ? Math.max(...maxBin) : null;
+  const hadHigh = peak != null && peak >= detectMinP;
+  if (hadHigh) {
+    return {
+      code: 'excluded_by_15m_slot_forbidden_window',
+      detail: `Franchissement ≥ ${detectMinP} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
+      forbiddenMinuteRule,
+      endTsSec,
+      maxBinaryConvictionUpToken: maxU,
+      maxBinaryConvictionDownToken: maxD,
+    };
+  }
+  return {
+    code: 'no_price_in_band',
+    detail: `Aucun franchissement ≥ ${detectMinP} après filtre créneau (entrée simulée ${entryMinP}–${entryMaxP}).`,
     maxBinaryConvictionUpToken: maxU,
     maxBinaryConvictionDownToken: maxD,
   };
@@ -824,6 +967,7 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEn
   const resolutionWin = settled ? winner === first.side : null;
   const heldSeries = first.side === 'Up' ? up : down;
   const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
+  const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
   if (sl.triggered) {
     return {
@@ -839,6 +983,7 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEn
         sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
       botStopLossObservedDrawdownPct: sl.drawdownPct,
       botStopLossAtTimestamp: sl.t,
+      botMinObservedAfterEntryP: minAfter,
       botResolutionWouldWin: resolutionWin,
     };
   }
@@ -855,6 +1000,58 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEn
     botStopLossObservedPriceP: null,
     botStopLossObservedDrawdownPct: null,
     botStopLossAtTimestamp: null,
+    botMinObservedAfterEntryP: minAfter,
+    botResolutionWouldWin: null,
+  };
+}
+
+function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateStr, slotEndSecExplicit, simCfg) {
+  const up = Array.isArray(historyUp) ? historyUp : [];
+  const down = Array.isArray(historyDown) ? historyDown : [];
+  if (up.length === 0 && down.length === 0) return { ...EMPTY_BOT_SIM_15M };
+
+  const { candidates } = collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg);
+  if (candidates.length === 0) return { ...EMPTY_BOT_SIM_15M };
+
+  candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
+  const first = candidates[0];
+  const settled = winner === 'Up' || winner === 'Down';
+  const resolutionWin = settled ? winner === first.side : null;
+  const heldSeries = first.side === 'Up' ? up : down;
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
+  const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
+
+  if (sl.triggered) {
+    return {
+      botWouldTake: first.side,
+      botWon: null,
+      botEntryPrice: first.price,
+      botEntryTimestamp: first.ts,
+      botOrderType: 'Marché',
+      botStopLossExit: true,
+      botStopLossReason: sl.reason,
+      botStopLossExitPriceP: Math.round(BACKTEST_STOP_LOSS_WORST_PRICE_P * 1e6) / 1e6,
+      botStopLossObservedPriceP: sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
+      botStopLossObservedDrawdownPct: sl.drawdownPct,
+      botStopLossAtTimestamp: sl.t,
+      botMinObservedAfterEntryP: minAfter,
+      botResolutionWouldWin: resolutionWin,
+    };
+  }
+
+  return {
+    botWouldTake: first.side,
+    botWon: resolutionWin,
+    botEntryPrice: first.price,
+    botEntryTimestamp: first.ts,
+    botOrderType: 'Marché',
+    botStopLossExit: false,
+    botStopLossReason: null,
+    botStopLossExitPriceP: null,
+    botStopLossObservedPriceP: null,
+    botStopLossObservedDrawdownPct: null,
+    botStopLossAtTimestamp: null,
+    botMinObservedAfterEntryP: minAfter,
     botResolutionWouldWin: null,
   };
 }
@@ -867,6 +1064,7 @@ function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEn
  */
 export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, options = {}) {
   const debug = Boolean(options.debug);
+  const simCfg = resolve15mSimConfig(options);
   const [resolved, setResolved] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1091,7 +1289,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
         const emptySim = { ...EMPTY_BOT_SIM_15M };
         let sim =
           historyUp.length > 0 || historyDown.length > 0
-            ? computeBotSimulation(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec)
+            ? computeBotSimulationWithConfig(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec, simCfg)
             : emptySim;
         if (
           sim.botWouldTake != null &&
@@ -1106,7 +1304,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
         if (debug) {
           const why =
             sim.botWouldTake == null
-              ? debugWhyNoSignal(historyUp, historyDown, historyEndIso, r.slotEndSec)
+              ? debugWhyNoSignalWithConfig(historyUp, historyDown, historyEndIso, r.slotEndSec, simCfg)
               : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
           simDebug = {
             slug: r.eventSlug,
@@ -1138,9 +1336,9 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
             maxBinaryAfterSlot: maxBinaryAcrossBothSeries(historyUp, historyDown),
             why,
             rule: {
-              detectMinP: DETECT_MIN_P,
-              simEntryMinP: SIM_ENTRY_MIN_P,
-              simEntryMaxP: SIM_ENTRY_MAX_P,
+              detectMinP: simCfg.detectMinP,
+              simEntryMinP: simCfg.entryMinP,
+              simEntryMaxP: simCfg.entryMaxP,
               forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
               entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
               seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
@@ -1174,7 +1372,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       }
       const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
       if (debug) {
-        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= DETECT_MIN_P;
+        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simCfg.detectMinP;
         const highConvBefore = (e) => geMinBinary(e.simDebug?.maxBinaryBeforeSlot);
         const highConvAfter = (e) => geMinBinary(e.simDebug?.maxBinaryAfterSlot);
         const strippedBySlot = enrichedFinal.filter(
@@ -1252,7 +1450,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
     } finally {
       setLoading(false);
     }
-  }, [windowHours, debug]);
+  }, [windowHours, debug, simCfg.detectMinP, simCfg.entryMinP, simCfg.entryMaxP]);
 
   useEffect(() => {
     fetchResolved();

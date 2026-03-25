@@ -33,6 +33,10 @@ const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const STORAGE_KEY_LIQUIDITY_SUGGESTION = 'polymarket-dashboard.showLiquiditySuggestion';
 const STORAGE_KEY_AUTOTRADE = 'polymarket-dashboard.autoPlaceEnabled';
 const STORAGE_BACKTEST_15M_DEBUG = 'polymarket-dashboard.backtest15mDebug';
+const STORAGE_BACKTEST_15M_SIGNAL_MIN_C = 'polymarket-dashboard.backtest15mSignalMinC';
+const STORAGE_BACKTEST_15M_SIGNAL_MAX_C = 'polymarket-dashboard.backtest15mSignalMaxC';
+/** Grille SL dans les tableaux d’analyse 15m (75¢ → 90¢, pas 5¢). */
+const SL_ANALYSIS_THRESHOLDS_C = [75, 80, 85, 90];
 
 function readAutoPlaceFromStorage() {
   if (typeof window === 'undefined') return false;
@@ -49,6 +53,18 @@ function readBacktest15mDebugFromStorage() {
     return window.localStorage.getItem(STORAGE_BACKTEST_15M_DEBUG) === '1';
   } catch {
     return false;
+  }
+}
+
+function readNumberFromStorage(key, fallback) {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const v = window.localStorage.getItem(key);
+    if (v == null || v === '') return fallback;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  } catch {
+    return fallback;
   }
 }
 
@@ -115,6 +131,8 @@ export function BitcoinUpDownStrategy() {
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
+  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 97));
+  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 98));
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
@@ -124,7 +142,23 @@ export function BitcoinUpDownStrategy() {
     error: resolved15mError,
     refresh: refreshResolved15m,
     debugSummary: resolved15mDebugSummary,
-  } = useBitcoinUpDownResolved15m(resolvedWindowHours, { debug: backtest15mDebug });
+  } = useBitcoinUpDownResolved15m(resolvedWindowHours, {
+    debug: backtest15mDebug,
+    simConfig: {
+      detectMinP: Math.max(0.5, Math.min(0.999, Number(signalMinC) / 100)),
+      entryMinP: Math.max(0.5, Math.min(0.999, Number(signalMinC) / 100)),
+      entryMaxP: Math.max(0.5, Math.min(0.999, Number(signalMaxC) / 100)),
+    },
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, String(signalMinC));
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, String(signalMaxC));
+    } catch {
+      /* ignore */
+    }
+  }, [signalMinC, signalMaxC]);
 
   /** Grille complète : un créneau 15 min par ligne (placeholders pour les trous). */
   const resolved15mDisplayRows = useMemo(
@@ -313,6 +347,99 @@ export function BitcoinUpDownStrategy() {
       stopLossExits: withSimul.filter((r) => r.botStopLossExit === true).length,
     };
   }, [resolved15m, initialBalance, includeFees]);
+
+  const stopLossSweep97c = useMemo(() => {
+    // Analyse : pour des entrées ~97–98¢, on regarde le plus bas prix observé après entrée.
+    // On répond à la question “si j’entre à 97¢, quel % touche un SL à X¢ ?” via un proxy conservateur:
+    // si minObservedAfterEntryP <= X, alors SL X¢ touché.
+    const rows = Array.isArray(resolved15m) ? resolved15m : [];
+    const withEntry = rows.filter((r) => r.botWouldTake != null && r.botEntryPrice != null && r.botMinObservedAfterEntryP != null);
+    if (withEntry.length === 0) return { baseN: 0, sweep: [] };
+
+    // Seuils en cents (tu peux ajuster ensuite)
+    const thresholdsC = SL_ANALYSIS_THRESHOLDS_C;
+    const sweep = thresholdsC.map((c) => {
+      const thr = c / 100;
+      const hit = withEntry.filter((r) => Number(r.botMinObservedAfterEntryP) <= thr).length;
+      const pct = Math.round((hit / withEntry.length) * 1000) / 10;
+      return { c, hit, pct };
+    });
+    return { baseN: withEntry.length, sweep };
+  }, [resolved15m]);
+
+  const stopLossTradeoff = useMemo(() => {
+    const rows = Array.isArray(resolved15m) ? resolved15m : [];
+    const base = rows.filter(
+      (r) =>
+        r.botWouldTake != null &&
+        r.botEntryPrice != null &&
+        r.botMinObservedAfterEntryP != null &&
+        (r.winner === 'Up' || r.winner === 'Down')
+    );
+    if (base.length === 0) return { baseN: 0, minStats: null, sweep: [] };
+
+    const minVals = base
+      .map((r) => Number(r.botMinObservedAfterEntryP))
+      .filter((x) => Number.isFinite(x) && x > 0 && x < 1)
+      .sort((a, b) => a - b);
+    const q = (pct) => {
+      if (minVals.length === 0) return null;
+      const idx = Math.min(minVals.length - 1, Math.max(0, Math.round((pct / 100) * (minVals.length - 1))));
+      return minVals[idx];
+    };
+    const minStats = {
+      minP: minVals.length ? minVals[0] : null,
+      medianP: q(50),
+      p95P: q(95),
+    };
+
+    const lossFrac = getBacktestMaxLossFractionOfStake();
+    const estimateFee = (stakeUsd, p) => {
+      if (!includeFees) return 0;
+      if (!(stakeUsd > 0) || p == null) return 0;
+      const x = p * (1 - p);
+      return stakeUsd * 0.25 * Math.pow(x, 2);
+    };
+    const thresholdsC = SL_ANALYSIS_THRESHOLDS_C;
+    const sweep = thresholdsC.map((c) => {
+      const slP = c / 100;
+      let hit = 0;
+      let sumReturnIfHit = 0;
+      let nHit = 0;
+      let sumReturnWithSl = 0;
+
+      for (const r of base) {
+        const entryP = Number(r.botEntryPrice);
+        const minAfter = Number(r.botMinObservedAfterEntryP);
+        if (!(entryP > 0 && entryP < 1) || !(minAfter > 0 && minAfter < 1)) continue;
+
+        const stake = 1; // returns normalisées par 1 USDC
+        const feeUsd = estimateFee(stake, entryP);
+        const hitThis = minAfter <= slP;
+        if (hitThis) {
+          hit += 1;
+          nHit += 1;
+          // Return si on sort pile à SL (proxy, sans slippage): stake*(sl/entry - 1) - fee
+          const ret = stake * (slP / entryP - 1) - feeUsd;
+          sumReturnIfHit += ret;
+          sumReturnWithSl += ret;
+        } else {
+          // Sinon on hold jusqu’à résolution: gain = (1/entry - 1) si win, sinon -lossFrac
+          const win = r.winner === r.botWouldTake;
+          const ret = win ? stake * (1 / entryP - 1) - feeUsd : -stake * lossFrac - feeUsd;
+          sumReturnWithSl += ret;
+        }
+      }
+
+      const baseN = base.length;
+      const pctHit = baseN > 0 ? Math.round((hit / baseN) * 1000) / 10 : 0;
+      const avgReturnIfHit = nHit > 0 ? sumReturnIfHit / nHit : null;
+      const avgReturnWithSl = baseN > 0 ? sumReturnWithSl / baseN : null;
+      return { c, pctHit, hit, baseN, avgReturnIfHit, avgReturnWithSl };
+    });
+
+    return { baseN: base.length, minStats, sweep };
+  }, [resolved15m, includeFees]);
 
   const activeBacktest = resultMode === 'hourly' ? backtestResult : backtestResult15m;
 
@@ -707,6 +834,145 @@ export function BitcoinUpDownStrategy() {
                   Liquidité {showLiquiditySuggestion ? 'ON' : 'OFF'}
                 </button>
               </div>
+
+              {resultMode === '15m' && stopLossSweep97c.baseN > 0 && (
+                <div className="strat-metric-card" style={{ marginTop: 14 }}>
+                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~97–98¢, proxy Data API/CLOB)</p>
+                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
+                    Base : <strong>{stopLossSweep97c.baseN}</strong> entrées simulées avec “min après entrée” observé.
+                    Le % ci-dessous = part des créneaux où le prix a touché au moins une fois le seuil.
+                  </p>
+                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="strat-table">
+                      <thead>
+                        <tr>
+                          <th className="strat-th">SL (¢)</th>
+                          <th className="strat-th">% touché</th>
+                          <th className="strat-th">Touché</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stopLossSweep97c.sweep.map((row, i) => (
+                          <tr key={row.c} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                            <td className="strat-td">{row.c}¢</td>
+                            <td className="strat-td strat-td--strong">{row.pct.toFixed(1)}%</td>
+                            <td className="strat-td">
+                              {row.hit} / {stopLossSweep97c.baseN}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
+                    Interprétation rapide : plus le SL est haut, plus il est touché souvent (sorties fréquentes) ; plus il est bas, moins il est touché mais tu laisses plus de drawdown. Ce calcul est un proxy (trades Data API + prices-history), pas un best bid live WS.
+                  </p>
+                </div>
+              )}
+
+              {resultMode === '15m' && (
+                <div className="strat-metric-card" style={{ marginTop: 14 }}>
+                  <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
+                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
+                    Modifie la bande d’entrée simulée (ex. 95–97¢). Cela recharge les données et recalcul le tableau 15m.
+                  </p>
+                  <div className="strat-hero-controls" style={{ marginTop: 10 }}>
+                    <label className="strat-label-inline">
+                      <span>Signal min (¢)</span>
+                      <input
+                        type="number"
+                        min="50"
+                        max="99"
+                        step="1"
+                        value={signalMinC}
+                        onChange={(e) => setSignalMinC(Number(e.target.value) || 0)}
+                        className="input-strat-compact"
+                      />
+                    </label>
+                    <label className="strat-label-inline">
+                      <span>Signal max (¢)</span>
+                      <input
+                        type="number"
+                        min="50"
+                        max="99"
+                        step="1"
+                        value={signalMaxC}
+                        onChange={(e) => setSignalMaxC(Number(e.target.value) || 0)}
+                        className="input-strat-compact"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSignalMinC(97);
+                        setSignalMaxC(98);
+                      }}
+                      className="btn btn--xs btn--outline"
+                      title="Revenir à 97–98¢"
+                    >
+                      Reset 97–98¢
+                    </button>
+                    <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--xs btn--outline">
+                      Recalculer
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {resultMode === '15m' && stopLossTradeoff.baseN > 0 && (
+                <div className="strat-metric-card" style={{ marginTop: 14 }}>
+                  <p className="strat-metric-card__kicker">Trade-off stop-loss (proxy) — stats &amp; PnL estimé</p>
+                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
+                    Base : <strong>{stopLossTradeoff.baseN}</strong> entrées résolues. Stats sur le plus bas prix observé après entrée.
+                  </p>
+                  {stopLossTradeoff.minStats && (
+                    <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
+                      min :{' '}
+                      <strong>
+                        {stopLossTradeoff.minStats.minP != null ? `${(stopLossTradeoff.minStats.minP * 100).toFixed(2)}¢` : '—'}
+                      </strong>{' '}
+                      · médiane :{' '}
+                      <strong>
+                        {stopLossTradeoff.minStats.medianP != null ? `${(stopLossTradeoff.minStats.medianP * 100).toFixed(2)}¢` : '—'}
+                      </strong>{' '}
+                      · p95 :{' '}
+                      <strong>
+                        {stopLossTradeoff.minStats.p95P != null ? `${(stopLossTradeoff.minStats.p95P * 100).toFixed(2)}¢` : '—'}
+                      </strong>
+                    </p>
+                  )}
+                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="strat-table">
+                      <thead>
+                        <tr>
+                          <th className="strat-th">SL (¢)</th>
+                          <th className="strat-th">% touché</th>
+                          <th className="strat-th">Perte moy. si touché (par 1$)</th>
+                          <th className="strat-th">PnL moy. si on applique SL (par 1$)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stopLossTradeoff.sweep.map((row, i) => (
+                          <tr key={row.c} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                            <td className="strat-td">{row.c}¢</td>
+                            <td className="strat-td strat-td--strong">{row.pctHit.toFixed(1)}%</td>
+                            <td className="strat-td">
+                              {row.avgReturnIfHit != null ? row.avgReturnIfHit.toFixed(3) : '—'}
+                            </td>
+                            <td className="strat-td">
+                              {row.avgReturnWithSl != null ? row.avgReturnWithSl.toFixed(3) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
+                    “Perte moy. si touché” = PnL moyen si la sortie se fait à SL (proxy, sans slippage). “PnL moy. avec SL” =
+                    si touché → sortie SL, sinon → hold jusqu’à résolution (win/lose), avec frais si activés.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
