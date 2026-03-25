@@ -560,6 +560,67 @@ const redeemFailNextAttemptAt = new Map(); // conditionId -> timestamp ms
 /** Une seule alerte Telegram « échec redeem » par conditionId jusqu’au succès (évite spam à chaque retry / cycle). */
 const redeemTelegramFailureNotified = new Set();
 
+/** Stop-loss Telegram : évite le spam sur un même `conditionId`. */
+const stopLossTelegramTriggeredNotified = new Set();
+const stopLossTelegramFilledNotified = new Set();
+
+function telegramStopLossAlertsEnabled() {
+  // Par défaut activé si bot Telegram configuré, désactivable via ALERT_TELEGRAM_STOPLOSS=false
+  return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_STOPLOSS !== 'false';
+}
+
+async function notifyTelegramStopLossTriggered(p) {
+  if (!telegramStopLossAlertsEnabled()) return;
+  const cid = String(p?.conditionId || '').trim();
+  if (!cid || stopLossTelegramTriggeredNotified.has(cid)) return;
+  stopLossTelegramTriggeredNotified.add(cid);
+
+  try {
+    const reason = p?.triggerReason ?? '—';
+    const entryCents = Number.isFinite(p?.entryPriceP) ? p.entryPriceP * 100 : null;
+    const bestBidCents = Number.isFinite(p?.bestBidP) ? p.bestBidP * 100 : null;
+    const triggerCents = Number.isFinite(p?.stopLossTriggerPriceP) ? p.stopLossTriggerPriceP * 100 : null;
+    const lines = [
+      `⚠️ Stop-loss déclenché (${reason})`,
+      `conditionId : ${cid.slice(0, 20)}…`,
+      `takeSide : ${p?.takeSide ?? '?'}`,
+      `entry : ${entryCents != null ? `${entryCents.toFixed(2)}¢` : '—'}`,
+      `bestBid : ${bestBidCents != null ? `${bestBidCents.toFixed(2)}¢` : '—'}`,
+      `drawdown : ${p?.drawdownPct != null && Number.isFinite(p.drawdownPct) ? p.drawdownPct.toFixed(2) : '—'}%`,
+      `triggerPx : ${triggerCents != null ? `${triggerCents.toFixed(2)}¢` : '—'}`,
+      `maxDD : ${p?.stopLossMaxDrawdownPct != null && Number.isFinite(p.stopLossMaxDrawdownPct) ? p.stopLossMaxDrawdownPct.toFixed(0) : '—'}%`,
+    ];
+    if (p?.stopLossWorstPricePUsed != null && Number.isFinite(p.stopLossWorstPricePUsed)) {
+      lines.push(`worst SELL utilisé : ${(p.stopLossWorstPricePUsed * 100).toFixed(2)}¢`);
+    }
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify stop-loss triggered:', e?.message || e);
+  }
+}
+
+async function notifyTelegramStopLossFilled(p) {
+  if (!telegramStopLossAlertsEnabled()) return;
+  const cid = String(p?.conditionId || '').trim();
+  if (!cid || stopLossTelegramFilledNotified.has(cid)) return;
+  stopLossTelegramFilledNotified.add(cid);
+
+  try {
+    const lines = [
+      `✅ Stop-loss vente remplie`,
+      `conditionId : ${cid.slice(0, 20)}…`,
+      `takeSide : ${p?.takeSide ?? '?'}`,
+      `filled : ${p?.filledUsdc != null && Number.isFinite(p.filledUsdc) ? p.filledUsdc.toFixed(2) : '?'} USDC`,
+      `filledTokens : ${p?.filledOutcomeTokens != null && Number.isFinite(p.filledOutcomeTokens) ? p.filledOutcomeTokens : '?'}`,
+      p?.fillRatio != null && Number.isFinite(p.fillRatio) ? `fillRatio : ${(Number(p.fillRatio) * 100).toFixed(1)} %` : '',
+      p?.orderID ? `orderID : ${p.orderID}` : '',
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify stop-loss filled:', e?.message || e);
+  }
+}
+
 /** @type {Set<string> | null} */
 let redeemedConditionIdsSet = null;
 
@@ -1177,10 +1238,22 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
     const tok = orderData?.filledOutcomeTokens;
     const usdc = orderData?.filledUsdc;
     const tokenId = orderData?.tokenId;
+    const orderId = orderData?.orderID ?? orderData?.order_id;
+    const clobStatus = orderData?.clobStatus ?? null;
+    const clobSuccess = orderData?.clobSuccess ?? null;
+
+    const hasFilled =
+      Number.isFinite(tok) &&
+      Number.isFinite(usdc) &&
+      tok > 0 &&
+      usdc > 0 &&
+      tokenId &&
+      typeof tokenId === 'string';
+
     let mtmLine = '';
-    if (tokenId && tok != null && Number.isFinite(tok) && tok > 0) {
+    if (hasFilled) {
       const bid = await getBestBid(tokenId);
-      if (bid != null && usdc != null && Number.isFinite(usdc)) {
+      if (bid != null && Number.isFinite(usdc) && Number.isFinite(tok)) {
         const estVal = tok * bid;
         const mtm = estVal - usdc;
         const sign = mtm >= 0 ? '+' : '';
@@ -1201,20 +1274,23 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
 
     const deltaLine = formatSessionDeltaLine(balanceAfter);
     const lines = [
-      `✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`,
+      hasFilled ? `✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})` : `⚠️ Trade accepté (remplissage immédiat nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
       `Montant demandé : ${amtStr} USDC`,
       `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
-      `Prix moyen ~${avg}`,
+      hasFilled ? `Prix moyen ~${avg}` : '',
       `conditionId : ${cid}…`,
+      orderId ? `orderID : ${orderId}` : '',
       `Fin marché (UTC) : ${endStr}`,
-      `Position : outcome acheté — à suivre jusqu’à résolution / redeem.`,
+      hasFilled ? `Position : outcome acheté — à suivre jusqu’à résolution / redeem.` : `Position : non confirmée (remplissage = 0 / ou en cours)`,
     ];
-    if (mtmLine) lines.push(mtmLine);
+    if (hasFilled && mtmLine) lines.push(mtmLine);
+    if (clobStatus) lines.push(`CLOB status : ${String(clobStatus)}`);
+    if (clobSuccess != null) lines.push(`CLOB success : ${clobSuccess}`);
     lines.push(`Solde CLOB (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`);
     if (deltaLine) lines.push(deltaLine);
 
-    await sendTelegramAlert(lines.join('\n'));
+    await sendTelegramAlert(lines.filter(Boolean).join('\n'));
   } catch (e) {
     console.warn('[Telegram] notify trade:', e?.message || e);
   }
@@ -1235,8 +1311,35 @@ async function notifyTelegramRedeemFailureOnce(cid, fields) {
 async function notifyTelegramRedeemEvent(p) {
   if (!telegramRedeemAlertsEnabled()) return;
   try {
-    const bal = await getUsdcBalanceRpc();
-    noteSessionBaselineIfNeeded(bal);
+    const balBefore = await getUsdcBalanceRpc();
+    noteSessionBaselineIfNeeded(balBefore);
+
+    let bal = balBefore;
+    if (p?.ok) {
+      // Quand on redeems via relayer ou juste après un indexer event,
+      // le solde peut ne pas être mis à jour instantanément côté RPC.
+      // On poll pendant un court moment pour afficher le solde "après".
+      const pollStart = Date.now();
+      const POLL_TOTAL_MS = 4_000;
+      const POLL_STEP_MS = 500;
+      const MIN_DELTA_USDC = 0.01;
+
+      while (Date.now() - pollStart < POLL_TOTAL_MS) {
+        await new Promise((r) => setTimeout(r, POLL_STEP_MS));
+        const candidate = await getUsdcBalanceRpc();
+        if (candidate == null || !Number.isFinite(candidate)) continue;
+        if (balBefore != null && Number.isFinite(balBefore)) {
+          if (Math.abs(candidate - balBefore) >= MIN_DELTA_USDC) {
+            bal = candidate;
+            break;
+          }
+        } else {
+          bal = candidate;
+          break;
+        }
+      }
+    }
+
     const deltaLine = formatSessionDeltaLine(bal);
     const cid = String(p.conditionId || '').slice(0, 22);
     let msg;
@@ -1245,7 +1348,8 @@ async function notifyTelegramRedeemEvent(p) {
         `✅ Redeem OK`,
         `conditionId : ${cid}…`,
         p.hash ? `Tx : ${p.hash}` : '',
-        `Solde USDC (RPC proxy/wallet) : ${bal != null ? bal.toFixed(2) : '?'}`,
+        p.viaRelayer != null ? `Via relayer : ${p.viaRelayer ? 'oui' : 'non'}` : '',
+        `Solde USDC (après redeem) : ${bal != null ? bal.toFixed(2) : '?'}`,
         deltaLine || '',
       ]
         .filter(Boolean)
@@ -1411,6 +1515,22 @@ async function tryStopLossForOpenPosition(clobClient) {
       side: Side.SELL,
       price: worstPricePUsed,
     };
+
+    // Notification dédiée : on prévient quand le stop-loss est déclenché (pas à chaque retry),
+    // avant de tenter l'ordre CLOB.
+    // Ne pas bloquer la boucle bot (Telegram peut être lent).
+    void notifyTelegramStopLossTriggered({
+      conditionId,
+      takeSide,
+      triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+      entryPriceP,
+      bestBidP: bestBid,
+      drawdownPct,
+      stopLossTriggerPriceP,
+      stopLossMaxDrawdownPct: Math.abs(stopLossMaxDrawdownPct),
+      stopLossWorstPricePUsed: worstPricePUsed,
+    });
+
     const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
     const result = await clobClient.postOrder(signedOrder, marketOrderType);
     const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
@@ -1473,6 +1593,18 @@ async function tryStopLossForOpenPosition(clobClient) {
     appendOrderLog(exitOrder);
     stopLossNextAttemptByCondition.delete(conditionId);
     executionCooldownByCondition.set(conditionId, endMs + 60_000);
+
+    // Notification dédiée : uniquement quand la vente stop-loss est réellement remplie.
+    // Ne pas bloquer la boucle bot (Telegram peut être lent).
+    void notifyTelegramStopLossFilled({
+      conditionId,
+      takeSide,
+      filledUsdc: fill?.filledUsdc ?? null,
+      filledOutcomeTokens: fill?.filledOutcomeTokens ?? null,
+      fillRatio: fill?.fillRatio ?? null,
+      orderID: result?.orderID ?? result?.id,
+    });
+
     logJson('warn', 'Stop-loss déclenché: sortie avant résolution', {
       conditionId: conditionId.slice(0, 18) + '…',
       takeSide,

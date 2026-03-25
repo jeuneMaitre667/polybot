@@ -49,3 +49,5 @@ Avec **`ALERT_TELEGRAM_BOT_TOKEN`** et **`ALERT_TELEGRAM_CHAT_ID`** remplis, le 
 - **Solde seul** (optionnel) : `ALERT_TELEGRAM_BALANCE_EVERY_MS` en millisecondes (ex. `3600000` = 1 h), uniquement lors des cycles où le bot exécute le bloc solde (autotrade actif).
 
 Désactiver partiellement : `ALERT_TELEGRAM_TRADE=false` ou `ALERT_TELEGRAM_REDEEM=false`. Redémarrer : `pm2 restart polymarket-bot`.
+
+Les messages dédiés `stop-loss` (déclenchement + vente remplie) sont désactivables via : `ALERT_TELEGRAM_STOPLOSS=false`. Redémarrer : `pm2 restart polymarket-bot`.
