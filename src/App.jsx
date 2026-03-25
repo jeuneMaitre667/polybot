@@ -5,8 +5,26 @@ import { DEFAULT_BOT_STATUS_URL_15M } from './hooks/useBotStatus.js';
 import { BotOverview } from './components/BotOverview';
 import { HeaderWalletBar } from './components/HeaderWalletBar';
 
+/** Ancienne page backtest retirée — évite un hash mort dans la barre d’adresse (favoris / onglet). */
+const LEGACY_HASH_ROUTES = new Set(['strat-95-70']);
+
+function stripLegacyHashFromUrl() {
+  if (typeof window === 'undefined') return;
+  const raw = (window.location.hash || '').replace(/^#/, '');
+  if (!LEGACY_HASH_ROUTES.has(raw)) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(null, '', `${pathname}${search || ''}`);
+}
+
 export default function App() {
   const [clock, setClock] = useState('');
+
+  useEffect(() => {
+    stripLegacyHashFromUrl();
+    const onHash = () => stripLegacyHashFromUrl();
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   useEffect(() => {
     const tick = () => {

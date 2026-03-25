@@ -66,19 +66,28 @@ function loadManualEntries(historyAddress) {
   }
 }
 
-function tradeStakeUsdc(t) {
+/** Notional USDC du fill (Data API : `size` × `price`, price 0–1). */
+function tradeNotionalUsdc(t) {
   const size = Number(t.size) || 0;
   const price = Number(t.price) || 0;
-  const stake = Math.abs(size * price);
-  if (!Number.isFinite(stake) || stake <= 0) return null;
-  return stake;
+  const n = Math.abs(size * price);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
 }
 
-function tradeValue(t) {
-  const size = Number(t.size) || 0;
-  const price = Number(t.price) || 0;
-  const v = size * price;
-  return t.side === 'BUY' ? -v : v;
+function tradeStakeUsdc(t) {
+  const n = tradeNotionalUsdc(t);
+  return n > 0 ? n : null;
+}
+
+/** Cashflow signé : achat = sortie d’USDC (−), vente = entrée (+). Côté normalisé en majuscules. */
+function tradeCashflowSigned(t) {
+  const n = tradeNotionalUsdc(t);
+  if (n <= 0) return 0;
+  const side = String(t?.side ?? '').toUpperCase();
+  if (side === 'BUY') return -n;
+  if (side === 'SELL') return n;
+  return 0;
 }
 
 function exportCSV(trades, columns) {
@@ -100,7 +109,8 @@ function exportCSV(trades, columns) {
  *   botFunderCandidates?: (string|null|undefined)[],
  *   balanceHistory?: { at?: string, balance?: number|string }[] | null,
  *   currentBalanceUsd?: number|null,
- *   useRealBalancePnl?: boolean
+ *   useRealBalancePnl?: boolean,
+ *   balanceReconcilesWithDisplayedBalance?: boolean
  * }} props
  * botFunderCandidates : ex. clobFunderAddress depuis last-order (15m puis horaire) — aligné sur le compte Polymarket du bot.
  */
@@ -110,6 +120,8 @@ export function TradeHistory({
   balanceHistory = null,
   currentBalanceUsd = null,
   useRealBalancePnl = true,
+  /** false si le solde affiché ailleurs est l’USDC on-chain alors que la courbe vient des relevés bot. */
+  balanceReconcilesWithDisplayedBalance = true,
 }) {
   const { address } = useWallet();
   const { address: historyAddress, source: historySource } = useMemo(
@@ -216,7 +228,7 @@ export function TradeHistory({
   }, [filtered, today]);
 
   const fluxToday = useMemo(() => {
-    return tradesToday.reduce((acc, t) => acc + tradeValue(t), 0);
+    return tradesToday.reduce((acc, t) => acc + tradeCashflowSigned(t), 0);
   }, [tradesToday]);
 
   const buysToday = useMemo(() => {
@@ -289,7 +301,7 @@ export function TradeHistory({
     });
     return sorted.reduce((acc, t) => {
       const prevCum = acc.length ? acc[acc.length - 1].cumul : 0;
-      const cum = prevCum + tradeValue(t);
+      const cum = prevCum + tradeCashflowSigned(t);
       const ts = t.timestamp != null ? (t.timestamp > 1e12 ? t.timestamp : t.timestamp * 1000) : 0;
       return [
         ...acc,
@@ -328,6 +340,12 @@ export function TradeHistory({
     effectiveChartMode === 'balance'
       ? 'Courbe solde bot (USDC, inclut redeem)'
       : 'Flux cumulé trades (coût achats − ventes, USDC)';
+  const chartHint =
+    effectiveChartMode === 'flow'
+      ? 'Basé sur la Data API (fills marché uniquement). N’inclut pas les redeem, dépôts bridge ni les frais au-delà du notionnel size×price — peut diverger du solde réel.'
+      : effectiveChartMode === 'balance' && hasRealBalanceCurve && !balanceReconcilesWithDisplayedBalance
+        ? 'Courbe = relevés bot (status). Le solde affiché en vue d’ensemble peut être l’USDC on-chain du wallet.'
+        : null;
 
   const csvColumns = [
     { label: 'Date', get: (t) => formatDate(t.timestamp) },
@@ -648,6 +666,11 @@ export function TradeHistory({
               <div className="trade-chart-panel trade-chart-panel--overview">
                 <div className="trade-history-top trade-history-top--chart">
                   <p className="trade-chart-panel-title">{chartTitle}</p>
+                  {chartHint && (
+                    <p className="trade-chart-panel-hint" style={{ fontSize: 11, color: 'var(--text-3)', margin: '4px 0 0', lineHeight: 1.45, maxWidth: 720 }}>
+                      {chartHint}
+                    </p>
+                  )}
                   <div className="trade-history-actions">
                     <button
                       type="button"

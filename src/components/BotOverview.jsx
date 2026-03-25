@@ -939,9 +939,10 @@ export function BotOverview() {
         <TradeHistory
           hideCardTitle
           botFunderCandidates={tradeHistoryBotFunders}
-          balanceHistory={walletUsdc15m != null ? null : (data15m?.balanceHistory ?? null)}
+          balanceHistory={data15m?.balanceHistory ?? null}
           currentBalanceUsd={displayedBalance15m}
           useRealBalancePnl={false}
+          balanceReconcilesWithDisplayedBalance={walletUsdc15m == null}
         />
       </div>
 
