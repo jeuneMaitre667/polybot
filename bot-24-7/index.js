@@ -309,6 +309,89 @@ const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
 const useBalanceAsSize = process.env.USE_BALANCE_AS_SIZE !== 'false';
 const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
+ 
+/**
+ * Budget “réinvestissement uniquement des gains”.
+ * Mode: reserve_excess_from_start
+ * - On “fige” un excès de capital au démarrage (ex: wallet=15, startStake=10 => réserve 5).
+ * - Le bot trade avec (balance - réserve), donc seul le capital au-dessus de la mise de départ est réinvesti.
+ * - La réserve est persistée dans budget-state.json pour rester stable après redémarrage.
+ */
+const botBudgetMode = process.env.BOT_BUDGET_MODE?.trim() || '';
+const budgetModeReserveExcessFromStart = botBudgetMode === 'reserve_excess_from_start';
+const botStartStakeUsd = Number(process.env.BOT_START_STAKE_USD) || orderSizeUsd;
+const botReservedExtraUsdOverride = Number(process.env.BOT_RESERVED_EXTRA_USD);
+const hasBotReservedExtraUsdOverride = Number.isFinite(botReservedExtraUsdOverride) && botReservedExtraUsdOverride >= 0;
+
+const BUDGET_STATE_FILE = path.join(BOT_DIR, 'budget-state.json');
+let budgetStateLoaded = false;
+/** @type {{ mode: string, startStakeUsd: number, reservedExtraUsd: number, seedBalanceUsd: number, createdAtMs: number } | null} */
+let budgetState = null;
+
+function loadBudgetStateIfNeeded() {
+  if (!budgetModeReserveExcessFromStart) return;
+  if (budgetStateLoaded) return;
+  budgetStateLoaded = true;
+  try {
+    const raw = fs.readFileSync(BUDGET_STATE_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return;
+    const reservedExtraUsd = Number(obj.reservedExtraUsd);
+    const startStakeUsd = Number(obj.startStakeUsd);
+    if (!Number.isFinite(reservedExtraUsd) || !Number.isFinite(startStakeUsd)) return;
+    budgetState = {
+      mode: String(obj.mode || botBudgetMode),
+      startStakeUsd,
+      reservedExtraUsd,
+      seedBalanceUsd: Number(obj.seedBalanceUsd ?? 0),
+      createdAtMs: Number(obj.createdAtMs ?? Date.now()),
+    };
+  } catch (_) {
+    // initialisé au premier sizing effectif
+  }
+}
+
+function persistBudgetState(next) {
+  if (!budgetModeReserveExcessFromStart) return;
+  try {
+    const tmp = BUDGET_STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 0) + '\n', 'utf8');
+    fs.renameSync(tmp, BUDGET_STATE_FILE);
+  } catch (e) {
+    console.warn('[Budget] impossible de persister budget-state.json:', e?.message || e);
+  }
+}
+
+function ensureBudgetStateInitialized(seedBalanceUsd) {
+  loadBudgetStateIfNeeded();
+  if (budgetState) return budgetState;
+  if (!Number.isFinite(seedBalanceUsd) || seedBalanceUsd <= 0) return null;
+
+  const reservedExtraUsd = hasBotReservedExtraUsdOverride
+    ? Math.max(0, botReservedExtraUsdOverride)
+    : Math.max(0, seedBalanceUsd - botStartStakeUsd);
+
+  const next = {
+    mode: botBudgetMode,
+    startStakeUsd: botStartStakeUsd,
+    reservedExtraUsd,
+    seedBalanceUsd,
+    createdAtMs: Date.now(),
+  };
+  budgetState = next;
+  persistBudgetState(next);
+  return budgetState;
+}
+
+/** Solde “effectif” utilisé pour sizing, une fois la réserve excès retirée. */
+function getEffectiveBalanceForSizing(balanceUsd) {
+  if (!budgetModeReserveExcessFromStart) return balanceUsd;
+  if (!Number.isFinite(balanceUsd)) return null;
+  const st = ensureBudgetStateInitialized(balanceUsd);
+  if (!st) return null;
+  const reservedExtraUsd = st.reservedExtraUsd ?? 0;
+  return Math.max(0, balanceUsd - reservedExtraUsd);
+}
 /**
  * Plafond fixe de taille d'ordre (USDC), appliqué après solde / liquidité.
  * Remplace l'intérêt de la « mise max » carnet si USE_LIQUIDITY_CAP / USE_AVG_PRICE_SIZING sont désactivés.
@@ -3281,10 +3364,12 @@ async function tryPlaceOrderForSignal(signal) {
   const rpcBalance = spendableBalance == null ? await getUsdcBalanceRpc() : null;
   const balance = spendableBalance ?? rpcBalance;
   timingsMs.balance = Math.max(1, Date.now() - tBal0);
-  let amountUsd = useBalanceAsSize ? (balance ?? orderSizeUsd) : orderSizeUsd;
+  const balanceForSizing =
+    useBalanceAsSize && budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
+  let amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
   const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
-  if (balance != null && Number.isFinite(balance) && balance > 0) {
-    amountUsd = Math.min(amountUsd, Math.max(0, balance - spendableBufferUsd));
+  if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+    amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
   }
 
   let allowBelowMin = false;
@@ -3824,10 +3909,12 @@ async function run() {
       if (useBalanceAsSize) {
         const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
         const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
-        amountUsd = balance != null ? balance : orderSizeUsd;
+        const balanceForSizing =
+          budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+        amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
         const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
-        if (balance != null && Number.isFinite(balance) && balance > 0) {
-          amountUsd = Math.min(amountUsd, Math.max(0, balance - spendableBufferUsd));
+        if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+          amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
         }
         if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
         else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
@@ -3921,7 +4008,13 @@ async function run() {
       const tBal0 = Date.now();
       const balance = await getBalance();
       timingsMs.balance = Math.max(1, Date.now() - tBal0);
-      amountUsd = balance != null ? balance : orderSizeUsd;
+      const balanceForSizing =
+        budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+      amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
+      const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+      if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+        amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+      }
       if (amountUsd < orderSizeMinUsd) {
         recordSkipReason('amount_below_min', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
         logSignalInRangeButNoOrder('poll', 'amount_below_min', s, {
