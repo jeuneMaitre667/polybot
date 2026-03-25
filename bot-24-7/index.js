@@ -1366,36 +1366,104 @@ async function tryStopLossForOpenPosition(clobClient) {
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
 
   try {
+    // Polymarket CLOB exige que maker & taker (fixed-point 6 décimales côté CLOB) soient > 0.
+    // Avec des positions très petites, un `STOP_LOSS_WORST_PRICE_P` trop bas peut rendre le taker amount
+    // ~0 après arrondi -> erreur 400: "maker and taker amount must be higher than 0".
+    const minRawAmount = 1; // seuil minimal en unités fixed-point (1e-6)
+    const rawMaker = tokensToSell * 1e6; // maker = tokens outcome côté SELL
+    if (!(rawMaker >= minRawAmount)) {
+      logJson('warn', 'Stop-loss: tokensToSell trop petits pour CLOB (maker < 1 raw)', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        tokensToSell,
+        rawMaker: Math.round(rawMaker * 1000) / 1000,
+      });
+      return;
+    }
+
+    const minWorstPriceForValidTakerP = minRawAmount / (tokensToSell * 1e6); // makerRaw * priceRaw >= 1
+    let worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
+    // Contrainte logique : en stop-loss, le worst acceptable ne devrait pas dépasser le seuil de déclenchement.
+    worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
+    worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
+    const rawTaker = tokensToSell * worstPricePUsed * 1e6; // taker = USDC.e reçu côté SELL
+    if (!(rawTaker >= minRawAmount)) {
+      logJson('warn', 'Stop-loss: impossible d’obtenir un taker > 0 raw', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        tokensToSell,
+        worstPricePUsed,
+        rawTaker: Math.round(rawTaker * 1000) / 1000,
+        stopLossWorstPriceP,
+      });
+      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      return;
+    }
+
     const userMarketOrder = {
       tokenID: tokenId,
       amount: tokensToSell,
       side: Side.SELL,
-      price: stopLossWorstPriceP,
+      price: worstPricePUsed,
     };
     const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
     const result = await clobClient.postOrder(signedOrder, marketOrderType);
     const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
     const clobResponse = serializeClobPostOrderResponseForLog(result);
     const nowIso = new Date().toISOString();
-    const exitOrder = {
+    const exitFilledOk =
+      Number.isFinite(fill?.filledOutcomeTokens) &&
+      fill.filledOutcomeTokens > 0 &&
+      Number.isFinite(fill?.filledUsdc) &&
+      fill.filledUsdc > 0;
+
+    const baseExitOrder = {
       at: nowIso,
       conditionId,
       tokenId,
       takeSide,
       orderID: result?.orderID ?? result?.id,
-      stopLossExit: true,
       stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
       stopLossMaxDrawdownPct: -Math.abs(stopLossMaxDrawdownPct),
       stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       stopLossObservedDrawdownPct: Math.round(drawdownPct * 100) / 100,
       stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
       stopLossBestBidP: Math.round(bestBid * 1e6) / 1e6,
+      stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
       marketEndMs: endMs,
       clobSignerAddress: wallet?.address ?? null,
       clobSignatureType: CLOB_SIGNATURE_TYPE,
       clobFunderAddress: clobFunderAddress ?? null,
       ...pickFillFieldsForLog({ clobResponse, ...fill }),
     };
+
+    // Si l’ordre n’est pas rempli (ou rejeté sans throw), on ne doit PAS écraser last-order.json avec
+    // `stopLossExit=true` : sinon le bot ne retry plus (ce qui laisse la position ouverte).
+    if (!exitFilledOk) {
+      appendOrderLog({
+        ...baseExitOrder,
+        stopLossExit: false,
+        stopLossExitAttemptFailed: true,
+      });
+      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      logJson('warn', 'Stop-loss: tentative d’exit rejetée / non remplie — retry planifié', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        exitFilledOk,
+        stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+        stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+        orderID: result?.orderID ?? result?.id,
+        triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+        errorHint: fill?.clobErrorMsg ?? fill?.clobStatus ?? clobResponse?.error ?? null,
+      });
+      return;
+    }
+
+    const exitOrder = {
+      ...baseExitOrder,
+      stopLossExit: true,
+    };
+
     writeLastOrder(exitOrder);
     appendOrderLog(exitOrder);
     stopLossNextAttemptByCondition.delete(conditionId);
@@ -1410,6 +1478,7 @@ async function tryStopLossForOpenPosition(clobClient) {
       entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
       bestBidP: Math.round(bestBid * 1e6) / 1e6,
       orderID: result?.orderID ?? result?.id,
+      worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
     });
     console.warn(
       `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
