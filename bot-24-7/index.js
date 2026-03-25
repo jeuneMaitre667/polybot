@@ -1105,8 +1105,58 @@ function serializeClobPostOrderResponseForLog(body) {
 }
 
 /**
+ * Montant CLOB : soit entier en micro-unités (÷ 1e6), soit déjà en unités décimales (ex. "11.919974" USDC).
+ * Sans cette distinction, "11.919974" était lu comme ~0.000012 USDC → Telegram / last-order à ~0 %.
+ */
+function parseClobAmountField(v) {
+  if (v == null || v === '') return null;
+  const s = typeof v === 'bigint' ? v.toString() : String(v).trim();
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  if (/[.eE]/.test(s)) return n;
+  return n / 1e6;
+}
+
+/**
+ * Somme des legs `matched` dans `clobResponses` quand le top-level est vide / erroné.
+ */
+function sumMatchedClobLegFills(clobResponses, orderSide) {
+  if (!Array.isArray(clobResponses) || !clobResponses.length) return null;
+  let sumUsdc = 0;
+  let sumTok = 0;
+  let matched = 0;
+  for (const leg of clobResponses) {
+    if (!leg || typeof leg !== 'object') continue;
+    const ok =
+      leg.success === true ||
+      leg.status === 'matched' ||
+      leg.status === 'MATCHED' ||
+      leg.status === 'filled';
+    if (!ok) continue;
+    const rawMake = leg.makingAmount ?? leg.making_amount;
+    const rawTake = leg.takingAmount ?? leg.taking_amount;
+    let fu;
+    let ft;
+    if (orderSide === Side.BUY) {
+      fu = parseClobAmountField(rawMake);
+      ft = parseClobAmountField(rawTake);
+    } else {
+      ft = parseClobAmountField(rawMake);
+      fu = parseClobAmountField(rawTake);
+    }
+    if (fu != null && fu > 0) {
+      sumUsdc += fu;
+      matched += 1;
+    }
+    if (ft != null && ft > 0) sumTok += ft;
+  }
+  if (matched === 0 || sumUsdc <= 0) return null;
+  return { filledUsdc: sumUsdc, filledOutcomeTokens: sumTok > 0 ? sumTok : null };
+}
+
+/**
  * Parse la réponse POST /order (SendOrderResponse Polymarket).
- * makingAmount / takingAmount : fixed-point 6 décimales (chaîne ou nombre).
+ * makingAmount / takingAmount : micro-unités entières **ou** chaînes décimales selon la route.
  * Pour un BUY : maker paie USDC → makingAmount = USDC ; takingAmount = tokens outcome.
  */
 function parsePolymarketPostOrderFill(responseBody, { orderSide = Side.BUY, requestedUsd = null } = {}) {
@@ -1123,22 +1173,26 @@ function parsePolymarketPostOrderFill(responseBody, { orderSide = Side.BUY, requ
   };
   if (!responseBody || typeof responseBody !== 'object') return out;
 
-  const raw6ToFloat = (v) => {
-    if (v == null || v === '') return null;
-    const s = typeof v === 'bigint' ? v.toString() : String(v);
-    const n = Number(s);
-    if (!Number.isFinite(n)) return null;
-    return n / 1e6;
-  };
-
   const rawMake = responseBody.makingAmount ?? responseBody.making_amount;
   const rawTake = responseBody.takingAmount ?? responseBody.taking_amount;
   if (orderSide === Side.BUY) {
-    out.filledUsdc = raw6ToFloat(rawMake);
-    out.filledOutcomeTokens = raw6ToFloat(rawTake);
+    out.filledUsdc = parseClobAmountField(rawMake);
+    out.filledOutcomeTokens = parseClobAmountField(rawTake);
   } else {
-    out.filledOutcomeTokens = raw6ToFloat(rawMake);
-    out.filledUsdc = raw6ToFloat(rawTake);
+    out.filledOutcomeTokens = parseClobAmountField(rawMake);
+    out.filledUsdc = parseClobAmountField(rawTake);
+  }
+
+  const legSum = sumMatchedClobLegFills(responseBody.clobResponses, orderSide);
+  if (legSum?.filledUsdc != null && legSum.filledUsdc > (out.filledUsdc ?? 0)) {
+    if ((out.filledUsdc ?? 0) < legSum.filledUsdc * 0.01) {
+      logJson('warn', 'Remplissage CLOB: top-level sous-estimé — utilisation des legs clobResponses', {
+        topFilledUsdc: out.filledUsdc,
+        legFilledUsdc: legSum.filledUsdc,
+      });
+    }
+    out.filledUsdc = legSum.filledUsdc;
+    if (legSum.filledOutcomeTokens != null) out.filledOutcomeTokens = legSum.filledOutcomeTokens;
   }
 
   if (requestedUsd != null && requestedUsd > 0 && out.filledUsdc != null && out.filledUsdc >= 0) {
@@ -3062,7 +3116,14 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
         const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
         const clobResponse = serializeClobPostOrderResponseForLog(result);
         consecutiveOrderErrors = 0;
-        return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit, clobResponse, ...fill };
+        return {
+          ok: true,
+          orderID: result?.orderID ?? result?.id,
+          preSignCacheHit,
+          clobResponse,
+          ...(Array.isArray(result?.clobResponses) ? { clobResponses: result.clobResponses } : {}),
+          ...fill,
+        };
       }
       const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
       // Ordre limite : create + sign puis POST (même pattern que marché).
@@ -3071,7 +3132,14 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
       const clobResponse = serializeClobPostOrderResponseForLog(result);
       consecutiveOrderErrors = 0;
-      return { ok: true, orderID: result?.orderID ?? result?.id, preSignCacheHit: false, clobResponse, ...fill };
+      return {
+        ok: true,
+        orderID: result?.orderID ?? result?.id,
+        preSignCacheHit: false,
+        clobResponse,
+        ...(Array.isArray(result?.clobResponses) ? { clobResponses: result.clobResponses } : {}),
+        ...fill,
+      };
     } catch (err) {
       const apiErrorDetail =
         err?.response?.data?.error ||
