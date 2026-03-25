@@ -11,6 +11,11 @@ import {
   ORDER_BOOK_SIGNAL_MIN_P,
 } from '@/lib/orderBookLiquidity.js';
 import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
+import { useWallet } from '@/context/useWallet.js';
+import { resolveTradeHistoryAddress } from '@/lib/tradeHistoryAddress.js';
+import { sumManualTopupUsd } from '@/lib/tradeHistoryManualTopups.js';
+import { useBridgeDeposits } from '@/hooks/useBridgeDeposits.js';
+import { useManualTopupEntries } from '@/hooks/useManualTopupEntries.js';
 
 function formatUsd(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -98,6 +103,11 @@ function isPriceInSignalBand(p) {
   return n >= ORDER_BOOK_SIGNAL_MIN_P && n <= ORDER_BOOK_SIGNAL_MAX_P;
 }
 
+/**
+ * Variation relative du solde **bot** (même source que `balanceHistory` / `balance.json`).
+ * Ne pas passer le solde wallet on-chain ici : les relevés historiques sont des snapshots CLOB/bot, pas l’USDC chaîne.
+ * @returns {{ pct: number, window: 'rolling24h' | 'sinceFirst' } | null}
+ */
 function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
   const history = Array.isArray(balanceHistory) ? balanceHistory : [];
   if (!history.length) return null;
@@ -112,13 +122,18 @@ function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
     currentBalance != null ? Number(currentBalance) : Number(sorted[sorted.length - 1].balance);
   if (!Number.isFinite(lastBalance)) return null;
 
-  // Baseline "24h": dernier point <= cutoff, sinon premier point disponible.
   const beforeOrAtCutoff = sorted.filter((p) => new Date(p.at).getTime() <= cutoff);
-  let baseline = beforeOrAtCutoff.length
-    ? Number(beforeOrAtCutoff[beforeOrAtCutoff.length - 1].balance)
-    : Number(sorted[0].balance);
+  /** `rolling24h` : dernier relevé au plus à il y a 24h. `sinceFirst` : historique entièrement plus récent → pas d’ancre 24h. */
+  let baseline;
+  let window;
+  if (beforeOrAtCutoff.length) {
+    baseline = Number(beforeOrAtCutoff[beforeOrAtCutoff.length - 1].balance);
+    window = 'rolling24h';
+  } else {
+    baseline = Number(sorted[0].balance);
+    window = 'sinceFirst';
+  }
 
-  // Garde-fou: éviter un % délirant si la baseline est quasi nulle.
   const MIN_BASELINE_USD = 1;
   if (!Number.isFinite(baseline) || baseline < MIN_BASELINE_USD) {
     const firstUsable = sorted.find((p) => Number(p.balance) >= MIN_BASELINE_USD);
@@ -126,12 +141,14 @@ function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
   }
   if (!(Number.isFinite(baseline) && baseline > 0)) return null;
 
-  return ((lastBalance - baseline) / baseline) * 100;
+  const pct = ((lastBalance - baseline) / baseline) * 100;
+  return { pct, window };
 }
 
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL;
   const statusUrl15m = DEFAULT_BOT_STATUS_URL_15M;
+  const { address: walletAddress } = useWallet();
   const { data } = useBotStatus(statusUrl);
   const { data: data15m } = useBotStatus(statusUrl15m);
   /** Persisté (localStorage) ; 15m seulement si URL bot 15m configurée. */
@@ -153,7 +170,6 @@ export function BotOverview() {
   const orders24h = data?.ordersLast24h ?? null;
   const orders24h15m = data15m?.ordersLast24h ?? null;
   const pnl = computePnl(data?.balanceHistory, balance, nowMs);
-  const pnl15m = computePnl(data15m?.balanceHistory, balance15m, nowMs);
   const funder15m = data15m?.lastOrder?.clobFunderAddress ?? null;
   const signer15m = data15m?.lastOrder?.clobSignerAddress ?? null;
   const [walletUsdc15m, setWalletUsdc15m] = useState(null);
@@ -216,6 +232,7 @@ export function BotOverview() {
     };
   }, [preferredWalletAddress]);
 
+  /** Même source que la carte « Solde 15 Min » (wallet USDC.e si dispo, sinon balance status). */
   const displayedBalance15m = walletUsdc15m != null ? walletUsdc15m : balance15m;
 
   const tradeLatencyStats = data?.tradeLatencyStats ?? null;
@@ -242,6 +259,29 @@ export function BotOverview() {
       ),
     [data15m?.lastOrder?.clobFunderAddress, data?.lastOrder?.clobFunderAddress],
   );
+
+  const historyAddressTradePnl = useMemo(
+    () =>
+      resolveTradeHistoryAddress({
+        connectedAddress: walletAddress,
+        botFunderCandidates: tradeHistoryBotFunders,
+      }).address,
+    [walletAddress, tradeHistoryBotFunders],
+  );
+  const manualEntriesForPnl = useManualTopupEntries(historyAddressTradePnl);
+  const { totalApproxUsdc: bridgeTotalForPnl } = useBridgeDeposits(historyAddressTradePnl);
+  const manualAdjustmentPnl = useMemo(() => sumManualTopupUsd(manualEntriesForPnl), [manualEntriesForPnl]);
+  const capitalIn15m = manualAdjustmentPnl + (Number(bridgeTotalForPnl) || 0);
+  const netPnl15mVsDeposits = useMemo(() => {
+    if (!show15m || !historyAddressTradePnl) return null;
+    const b = Number(displayedBalance15m);
+    if (!Number.isFinite(b)) return null;
+    return b - (Number(bridgeTotalForPnl) || 0) - manualAdjustmentPnl;
+  }, [show15m, historyAddressTradePnl, displayedBalance15m, bridgeTotalForPnl, manualAdjustmentPnl]);
+  const pnl15mRoiPct =
+    netPnl15mVsDeposits != null && capitalIn15m > 0
+      ? (netPnl15mVsDeposits / capitalIn15m) * 100
+      : null;
 
   const {
     avgUsd: miseMaxAvg15m,
@@ -311,6 +351,24 @@ export function BotOverview() {
   const bestAskDownAligned = bestAskDeltaDown != null ? bestAskDeltaDown <= BEST_ASK_DELTA_OK_P : null;
 
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
+  /** Dernier ordre mesuré : WS ou poll (souvent poll si placement via boucle principale, pas le handler WS). */
+  const lastTradeLatency = useMemo(() => {
+    if (!activeLatency) return null;
+    const ws = activeLatency.ws;
+    const poll = activeLatency.poll;
+    const wsMs = Number(ws?.lastLatencyMs);
+    const pollMs = Number(poll?.lastLatencyMs);
+    const wsT = ws?.lastLatencyAt ? new Date(ws.lastLatencyAt).getTime() : NaN;
+    const pollT = poll?.lastLatencyAt ? new Date(poll.lastLatencyAt).getTime() : NaN;
+    const wsOk = Number.isFinite(wsMs) && wsMs > 0 && Number.isFinite(wsT);
+    const pollOk = Number.isFinite(pollMs) && pollMs > 0 && Number.isFinite(pollT);
+    if (!wsOk && !pollOk) return null;
+    if (wsOk && !pollOk) return { ms: wsMs, source: 'ws', at: ws.lastLatencyAt };
+    if (!wsOk && pollOk) return { ms: pollMs, source: 'poll', at: poll.lastLatencyAt };
+    return wsT >= pollT
+      ? { ms: wsMs, source: 'ws', at: ws.lastLatencyAt }
+      : { ms: pollMs, source: 'poll', at: poll.lastLatencyAt };
+  }, [activeLatency]);
   const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
   const activeLatencyBreakdown = latencyMode === '15m' ? tradeLatencyBreakdownStats15m : tradeLatencyBreakdownStats;
   const activeCycleLatency = latencyMode === '15m' ? cycleLatencyStats15m : cycleLatencyStats;
@@ -506,26 +564,47 @@ export function BotOverview() {
             <div>15 Min <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
           </div>
           <div className="card-sub" style={{ marginTop: 6 }}>
-            Compte les lignes du fichier <code>orders.log</code> du bot — ce n’est pas le nombre d’ordres encore ouverts sur
-            Polymarket.
+            Lignes <code>orders.log</code> sur 24 h, hors tentatives stop-loss rejetées (sans exécution). À rapprocher de
+            l’historique Polymarket ci-dessous — ce n’est pas le nombre d’ordres encore ouverts sur le carnet.
           </div>
         </div>
       </div>
 
       <div className="grid-main">
         <div className="card">
-          <div className="card-label">PNL Horaire (24h)</div>
-          <div className={`card-value ${pnl != null ? (pnl >= 0 ? 'green' : 'red') : ''}`}>
-            {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)} %` : '—'}
+          <div className="card-label">
+            {pnl?.window === 'sinceFirst' ? 'PNL Horaire (depuis 1er relevé)' : 'PNL Horaire (24h)'}
+          </div>
+          <div className={`card-value ${pnl != null ? (pnl.pct >= 0 ? 'green' : 'red') : ''}`}>
+            {pnl != null ? `${pnl.pct >= 0 ? '+' : ''}${pnl.pct.toFixed(1)} %` : '—'}
           </div>
           <div className="card-sub">{orders24h ? `${orders24h} ordre(s)` : 'Aucun trade exécuté'}</div>
         </div>
         <div className="card">
-          <div className="card-label">PNL 15 Min (24h)</div>
-          <div className={`card-value ${pnl15m != null ? (pnl15m >= 0 ? 'green' : 'red') : ''}`}>
-            {show15m && pnl15m != null ? `${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(1)} %` : '—'}
+          <div className="card-label">PNL net 15m (vs dépôts)</div>
+          <div
+            className={`card-value ${netPnl15mVsDeposits != null ? (netPnl15mVsDeposits >= 0 ? 'green' : 'red') : ''}`}
+          >
+            {show15m && netPnl15mVsDeposits != null ? formatSignedUsd(netPnl15mVsDeposits) : '—'}
           </div>
-          <div className="card-sub">{show15m && orders24h15m ? `${orders24h15m} ordre(s)` : 'Aucun trade exécuté'}</div>
+          {show15m && historyAddressTradePnl && capitalIn15m > 0 && pnl15mRoiPct != null && (
+            <div className="card-sub">
+              {pnl15mRoiPct >= 0 ? '+' : ''}
+              {pnl15mRoiPct.toFixed(1)} % vs capital (manuel + bridge)
+            </div>
+          )}
+          <div className="card-sub">
+            {show15m && orders24h15m ? `${orders24h15m} ordre(s)` : 'Aucun trade exécuté'}
+            {show15m && historyAddressTradePnl ? (
+              <>
+                {' '}
+                · Même formule que l’historique des trades : solde affiché − dépôts bridge − entrées manuelles.
+              </>
+            ) : null}
+          </div>
+          {show15m && !historyAddressTradePnl && (
+            <div className="card-sub">Configurez le bot ou l’adresse trades pour lier les dépôts manuels (localStorage).</div>
+          )}
         </div>
         <div className="card">
           <div className="card-label">Position 15m en cours</div>
@@ -744,31 +823,35 @@ export function BotOverview() {
         </div>
 
         <div className="grid-main overview-latency-grid-main">
-        {/* Dernier trade WS */}
+        {/* Dernier trade (latence) — WS ou poll selon le dernier enregistrement côté bot */}
         <div className="card latency-kpi-card">
-          <div className="card-label">Dernier trade WS</div>
-          <div
-            className={`card-value ${
-              hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'green' : ''
-            }`}
-          >
-            {hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? formatMs(activeLatency.ws.lastLatencyMs) : '—'}
+          <div className="card-label">Dernier trade (latence)</div>
+          <div className={`card-value ${lastTradeLatency != null ? 'green' : ''}`}>
+            {lastTradeLatency != null ? formatMs(lastTradeLatency.ms) : '—'}
           </div>
           <div className="card-sub latency-kpi-card__body">
-            {hasActiveLatency && (activeLatency?.ws?.count ?? 0) > 0 ? (
+            {lastTradeLatency != null ? (
               <div className="latency-kpi-card__sub">
-                {(activeLatency.ws.count ?? 0)} trade{activeLatency.ws.count !== 1 ? 's' : ''} WS sur 24 h.
+                Source : <strong>{lastTradeLatency.source === 'ws' ? 'WebSocket' : 'poll'}</strong>
+                {lastTradeLatency.at ? ` · ${formatSecondsAgo(lastTradeLatency.at, nowMs) ?? '—'}` : ''}
               </div>
+            ) : hasActiveLatency ? (
+              <div className="latency-kpi-card__sub">Pas de latence enregistrée sur les dernières 24 h.</div>
             ) : (
-              <div className="latency-kpi-card__sub">Mesure seulement quand un ordre WS est placé.</div>
+              <div className="latency-kpi-card__sub">Données latence indisponibles.</div>
+            )}
+            {hasActiveLatency && (activeLatency?.ws?.count ?? 0) + (activeLatency?.poll?.count ?? 0) > 0 && (
+              <div className="latency-kpi-card__sub">
+                24 h : {activeLatency.ws?.count ?? 0} WS · {activeLatency.poll?.count ?? 0} poll
+              </div>
             )}
           </div>
           <span
             className={`latency-card-pill ${
-              hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'
+              lastTradeLatency != null ? 'latency-card-pill--ok' : 'latency-card-pill--idle'
             }`}
           >
-            {hasActiveLatency && activeLatency?.ws?.lastLatencyMs != null ? 'WS' : 'En attente'}
+            {lastTradeLatency != null ? (lastTradeLatency.source === 'ws' ? 'WS' : 'Poll') : 'En attente'}
           </span>
         </div>
 

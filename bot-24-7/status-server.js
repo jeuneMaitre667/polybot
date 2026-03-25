@@ -122,6 +122,17 @@ function getBalanceHistory(maxPoints = 500) {
 }
 
 /**
+ * Ligne orders.log à compter comme « événement trade » côté dashboard (aligné avec l’historique Polymarket).
+ * Exclut les tentatives stop-loss rejetées (appendOrderLog avec stopLossExitAttemptFailed) : pas de trade effectif,
+ * mais une ligne par retry → gonflait fortement ordersLast24h vs la Data API.
+ */
+function ordersLogLineIsCountableTrade(o) {
+  if (!o || typeof o !== 'object') return false;
+  if (o.stopLossExitAttemptFailed === true) return false;
+  return true;
+}
+
+/**
  * Compte les ordres dans orders.log sur les 24 dernières heures + stats remplissage (fillRatio, compléments FAK).
  * Si orders.log dépasse ~12 Mo, seule la fin du fichier est lue (win rate / stats = approximation sur cette fenêtre).
  */
@@ -156,9 +167,10 @@ function getStats24h() {
         const o = JSON.parse(line);
         const at = o.at ? new Date(o.at).getTime() : 0;
         if (at >= cutoff) {
-          ordersLast24h++;
+          const countThis = ordersLogLineIsCountableTrade(o);
+          if (countThis) ordersLast24h++;
           const fr = o.fillRatio;
-          if (fr != null && Number.isFinite(Number(fr))) {
+          if (countThis && fr != null && Number.isFinite(Number(fr))) {
             const n = Number(fr);
             fillRatioCount += 1;
             fillRatioSum += n;
@@ -166,7 +178,7 @@ function getStats24h() {
             if (fillRatioMax == null || n > fillRatioMax) fillRatioMax = n;
           }
           const pr = Number(o.partialFillRetries);
-          if (Number.isFinite(pr) && pr > 0) {
+          if (countThis && Number.isFinite(pr) && pr > 0) {
             ordersWithPartialRetries += 1;
             partialRetriesSum += pr;
           }
