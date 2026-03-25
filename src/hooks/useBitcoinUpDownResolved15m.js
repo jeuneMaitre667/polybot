@@ -73,7 +73,11 @@ function resolve15mSimConfig(options) {
   return out;
 }
 
-/** Stop-loss backtest 15m : mêmes défauts que le bot (`STOP_LOSS_*` dans `bot-24-7/index.js`). */
+/**
+ * Stop-loss backtest 15m : mêmes défauts **numériques** que `STOP_LOSS_*` dans `bot-24-7/index.js`.
+ * Le bot utilise le **best bid** CLOB pour le SL ; le backtest utilise le prix **historique** (mid / trades). Pour coller
+ * au serveur, définir `VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P` (ex. 0.70) comme `STOP_LOSS_TRIGGER_PRICE_P`.
+ */
 const envBacktestSl = import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED;
 const BACKTEST_STOP_LOSS_ENABLED = envBacktestSl !== 'false' && envBacktestSl !== '0';
 const BACKTEST_STOP_LOSS_TRIGGER_PRICE_P = Math.max(
@@ -604,6 +608,8 @@ function mergePriceSeriesSorted(a, b) {
 /**
  * Après entrée : premier instant (série du token acheté) où un proxy prix déclenche le stop hybride bot
  * (prix &lt; seuil **ou** drawdown depuis l’entrée ≤ −X %). Proxy = même `p` que la détection (mid / trades).
+ * **Écart vs bot** : `tryStopLossForOpenPosition` lit le **best bid** CLOB ; ici le bid peut être plus bas que le mid
+ * historique → le tableau peut ne pas afficher de SL alors qu’en live il a été déclenché (ou l’inverse).
  */
 function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
   if (!BACKTEST_STOP_LOSS_ENABLED) return { triggered: false };

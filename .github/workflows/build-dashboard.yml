@@ -22,7 +22,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # Aligné sur CI (lint/tests) — Vite 8 + Rolldown : Node 22 a montré des échecs bundling intermittents sur ubuntu-latest.
+          node-version: '20'
           cache: npm
       - run: npm ci
       - run: npm run build
