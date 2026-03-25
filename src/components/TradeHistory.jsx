@@ -4,6 +4,7 @@ import { useWallet } from '../context/useWallet';
 import { useTradeHistory } from '../hooks/useTradeHistory';
 import { useBridgeDeposits } from '../hooks/useBridgeDeposits';
 import { resolveTradeHistoryAddress, tradeHistorySourceLabel } from '../lib/tradeHistoryAddress.js';
+import { loadManualEntries, makeEntryId } from '../lib/tradeHistoryManualTopups.js';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -21,49 +22,6 @@ function formatWalletShort(addr) {
 function formatPrice(p) {
   if (p == null || Number.isNaN(p)) return '—';
   return `${(Number(p) * 100).toFixed(1)} %`;
-}
-
-function makeEntryId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function defaultManualEntries() {
-  return [
-    { id: makeEntryId(), date: format(new Date(Date.now() - 24 * 60 * 60 * 1000), 'yyyy-MM-dd'), amount: 4.71, label: 'Depot manuel' },
-    { id: makeEntryId(), date: format(new Date(), 'yyyy-MM-dd'), amount: 10.37, label: 'Depot manuel' },
-  ];
-}
-
-function loadManualEntries(historyAddress) {
-  if (!historyAddress) return [];
-  try {
-    const key = `trade-history-topups:${historyAddress.toLowerCase()}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-    // Fallback de migration: reprendre la dernière liste existante
-    // si l'adresse source a changé (wallet -> bot funder, etc.).
-    let best = null;
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith('trade-history-topups:')) continue;
-      const v = localStorage.getItem(k);
-      if (!v) continue;
-      try {
-        const arr = JSON.parse(v);
-        if (!Array.isArray(arr) || arr.length === 0) continue;
-        if (!best || arr.length > best.length) best = arr;
-      } catch {
-        // ignore parse issues
-      }
-    }
-    if (best) return best;
-    return defaultManualEntries();
-  } catch {
-    return defaultManualEntries();
-  }
 }
 
 /** Notional USDC du fill (Data API : `size` × `price`, price 0–1). */
@@ -741,61 +699,70 @@ export function TradeHistory({
               </div>
             )}
 
-            <div className="strat-table-wrap trade-history-table-wrap">
-              <table className="strat-table">
-                <thead>
-                  <tr>
-                    <th className="strat-th">Date</th>
-                    <th className="strat-th">Marché</th>
-                    <th className="strat-th">Côté</th>
-                    <th className="strat-th">Outcome</th>
-                    <th className="strat-th strat-th--right">Taille</th>
-                    <th className="strat-th strat-th--right">Stake (USDC)</th>
-                    <th className="strat-th strat-th--right">Avg price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((t, i) => (
-                    <tr
-                      key={t.transactionHash ? `${t.transactionHash}-${i}` : `trade-${i}`}
-                      className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}
-                    >
-                      <td className="strat-td strat-muted strat-td--nowrap">{formatDate(t.timestamp)}</td>
-                      <td className="strat-td strat-td--truncate-market" title={t.title || t.slug}>
-                        {t.title || t.slug || '—'}
-                      </td>
-                      <td className="strat-td">
-                        <span className={t.side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell'}>
-                          {t.side === 'BUY' ? 'Achat' : 'Vente'}
-                        </span>
-                      </td>
-                      <td className="strat-td strat-muted">{t.outcome ?? '—'}</td>
-                      <td className="strat-td strat-td--right strat-td--semi">{t.size != null ? Number(t.size).toFixed(2) : '—'}</td>
-                      <td className="strat-td strat-td--right">
-                        {(() => {
-                          const s = tradeStakeUsdc(t);
-                          return s == null ? '—' : `${s.toFixed(2)} $`;
-                        })()}
-                      </td>
-                      <td className="strat-td strat-td--right">{formatPrice(t.price)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <details className="trade-history-trades-details">
+              <summary className="trade-history-trades-details__summary">
+                Liste détaillée des trades{' '}
+                <span className="trade-history-trades-details__count">({filtered.length})</span>
+                <span className="trade-history-trades-details__hint"> — cliquer pour afficher / masquer</span>
+              </summary>
+              <div className="trade-history-trades-details__inner">
+                <div className="strat-table-wrap trade-history-table-wrap trade-history-trades-details__scroll">
+                  <table className="strat-table">
+                    <thead>
+                      <tr>
+                        <th className="strat-th">Date</th>
+                        <th className="strat-th">Marché</th>
+                        <th className="strat-th">Côté</th>
+                        <th className="strat-th">Outcome</th>
+                        <th className="strat-th strat-th--right">Taille</th>
+                        <th className="strat-th strat-th--right">Stake (USDC)</th>
+                        <th className="strat-th strat-th--right">Avg price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((t, i) => (
+                        <tr
+                          key={t.transactionHash ? `${t.transactionHash}-${i}` : `trade-${i}`}
+                          className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}
+                        >
+                          <td className="strat-td strat-muted strat-td--nowrap">{formatDate(t.timestamp)}</td>
+                          <td className="strat-td strat-td--truncate-market" title={t.title || t.slug}>
+                            {t.title || t.slug || '—'}
+                          </td>
+                          <td className="strat-td">
+                            <span className={t.side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell'}>
+                              {t.side === 'BUY' ? 'Achat' : 'Vente'}
+                            </span>
+                          </td>
+                          <td className="strat-td strat-muted">{t.outcome ?? '—'}</td>
+                          <td className="strat-td strat-td--right strat-td--semi">{t.size != null ? Number(t.size).toFixed(2) : '—'}</td>
+                          <td className="strat-td strat-td--right">
+                            {(() => {
+                              const s = tradeStakeUsdc(t);
+                              return s == null ? '—' : `${s.toFixed(2)} $`;
+                            })()}
+                          </td>
+                          <td className="strat-td strat-td--right">{formatPrice(t.price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-            <div className="trade-footer-note trade-footer-note--overview">
-              <span>
-                {filtered.length} trade(s) affiché(s)
-                {filtered.length !== trades.length ? ` (${trades.length} au total chargés)` : ''}
-              </span>
-              <span className="trade-footer-sep"> — </span>
-              <span>
-                {tradeHistorySourceLabel(historySource)} · {formatWalletShort(historyAddress)}
-              </span>
-              <span className="trade-footer-sep"> — </span>
-              <span className="trade-footer-api">Data API Polymarket</span>
-            </div>
+                <div className="trade-footer-note trade-footer-note--overview trade-history-trades-details__footer">
+                  <span>
+                    {filtered.length} trade(s) affiché(s)
+                    {filtered.length !== trades.length ? ` (${trades.length} au total chargés)` : ''}
+                  </span>
+                  <span className="trade-footer-sep"> — </span>
+                  <span>
+                    {tradeHistorySourceLabel(historySource)} · {formatWalletShort(historyAddress)}
+                  </span>
+                  <span className="trade-footer-sep"> — </span>
+                  <span className="trade-footer-api">Data API Polymarket</span>
+                </div>
+              </div>
+            </details>
           </>
         )}
       </div>

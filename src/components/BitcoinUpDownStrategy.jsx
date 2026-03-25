@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
-import { useBitcoinUpDownResolved15m } from '../hooks/useBitcoinUpDownResolved15m';
+import {
+  useBitcoinUpDownResolved15m,
+  BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
+  BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT,
+  BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
+} from '../hooks/useBitcoinUpDownResolved15m';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '../hooks/useBotStatus';
 import { useWallet } from '../context/useWallet';
@@ -1223,6 +1228,29 @@ export function BitcoinUpDownStrategy() {
                   <h4 className="strat-data-window__title">
                     Fenêtre de données (15 min)
                   </h4>
+                  <div className="strat-backtest-caveat" role="note">
+                    <strong>Simu vs bot (à lire)</strong>
+                    <ul className="strat-backtest-caveat__list">
+                      <li>
+                        <strong>Prix SL</strong> : le tableau utilise le prix <strong>historique (mid)</strong> (
+                        <code>prices-history</code>) ; le bot utilise le <strong>best bid</strong> CLOB — une ligne peut
+                        afficher « pas de SL » alors qu’en live le bid était plus bas (ou l’inverse).
+                      </li>
+                      <li>
+                        <strong>Seuil SL simulé</strong> : <strong>{Math.round(BACKTEST_STOP_LOSS_TRIGGER_PRICE_P * 100)}¢</strong>{' '}
+                        ou drawdown ≤ <strong>−{BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT} %</strong>, après{' '}
+                        <strong>{BACKTEST_STOP_LOSS_MIN_HOLD_SEC}s</strong> de détention. Pour coller au serveur : même valeur
+                        dans <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P</code> (dashboard) et{' '}
+                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (bot, ex. <strong>0.75</strong> = 75¢).
+                      </li>
+                      <li>
+                        <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
+                        les <strong>3 premières</strong> et les <strong>4 dernières</strong> minutes de chaque quart d’heure
+                        local <strong>America/New_York</strong> (:00, :15, :30, :45). Le stop-loss, lui, n’est pas bloqué par
+                        cette grille.
+                      </li>
+                    </ul>
+                  </div>
                   <p className="strat-data-window__body">
                     Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
                     {' '}({Math.min(672, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
@@ -1244,8 +1272,14 @@ export function BitcoinUpDownStrategy() {
                       </span>
                     )}
                     <span className="strat-muted-tight">
-                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> (~50 %) ; exécutions via <strong>Data API</strong> (<code>asset</code> / <code>asset_id</code>, <code>outcome</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 10 min</strong> (15m + marge 15m + padding 10m). Entrées interdites par <strong>quart d’heure Eastern (ET)</strong> : pas les <strong>3 premières</strong> ni les <strong>4 dernières</strong> minutes de chaque bloc :00–:15–:30–:45 (comme l’heure affichée du trade). Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). <strong>Stop-loss</strong> (backtest, défaut = bot) : proxy prix sous <strong>75¢</strong> <em>ou</em> drawdown {'≤'} <strong>−30 %</strong> depuis l’entrée ; le <strong>PNL agrégé</strong> compte une perte max par créneau = <strong>la même fraction drawdown</strong> sur la mise (pas −100 % ni sortie worst 1¢). Désactiver le stop simulé avec{' '}
-                      <code className="trade-history-code-inline">VITE_BACKTEST_STOP_LOSS_ENABLED=false</code>. Signaux live 15m : même grille ET. Bot live : <strong>carnet / WS</strong> (cooldown ouverture + fin de créneau alignés).
+                      Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> ; exécutions via <strong>Data API</strong>{' '}
+                      (<code>asset</code> / <code>asset_id</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 45 min</strong>.
+                      Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). PNL agrégé :
+                      perte max par créneau = fraction drawdown alignée sur la simu SL (pas −100 % arbitraire). Désactiver le
+                      stop simulé :{' '}
+                      <code className="trade-history-code-inline">VITE_BACKTEST_STOP_LOSS_ENABLED=false</code>. Signaux live :
+                      même grille ET ; bot : <strong>carnet / WS</strong>. — Détails SL / bid vs mid / grille :{' '}
+                      <strong>encadré ci-dessus</strong>.
                     </span>
                   </p>
                   <label className="strat-15m-debug-toggle">

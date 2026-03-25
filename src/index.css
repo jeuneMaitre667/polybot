@@ -3207,6 +3207,35 @@ body::after {
   color: var(--text-2);
 }
 
+.strat-backtest-caveat {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  background: rgba(59, 130, 246, 0.07);
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.strat-backtest-caveat strong {
+  color: var(--text-1);
+}
+
+.strat-backtest-caveat__list {
+  margin: 8px 0 0;
+  padding-left: 1.15rem;
+}
+
+.strat-backtest-caveat__list li {
+  margin-bottom: 8px;
+}
+
+.strat-backtest-caveat__list li:last-child {
+  margin-bottom: 0;
+}
+
 .strat-strong {
   font-weight: 700;
   color: var(--text-1);
@@ -3767,6 +3796,72 @@ body::after {
 
 .trade-history-table-wrap {
   margin-top: 0;
+}
+
+.trade-history-trades-details {
+  margin-top: 4px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(2, 6, 23, 0.35);
+  overflow: hidden;
+}
+
+.trade-history-trades-details__summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 12px 14px;
+  font-family: 'Syne', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  list-style: none;
+}
+
+.trade-history-trades-details__summary::-webkit-details-marker {
+  display: none;
+}
+
+.trade-history-trades-details__summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 0.15s ease;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.trade-history-trades-details[open] .trade-history-trades-details__summary::before {
+  transform: rotate(90deg);
+}
+
+.trade-history-trades-details__count {
+  font-weight: 700;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-history-trades-details__hint {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.trade-history-trades-details__inner {
+  padding: 0 0 4px;
+}
+
+.trade-history-trades-details__scroll {
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  margin: 0 8px 0;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.trade-history-trades-details__footer.trade-footer-note--overview {
+  margin: 10px 8px 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .trade-side-buy {

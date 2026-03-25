@@ -76,15 +76,16 @@ function resolve15mSimConfig(options) {
 /**
  * Stop-loss backtest 15m : mêmes défauts **numériques** que `STOP_LOSS_*` dans `bot-24-7/index.js`.
  * Le bot utilise le **best bid** CLOB pour le SL ; le backtest utilise le prix **historique** (mid / trades). Pour coller
- * au serveur, définir `VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P` (ex. 0.70) comme `STOP_LOSS_TRIGGER_PRICE_P`.
+ * au serveur, définir `VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P` comme `STOP_LOSS_TRIGGER_PRICE_P` (défaut **0.75**).
  */
 const envBacktestSl = import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED;
 const BACKTEST_STOP_LOSS_ENABLED = envBacktestSl !== 'false' && envBacktestSl !== '0';
-const BACKTEST_STOP_LOSS_TRIGGER_PRICE_P = Math.max(
+/** Export UI : seuil SL simulé (défaut 0.75 = 75¢, aligné bot). */
+export const BACKTEST_STOP_LOSS_TRIGGER_PRICE_P = Math.max(
   0.01,
   Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P) || 0.75),
 );
-const BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT = Math.max(
+export const BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT = Math.max(
   1,
   Math.min(95, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT) || 30),
 );
@@ -92,7 +93,7 @@ const BACKTEST_STOP_LOSS_WORST_PRICE_P = Math.max(
   0.001,
   Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_WORST_PRICE_P) || 0.01),
 );
-const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
+export const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
   Math.max(0, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MIN_HOLD_MS) || 10_000) / 1000;
 
 const EMPTY_BOT_SIM_15M = {
