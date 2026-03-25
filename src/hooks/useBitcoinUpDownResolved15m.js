@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import {
   parseUpDownTokenIdsFromMarket,
@@ -246,7 +246,7 @@ async function fetch15mEventsBySlugBatches(slugs, batchSize = 4) {
 const SLOT_15M_SEC = 15 * 60;
 /**
  * Marge **avant** le début du créneau : le fetch Data API garde une fenêtre large ; le filtre simu exclut
- * les points avant `slotStart` dans `collectSimEntryCandidates`.
+ * les points avant `slotStart` dans `collectSimEntryCandidatesWithConfig`.
  */
 const SLOT_15M_MARGIN_SEC = 30 * 60;
 /**
@@ -730,65 +730,6 @@ const BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC = {
  * Candidats d’entrée (événements triés, interpolation, exclusion début / fin de quart d’heure **en heure ET**).
  * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: typeof BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC }}
  */
-function collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit = null) {
-  const up = Array.isArray(historyUp) ? historyUp : [];
-  const down = Array.isArray(historyDown) ? historyDown : [];
-  let endTsSec = null;
-  if (slotEndSecExplicit != null && Number.isFinite(Number(slotEndSecExplicit))) {
-    endTsSec = Math.floor(Number(slotEndSecExplicit));
-  } else if (endDateStr) {
-    const raw = endDateStr;
-    const endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
-    if (Number.isFinite(endMs)) endTsSec = Math.floor(endMs / 1000);
-  }
-  const events = [];
-  for (const pt of up) {
-    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
-    const t = toSeconds(pt?.t ?? pt?.timestamp);
-    if (!Number.isFinite(p) || t == null) continue;
-    events.push({ t, side: 'Up', price: p });
-    events.push({ t, side: 'Down', price: 1 - p });
-  }
-  for (const pt of down) {
-    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
-    const t = toSeconds(pt?.t ?? pt?.timestamp);
-    if (!Number.isFinite(p) || t == null) continue;
-    events.push({ t, side: 'Down', price: p });
-    events.push({ t, side: 'Up', price: 1 - p });
-  }
-  events.sort((a, b) => a.t - b.t);
-  const lastBySide = { Up: null, Down: null };
-  const candidates = [];
-  for (const ev of events) {
-    const { t, side, price } = ev;
-    if (!hasCrossedHighConviction(price, DEFAULT_DETECT_MIN_P)) {
-      lastBySide[side] = { t, price };
-      continue;
-    }
-    const prev = lastBySide[side];
-    let tsUsed = t;
-    if (prev != null && prev.price < DETECT_MIN_P && price > prev.price) {
-      const numer = DETECT_MIN_P - prev.price;
-      const denom = price - prev.price;
-      if (denom > 0) tsUsed = prev.t + (t - prev.t) * (numer / denom);
-    }
-    if (endTsSec != null && Number.isFinite(endTsSec)) {
-      const slotStartSec = endTsSec - SLOT_15M_SEC;
-      if (tsUsed > endTsSec + SLOT_ENTRY_MAX_AFTER_END_SEC || tsUsed < slotStartSec) {
-        lastBySide[side] = { t, price };
-        continue;
-      }
-      if (is15mSlotEntryTimeForbidden(tsUsed)) {
-        lastBySide[side] = { t, price };
-        continue;
-      }
-    }
-    candidates.push({ side, price: clampEntryPrice(price, DEFAULT_SIM_ENTRY_MIN_P, DEFAULT_SIM_ENTRY_MAX_P), ts: tsUsed });
-    lastBySide[side] = { t, price };
-  }
-  return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
-}
-
 function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
   const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
   const up = Array.isArray(historyUp) ? historyUp : [];
@@ -849,60 +790,6 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
   return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
 }
 
-/**
- * Indications si aucun signal — aligné sur `collectSimEntryCandidates` (interpolation + marges début/fin créneau).
- */
-function debugWhyNoSignal(historyUp, historyDown, endDateStr, slotEndSecExplicit = null) {
-  const up = Array.isArray(historyUp) ? historyUp : [];
-  const down = Array.isArray(historyDown) ? historyDown : [];
-  if (up.length === 0 && down.length === 0) {
-    return { code: 'empty_after_slot_filter', detail: 'Aucun point après filtre créneau (voir slotBounds dans simDebug).' };
-  }
-
-  const { candidates, endTsSec, forbiddenMinuteRule } = collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit);
-
-  if (candidates.length > 0) {
-    const touchesBand = candidates.slice(0, 5).map((c) => ({
-      side: c.side,
-      p: Math.round(c.price * 10000) / 10000,
-      ts: c.ts,
-    }));
-    return { code: 'would_signal', touchesBand };
-  }
-
-  const su = summarizeSeriesForDebug(up);
-  const sd = summarizeSeriesForDebug(down);
-  const maxU = maxBinaryConvictionInSeries(up);
-  const maxD = maxBinaryConvictionInSeries(down);
-  const maxBin = [maxU, maxD].filter((x) => x != null && Number.isFinite(x));
-  const peak = maxBin.length ? Math.max(...maxBin) : null;
-  const hadHigh = peak != null && peak >= DEFAULT_DETECT_MIN_P;
-
-  if (hadHigh) {
-    return {
-      code: 'excluded_by_15m_slot_forbidden_window',
-      detail: `Franchissement ≥ ${DEFAULT_DETECT_MIN_P} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
-      forbiddenMinuteRule,
-      endTsSec,
-      maxUp: su.maxP,
-      maxDown: sd.maxP,
-      maxBinaryConvictionUpToken: maxU,
-      maxBinaryConvictionDownToken: maxD,
-    };
-  }
-
-  return {
-    code: 'no_price_in_band',
-    detail: `Aucun franchissement ≥ ${DEFAULT_DETECT_MIN_P} après filtre créneau (entrée simulée ${DEFAULT_SIM_ENTRY_MIN_P}–${DEFAULT_SIM_ENTRY_MAX_P}).`,
-    maxUp: su.maxP,
-    maxDown: sd.maxP,
-    minUp: su.minP,
-    minDown: sd.minP,
-    maxBinaryConvictionUpToken: maxU,
-    maxBinaryConvictionDownToken: maxD,
-  };
-}
-
 function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
   const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
   const up = Array.isArray(historyUp) ? historyUp : [];
@@ -945,63 +832,6 @@ function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndS
     detail: `Aucun franchissement ≥ ${detectMinP} après filtre créneau (entrée simulée ${entryMinP}–${entryMaxP}).`,
     maxBinaryConvictionUpToken: maxU,
     maxBinaryConvictionDownToken: maxD,
-  };
-}
-
-/**
- * Détection entrée : **≥ DETECT_MIN_P** jusqu’à 1 ; entrée reportée **SIM_ENTRY_MIN_P–SIM_ENTRY_MAX_P**. Marché binaire : depuis chaque point Up on teste aussi **1−p** (Down implicite),
- * et depuis chaque point Down on teste **1−p** (Up implicite) — indispensable quand les deux séries CLOB sont chargées
- * (le hook 1h ne le faisait que si `down.length === 0`, ce qui bloquait la détection 15m).
- */
-function computeBotSimulation(historyUp, historyDown, winner, endDateStr, slotEndSecExplicit = null) {
-  const up = Array.isArray(historyUp) ? historyUp : [];
-  const down = Array.isArray(historyDown) ? historyDown : [];
-  if (up.length === 0 && down.length === 0) return { ...EMPTY_BOT_SIM_15M };
-
-  const { candidates } = collectSimEntryCandidates(historyUp, historyDown, endDateStr, slotEndSecExplicit);
-
-  if (candidates.length === 0) return { ...EMPTY_BOT_SIM_15M };
-  candidates.sort((a, b) => a.ts - b.ts || (a.side === 'Up' ? -1 : 1) - (b.side === 'Up' ? -1 : 1));
-  const first = candidates[0];
-  const settled = winner === 'Up' || winner === 'Down';
-  const resolutionWin = settled ? winner === first.side : null;
-  const heldSeries = first.side === 'Up' ? up : down;
-  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
-  const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
-
-  if (sl.triggered) {
-    return {
-      botWouldTake: first.side,
-      botWon: null,
-      botEntryPrice: first.price,
-      botEntryTimestamp: first.ts,
-      botOrderType: 'Marché',
-      botStopLossExit: true,
-      botStopLossReason: sl.reason,
-      botStopLossExitPriceP: Math.round(BACKTEST_STOP_LOSS_WORST_PRICE_P * 1e6) / 1e6,
-      botStopLossObservedPriceP:
-        sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
-      botStopLossObservedDrawdownPct: sl.drawdownPct,
-      botStopLossAtTimestamp: sl.t,
-      botMinObservedAfterEntryP: minAfter,
-      botResolutionWouldWin: resolutionWin,
-    };
-  }
-
-  return {
-    botWouldTake: first.side,
-    botWon: resolutionWin,
-    botEntryPrice: first.price,
-    botEntryTimestamp: first.ts,
-    botOrderType: 'Marché',
-    botStopLossExit: false,
-    botStopLossReason: null,
-    botStopLossExitPriceP: null,
-    botStopLossObservedPriceP: null,
-    botStopLossObservedDrawdownPct: null,
-    botStopLossAtTimestamp: null,
-    botMinObservedAfterEntryP: minAfter,
-    botResolutionWouldWin: null,
   };
 }
 
@@ -1064,7 +894,20 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
  */
 export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, options = {}) {
   const debug = Boolean(options.debug);
-  const simCfg = resolve15mSimConfig(options);
+  // Dépendances sur les champs numériques : `options` est souvent un objet inline (nouvelle ref à chaque render).
+  /* eslint-disable react-hooks/exhaustive-deps -- resolve15mSimConfig(options) : seuils listés dans le tableau */
+  const simCfg = useMemo(
+    () => resolve15mSimConfig(options),
+    [
+      options?.simulation?.detectMinP,
+      options?.simulation?.entryMinP,
+      options?.simulation?.entryMaxP,
+      options?.simConfig?.detectMinP,
+      options?.simConfig?.entryMinP,
+      options?.simConfig?.entryMaxP,
+    ]
+  );
+  /* eslint-enable react-hooks/exhaustive-deps */
   const [resolved, setResolved] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1450,7 +1293,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
     } finally {
       setLoading(false);
     }
-  }, [windowHours, debug, simCfg.detectMinP, simCfg.entryMinP, simCfg.entryMaxP]);
+  }, [windowHours, debug, simCfg]);
 
   useEffect(() => {
     fetchResolved();

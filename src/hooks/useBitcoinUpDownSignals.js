@@ -434,7 +434,7 @@ export function useBitcoinUpDownSignals(marketMode = 'hourly') {
       priceUp,
       priceDown,
     });
-  }, [base15mVersion, askUp, askDown, nowTick]);
+  }, [askUp, askDown, nowTick]);
 
   const signals15m = useMemo(() => {
     if (isLive15mEntryForbiddenNow(nowTick)) {
