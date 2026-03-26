@@ -657,6 +657,7 @@ const redeemTelegramFailureNotified = new Set();
 /** Stop-loss Telegram : évite le spam sur un même `conditionId`. */
 const stopLossTelegramTriggeredNotified = new Set();
 const stopLossTelegramFilledNotified = new Set();
+const stopLossTelegramExitFailedNotified = new Set();
 
 function telegramStopLossAlertsEnabled() {
   // Par défaut activé si bot Telegram configuré, désactivable via ALERT_TELEGRAM_STOPLOSS=false
@@ -712,6 +713,27 @@ async function notifyTelegramStopLossFilled(p) {
     await sendTelegramAlert(lines.join('\n'));
   } catch (e) {
     console.warn('[Telegram] notify stop-loss filled:', e?.message || e);
+  }
+}
+
+async function notifyTelegramStopLossExitFailed(p) {
+  if (!telegramStopLossAlertsEnabled()) return;
+  const cid = String(p?.conditionId || '').trim();
+  if (!cid || stopLossTelegramExitFailedNotified.has(cid)) return;
+  stopLossTelegramExitFailedNotified.add(cid);
+  try {
+    const lines = [
+      `❌ Stop-loss déclenché mais vente refusée`,
+      `conditionId : ${cid.slice(0, 20)}…`,
+      `takeSide : ${p?.takeSide ?? '?'}`,
+      p?.errorHint ? `raison : ${String(p.errorHint).slice(0, 180)}` : '',
+      p?.tokensToSell != null && Number.isFinite(p.tokensToSell) ? `tokens visés : ${p.tokensToSell}` : '',
+      p?.spendableTokens != null && Number.isFinite(p.spendableTokens) ? `tokens dispo CLOB : ${p.spendableTokens}` : '',
+      p?.orderID ? `orderID : ${p.orderID}` : '',
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify stop-loss exit failed:', e?.message || e);
   }
 }
 
@@ -1322,6 +1344,31 @@ async function getUsdcSpendableViaClob(client) {
   }
 }
 
+/** Solde outcome token réellement vendable via CLOB: min(balance, allowance) pour un tokenId CTF. */
+async function getOutcomeSpendableViaClob(client, tokenId) {
+  if (!client || !tokenId) return null;
+  const reqs = [
+    { asset_type: 'CONDITIONAL', token_id: String(tokenId) },
+    { asset_type: 'CONDITIONAL', tokenId: String(tokenId) },
+  ];
+  for (const req of reqs) {
+    try {
+      const out = await client.getBalanceAllowance(req);
+      const rawBalance = out?.balance ?? out?.balance_raw;
+      const rawAllowance = out?.allowance ?? out?.allowance_raw;
+      const balanceTok = rawBalance == null ? null : parseClobAmountField(rawBalance);
+      const allowanceTok = rawAllowance == null ? null : parseClobAmountField(rawAllowance);
+      if (balanceTok == null && allowanceTok == null) continue;
+      if (balanceTok == null) return Math.max(0, allowanceTok);
+      if (allowanceTok == null) return Math.max(0, balanceTok);
+      return Math.max(0, Math.min(balanceTok, allowanceTok));
+    } catch (_) {
+      // essaie format alternatif de payload
+    }
+  }
+  return null;
+}
+
 /** Secours : solde USDC via eth_call RPC. Retourne null si tout échoue. */
 async function getUsdcBalanceRpc() {
   if (!wallet) return null;
@@ -1624,6 +1671,13 @@ async function tryStopLossForOpenPosition(clobClient) {
     }
   }
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
+  const spendableTokensFromClob = await getOutcomeSpendableViaClob(clobClient, tokenId);
+  if (Number.isFinite(spendableTokensFromClob) && spendableTokensFromClob > 0) {
+    // Petite marge pour éviter les rejets sur arrondis côté CLOB.
+    const safeSpendable = Math.max(0, spendableTokensFromClob - 0.00001);
+    if (safeSpendable > 0) tokensToSell = Math.min(tokensToSell, safeSpendable);
+  }
+  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
 
   const filledUsdForDust = Number(last.filledUsdc);
   if (Number.isFinite(filledUsdForDust) && filledUsdForDust >= 0 && filledUsdForDust < 0.05) {
@@ -1708,13 +1762,13 @@ async function tryStopLossForOpenPosition(clobClient) {
     });
 
     const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
-    const result = await clobClient.postOrder(signedOrder, marketOrderType);
-    const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
-    const clobResponse = serializeClobPostOrderResponseForLog(result);
+    let result = await clobClient.postOrder(signedOrder, marketOrderType);
+    let fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+    let clobResponse = serializeClobPostOrderResponseForLog(result);
     const nowIso = new Date().toISOString();
     const firstFilledTokens = Number(fill?.filledOutcomeTokens);
     const firstFilledUsdc = Number(fill?.filledUsdc);
-    const exitFilledOk =
+    let exitFilledOk =
       Number.isFinite(firstFilledTokens) &&
       firstFilledTokens > 0 &&
       Number.isFinite(firstFilledUsdc) &&
@@ -1726,6 +1780,41 @@ async function tryStopLossForOpenPosition(clobClient) {
     let lastResult = result;
     let lastClobResponse = clobResponse;
     let stopLossPartialFillRetries = 0;
+
+    if (!exitFilledOk && isInsufficientBalanceOrAllowanceError(fill?.clobErrorMsg || clobResponse?.error || clobResponse?.status)) {
+      const refreshedSpendable = await getOutcomeSpendableViaClob(clobClient, tokenId);
+      if (Number.isFinite(refreshedSpendable) && refreshedSpendable > 0) {
+        const retryAmount = Math.max(0, Math.min(tokensToSell, refreshedSpendable - 0.00001));
+        if (retryAmount > 0 && retryAmount < tokensToSell) {
+          try {
+            const retrySignedOrder = await createSignedMarketOrder(clobClient, {
+              tokenID: tokenId,
+              amount: retryAmount,
+              side: Side.SELL,
+              price: worstPricePUsed,
+            });
+            result = await clobClient.postOrder(retrySignedOrder, marketOrderType);
+            fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+            clobResponse = serializeClobPostOrderResponseForLog(result);
+            const retryFilledTokens = Number(fill?.filledOutcomeTokens);
+            const retryFilledUsdc = Number(fill?.filledUsdc);
+            exitFilledOk =
+              Number.isFinite(retryFilledTokens) &&
+              retryFilledTokens > 0 &&
+              Number.isFinite(retryFilledUsdc) &&
+              retryFilledUsdc > 0;
+            if (exitFilledOk) {
+              totalFilledTokens = retryFilledTokens;
+              totalFilledUsdc = retryFilledUsdc;
+              remainingTokens = Math.max(0, retryAmount - totalFilledTokens);
+              tokensToSell = retryAmount;
+            }
+          } catch (_) {
+            // on laisse le flux normal logger l'échec
+          }
+        }
+      }
+    }
 
     if (exitFilledOk && stopLossPartialRetryEnabled && remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) {
       const retryStartedAt = Date.now();
@@ -1800,12 +1889,21 @@ async function tryStopLossForOpenPosition(clobClient) {
     // Si l’ordre n’est pas rempli (ou rejeté sans throw), on ne doit PAS écraser last-order.json avec
     // `stopLossExit=true` : sinon le bot ne retry plus (ce qui laisse la position ouverte).
     if (!exitFilledOk) {
+      const errorHint = fill?.clobErrorMsg ?? fill?.clobStatus ?? lastClobResponse?.error ?? null;
       appendOrderLog({
         ...baseExitOrder,
         stopLossExit: false,
         stopLossExitAttemptFailed: true,
       });
       stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      void notifyTelegramStopLossExitFailed({
+        conditionId,
+        takeSide,
+        errorHint,
+        tokensToSell,
+        spendableTokens: spendableTokensFromClob,
+        orderID: lastResult?.orderID ?? lastResult?.id,
+      });
       logJson('warn', 'Stop-loss: tentative d’exit rejetée / non remplie — retry planifié', {
         conditionId: conditionId.slice(0, 18) + '…',
         takeSide,
@@ -1814,7 +1912,8 @@ async function tryStopLossForOpenPosition(clobClient) {
         stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
         orderID: lastResult?.orderID ?? lastResult?.id,
         triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
-        errorHint: fill?.clobErrorMsg ?? fill?.clobStatus ?? lastClobResponse?.error ?? null,
+        errorHint,
+        spendableTokensFromClob,
       });
       return;
     }
@@ -1826,6 +1925,7 @@ async function tryStopLossForOpenPosition(clobClient) {
 
     writeLastOrder(exitOrder);
     appendOrderLog(exitOrder);
+    stopLossTelegramExitFailedNotified.delete(conditionId);
     stopLossNextAttemptByCondition.delete(conditionId);
     executionCooldownByCondition.set(conditionId, endMs + 60_000);
 
@@ -1864,6 +1964,11 @@ async function tryStopLossForOpenPosition(clobClient) {
   } catch (err) {
     stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
     notePolymarketIncidentError('stop_loss_exit', err);
+    void notifyTelegramStopLossExitFailed({
+      conditionId,
+      takeSide,
+      errorHint: String(err?.message || err).slice(0, 180),
+    });
     logJson('warn', 'Stop-loss: échec sortie', {
       conditionId: conditionId.slice(0, 18) + '…',
       error: String(err?.message || err).slice(0, 220),

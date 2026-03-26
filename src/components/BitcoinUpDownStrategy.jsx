@@ -1241,7 +1241,7 @@ export function BitcoinUpDownStrategy() {
                         ou drawdown ≤ <strong>−{BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT} %</strong>, après{' '}
                         <strong>{BACKTEST_STOP_LOSS_MIN_HOLD_SEC}s</strong> de détention. Pour coller au serveur : même valeur
                         dans <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P</code> (dashboard) et{' '}
-                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (bot, ex. <strong>0.75</strong> = 75¢).
+                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (bot, ex. <strong>0.72</strong> = 72¢).
                       </li>
                       <li>
                         <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
