@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
-import { useBitcoinUpDownResolved } from '../hooks/useBitcoinUpDownResolved';
 import {
   useBitcoinUpDownResolved15m,
   BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
@@ -22,7 +21,6 @@ import {
   formatTimestampUtcTooltip,
 } from '../lib/polymarketDisplayTime.js';
 import { getBacktestMaxLossFractionOfStake } from '../lib/bitcoinBacktestLossFraction.js';
-import { readStratResultModeFromStorage, writeStratResultModeToStorage } from '../lib/dashboardUiPrefs.js';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -42,6 +40,14 @@ const STORAGE_BACKTEST_15M_SIGNAL_MIN_C = 'polymarket-dashboard.backtest15mSigna
 const STORAGE_BACKTEST_15M_SIGNAL_MAX_C = 'polymarket-dashboard.backtest15mSignalMaxC';
 /** Grille SL dans les tableaux d’analyse 15m (75¢ → 90¢, pas 5¢). */
 const SL_ANALYSIS_THRESHOLDS_C = [75, 80, 85, 90];
+const OPT_SIGNAL_BANDS_C = [
+  [94, 95],
+  [95, 96],
+  [96, 97],
+  [97, 98],
+];
+const OPT_SL_C = [68, 70, 72, 75, 78];
+const OPT_STAKE_EUR = [5, 10, 15, 20];
 
 function readAutoPlaceFromStorage() {
   if (typeof window === 'undefined') return false;
@@ -114,14 +120,85 @@ function signalBucketLabelFromPrice(priceP) {
   return `${bucketPct.toFixed(1)}%`;
 }
 
+function runFixedStakeGridSearch(rows, initialBalance, options = {}) {
+  const useReinvest = options.useReinvest === true;
+  const baseRows = (Array.isArray(rows) ? rows : [])
+    .filter(
+      (r) =>
+        r.botWouldTake != null &&
+        r.botEntryPrice != null &&
+        r.botMinObservedAfterEntryP != null &&
+        (r.winner === 'Up' || r.winner === 'Down') &&
+        r.endDate
+    )
+    .sort((a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime());
+
+  const out = [];
+  for (const [minC, maxC] of OPT_SIGNAL_BANDS_C) {
+    for (const slC of OPT_SL_C) {
+      for (const stakeBase of OPT_STAKE_EUR) {
+          const startCapital = initialBalance > 0 ? initialBalance : 0;
+          let capital = startCapital;
+        let peak = capital;
+        let maxDd = 0;
+        let trades = 0;
+        let winsNet = 0;
+        let winsResolution = 0;
+        let slHits = 0;
+          for (const r of baseRows) {
+          const entry = Number(r.botEntryPrice);
+          const minAfter = Number(r.botMinObservedAfterEntryP);
+          if (!(entry > 0 && entry < 1 && minAfter > 0 && minAfter < 1)) continue;
+          const entryC = entry * 100;
+          if (entryC < minC || entryC > maxC) continue;
+          const slP = slC / 100;
+          const slTouched = minAfter <= slP;
+          const winResolution = r.winner === r.botWouldTake;
+            const stakeAmount = useReinvest
+              ? Math.max(0, Math.min(capital, stakeBase * (capital / Math.max(1, startCapital))))
+              : Math.max(0, Math.min(stakeBase, capital));
+            if (!(stakeAmount > 0)) break;
+          let delta = 0;
+          if (slTouched) {
+              delta = stakeAmount * (slP / entry - 1);
+            slHits += 1;
+          } else if (winResolution) {
+              delta = stakeAmount * (1 / entry - 1);
+          } else {
+              delta = -stakeAmount;
+          }
+          trades += 1;
+          if (delta > 0) winsNet += 1;
+          if (winResolution) winsResolution += 1;
+          capital += delta;
+          if (capital > peak) peak = capital;
+          const dd = peak > 0 ? (peak - capital) / peak : 0;
+          if (dd > maxDd) maxDd = dd;
+        }
+        if (trades === 0) continue;
+        out.push({
+          signalBand: `${minC}-${maxC}`,
+          slC,
+            stake: stakeBase,
+            reinvest: useReinvest,
+          trades,
+          pnl: capital - initialBalance,
+          finalCapital: capital,
+          winRateNetPct: (winsNet / trades) * 100,
+          winRateResolutionPct: (winsResolution / trades) * 100,
+          slHitPct: (slHits / trades) * 100,
+          maxDrawdownPct: maxDd * 100,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => b.pnl - a.pnl);
+}
+
 export function BitcoinUpDownStrategy() {
   const { address, signer, isPolygon } = useWallet();
-  const [resultMode, setResultMode] = useState(() => readStratResultModeFromStorage());
-  const { signals, live15mMeta } = useBitcoinUpDownSignals(resultMode === '15m' ? '15m' : 'hourly');
-
-  useEffect(() => {
-    writeStratResultModeToStorage(resultMode);
-  }, [resultMode]);
+  const resultMode = '15m';
+  const { signals, live15mMeta } = useBitcoinUpDownSignals('15m');
 
   /** Liquidité / carnet : même token que le signal « prix seul » si la grille ET masque le signal affiché. */
   const currentSignalTokenId =
@@ -140,7 +217,6 @@ export function BitcoinUpDownStrategy() {
   const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 96));
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
-  const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
   const {
     resolved: resolved15m,
     loading: resolved15mLoading,
@@ -227,6 +303,8 @@ export function BitcoinUpDownStrategy() {
   const [, setPlaceResult] = useState(null);
   const autoPlaceInProgress = useRef(false);
   const [initialBalance, setInitialBalance] = useState(100);
+  const [gridUseReinvest, setGridUseReinvest] = useState(false);
+  const [gridDays, setGridDays] = useState(3);
   const [showLiquiditySuggestion, setShowLiquiditySuggestion] = useState(() => {
     if (typeof window === 'undefined') return true;
     try {
@@ -250,54 +328,6 @@ export function BitcoinUpDownStrategy() {
       return next;
     });
   };
-
-  const backtestResult = useMemo(() => {
-    const withSimul = resolvedHours.filter((r) => r.botWon !== null);
-    const sortedSimul = [...withSimul].sort(
-      (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
-    );
-    const estimateCryptoTakerFeeUsd = (stakeUsd, p) => {
-      if (!includeFees) return 0;
-      if (stakeUsd <= 0 || p == null) return 0;
-      const x = p * (1 - p);
-      const feeRate = 0.25;
-      const exponent = 2;
-      return stakeUsd * feeRate * Math.pow(x, exponent);
-    };
-    const lossFrac = getBacktestMaxLossFractionOfStake();
-    let capital = initialBalance > 0 ? initialBalance : 0;
-    let peak = capital;
-    let maxDrawdown = 0;
-    let feesPaid = 0;
-    const netPnlMap = new Map();
-    for (const r of sortedSimul) {
-      if (capital <= 0) break;
-      const stake = capital;
-      const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
-      const feeUsd = estimateCryptoTakerFeeUsd(stake, p);
-      feesPaid += feeUsd;
-      let delta = 0;
-      if (p != null && r.botWon === true) {
-        const odds = p > 0 ? 1 / p - 1 : 0;
-        delta = stake * odds - feeUsd;
-      } else if (r.botWon === false) {
-        delta = -stake * lossFrac - feeUsd;
-      }
-      capital += delta;
-      netPnlMap.set(`${r.eventSlug}-${r.endDate ?? ''}`, delta);
-      if (capital > peak) peak = capital;
-      const dd = peak > 0 ? (peak - capital) / peak : 0;
-      if (dd > maxDrawdown) maxDrawdown = dd;
-    }
-    return {
-      netPnlMap,
-      capital,
-      feesPaid,
-      maxDrawdown,
-      withSimul,
-      won: withSimul.filter((r) => r.botWon === true).length,
-    };
-  }, [resolvedHours, initialBalance, includeFees]);
 
   const backtestResult15m = useMemo(() => {
     /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 95–96 %). */
@@ -446,11 +476,21 @@ export function BitcoinUpDownStrategy() {
     return { baseN: base.length, minStats, sweep };
   }, [resolved15m, includeFees]);
 
-  const activeBacktest = resultMode === 'hourly' ? backtestResult : backtestResult15m;
+  const setupGridTop10 = useMemo(() => {
+    const days = Math.max(3, Math.min(7, Number(gridDays) || 3));
+    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    const rows = (Array.isArray(resolved15m) ? resolved15m : []).filter((r) => {
+      const t = r?.endDate ? new Date(r.endDate).getTime() : NaN;
+      return Number.isFinite(t) && t >= cutoffMs;
+    });
+    return runFixedStakeGridSearch(rows, initialBalance, { useReinvest: gridUseReinvest }).slice(0, 10);
+  }, [resolved15m, initialBalance, gridUseReinvest, gridDays]);
+
+  const activeBacktest = backtestResult15m;
 
   const entryTiming = useMemo(() => {
-    const rows = resultMode === 'hourly' ? resolvedHours : resolved15m;
-    const sessionDurationSec = resultMode === 'hourly' ? 3600 : 15 * 60;
+    const rows = resolved15m;
+    const sessionDurationSec = 15 * 60;
     const last24h = rows.filter(
       (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
     );
@@ -465,7 +505,7 @@ export function BitcoinUpDownStrategy() {
     });
     const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
     return { avgMinutes, pctFilled24, withTrade24, total24, withEntryCount: withEntry.length };
-  }, [resultMode, resolvedHours, resolved15m]);
+  }, [resolved15m]);
 
   const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
 
@@ -622,8 +662,7 @@ export function BitcoinUpDownStrategy() {
               </ul>
               <div className="strat-reason-bars">
                 <p className="strat-reason-bars__hint">
-                  Répartition des décisions bot (24 h){' '}
-                  {resultMode === '15m' ? '(15 min)' : '(horaire)'}
+                  Répartition des décisions bot (24 h) (15 min)
                   {!decisionBarPercents.hasData && ' — connecte le statut bot pour afficher les barres.'}
                 </p>
                 {[
@@ -648,23 +687,6 @@ export function BitcoinUpDownStrategy() {
             </div>
 
             <div className="strat-hero-right">
-              <div className="strat-mode-toggle strat-mode-toggle--hero" role="group" aria-label="Période backtest">
-                <button
-                  type="button"
-                  className={resultMode === 'hourly' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
-                  onClick={() => setResultMode('hourly')}
-                >
-                  Horaires
-                </button>
-                <button
-                  type="button"
-                  className={resultMode === '15m' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
-                  onClick={() => setResultMode('15m')}
-                >
-                  15 min
-                </button>
-              </div>
-
               <div className="strat-autoplace-panel">
                 <div className="strat-autoplace-panel__row">
                   <span className="strat-autoplace-panel__label" id="autoplace-label">
@@ -687,11 +709,10 @@ export function BitcoinUpDownStrategy() {
                 </div>
                 <p className="strat-autoplace-panel__hint">
                   <strong>ON</strong> = un ordre part tout seul dès qu’un signal {SIGNAL_BAND_PCT_LABEL} apparaît (
-                  {resultMode === '15m' ? '15 min' : 'horaire'}
-                  ). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
+                  15 min). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
                   l’auto.
                 </p>
-                {resultMode === '15m' && live15mMeta?.hiddenByTiming && live15mMeta.signalsIfTimingIgnored?.[0] && (
+                {live15mMeta?.hiddenByTiming && live15mMeta.signalsIfTimingIgnored?.[0] && (
                   <p
                     className="strat-autoplace-panel__hint"
                     style={{
@@ -710,7 +731,7 @@ export function BitcoinUpDownStrategy() {
                     {live15mMeta.liveAskDown != null ? `${(live15mMeta.liveAskDown * 100).toFixed(1)}¢` : '—'}.
                   </p>
                 )}
-                {resultMode === '15m' && live15mMeta?.slugMismatch && (
+                {live15mMeta?.slugMismatch && (
                   <p
                     className="strat-autoplace-panel__hint strat-text-amber"
                     style={{ marginTop: 10, lineHeight: 1.5 }}
@@ -723,8 +744,7 @@ export function BitcoinUpDownStrategy() {
                     sur le bon slug.
                   </p>
                 )}
-                {resultMode === '15m' &&
-                  live15mMeta?.livePriceSource &&
+                {live15mMeta?.livePriceSource &&
                   live15mMeta.livePriceSource !== 'clob' && (
                     <p
                       className="strat-autoplace-panel__hint strat-text-amber"
@@ -875,7 +895,7 @@ export function BitcoinUpDownStrategy() {
                 </div>
               )}
 
-              {resultMode === '15m' && (
+              {
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
@@ -922,9 +942,9 @@ export function BitcoinUpDownStrategy() {
                     </button>
                   </div>
                 </div>
-              )}
+              }
 
-              {resultMode === '15m' && stopLossTradeoff.baseN > 0 && (
+              {stopLossTradeoff.baseN > 0 && (
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Trade-off stop-loss (proxy) — stats &amp; PnL estimé</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
@@ -975,6 +995,82 @@ export function BitcoinUpDownStrategy() {
                   <p className="strat-muted-tight" style={{ marginTop: 8 }}>
                     “Perte moy. si touché” = PnL moyen si la sortie se fait à SL (proxy, sans slippage). “PnL moy. avec SL” =
                     si touché → sortie SL, sinon → hold jusqu’à résolution (win/lose), avec frais si activés.
+                  </p>
+                </div>
+              )}
+
+              {setupGridTop10.length > 0 && (
+                <div className="strat-metric-card" style={{ marginTop: 14 }}>
+                  <p className="strat-metric-card__kicker">
+                    Top 10 setups ({gridDays}j, mise fixe {gridUseReinvest ? 'avec réinvestissement' : 'sans réinvestissement'})
+                  </p>
+                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
+                    Grid-search sur les lignes 15m résolues (signal, SL, mise fixe). Classement par PnL net.
+                  </p>
+                  <div className="strat-hero-controls" style={{ marginTop: 10 }}>
+                    <label className="strat-label-inline">
+                      <span>Fenêtre (jours)</span>
+                      <select
+                        value={gridDays}
+                        onChange={(e) => setGridDays(Number(e.target.value) || 3)}
+                        className="input-strat-compact"
+                      >
+                        <option value={3}>3</option>
+                        <option value={4}>4</option>
+                        <option value={5}>5</option>
+                        <option value={6}>6</option>
+                        <option value={7}>7</option>
+                      </select>
+                    </label>
+                    <label className="strat-15m-debug-toggle" style={{ marginTop: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={gridUseReinvest}
+                        onChange={(e) => setGridUseReinvest(e.target.checked)}
+                      />
+                      <span>Inclure réinvestissement progressif</span>
+                    </label>
+                  </div>
+                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="strat-table">
+                      <thead>
+                        <tr>
+                          <th className="strat-th">#</th>
+                          <th className="strat-th">Signal</th>
+                          <th className="strat-th">SL</th>
+                          <th className="strat-th">Mise</th>
+                          <th className="strat-th">Trades</th>
+                          <th className="strat-th">PnL</th>
+                          <th className="strat-th">Capital final</th>
+                          <th className="strat-th">WR net</th>
+                          <th className="strat-th">WR résolution</th>
+                          <th className="strat-th">% SL touché</th>
+                          <th className="strat-th">Max DD</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {setupGridTop10.map((s, i) => (
+                          <tr key={`${s.signalBand}-${s.slC}-${s.stake}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
+                            <td className="strat-td">{i + 1}</td>
+                            <td className="strat-td">{s.signalBand}¢</td>
+                            <td className="strat-td">{s.slC}¢</td>
+                            <td className="strat-td">{s.stake}€</td>
+                            <td className="strat-td">{s.trades}</td>
+                            <td className="strat-td">{formatMoney(s.pnl)}</td>
+                            <td className="strat-td">{formatMoney(s.finalCapital)}</td>
+                            <td className="strat-td">{s.winRateNetPct.toFixed(1)}%</td>
+                            <td className="strat-td">{s.winRateResolutionPct.toFixed(1)}%</td>
+                            <td className="strat-td">{s.slHitPct.toFixed(1)}%</td>
+                            <td className="strat-td">{s.maxDrawdownPct.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
+                    Règle d’évaluation : si le SL est touché après l’entrée, la ligne est comptée en sortie SL
+                    (même si la résolution finale est gagnante). Réinvestissement ON = taille de mise qui évolue
+                    proportionnellement au capital courant.
                   </p>
                 </div>
               )}
@@ -1054,174 +1150,14 @@ export function BitcoinUpDownStrategy() {
         <div className="strat-results-inner">
           <div className="strat-results-toolbar">
             <span className="strat-results-mode-label">
-              Période : <strong>{resultMode === 'hourly' ? 'Horaires' : '15 min'}</strong>
+              Période : <strong>15 min</strong>
             </span>
-            <div className="strat-mode-toggle strat-mode-toggle--results" role="group" aria-label="Période tableau">
-              <button
-                type="button"
-                className={resultMode === 'hourly' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
-                onClick={() => setResultMode('hourly')}
-              >
-                Horaires
-              </button>
-              <button
-                type="button"
-                className={resultMode === '15m' ? 'strat-mode-toggle__btn strat-mode-toggle__btn--on' : 'strat-mode-toggle__btn'}
-                onClick={() => setResultMode('15m')}
-              >
-                15 min
-              </button>
-            </div>
           </div>
           <p className="strat-results-desc">
-            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché){' '}
-            {resultMode === 'hourly'
-              ? '— pas d’entrée dans les 5 dernières minutes du créneau.'
-              : '— 15 min : pas d’entrée les 3 premières minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).'}{' '}
+            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les 3 premières
+            minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).{' '}
             Données historiques CLOB.
           </p>
-
-            {resultMode === 'hourly' && (
-              <>
-                {/* Fenêtre de données Horaires : toujours visible au-dessus du tableau */}
-                <div className="strat-data-window">
-                  <h4 className="strat-data-window__title">
-                    Fenêtre de données (Horaires)
-                  </h4>
-                  <p className="strat-data-window__body">
-                    Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
-                    {' '}({Math.ceil(resolvedWindowHours)} créneaux horaires).
-                    {resolvedLoading && ' Chargement en cours…'}
-                    {!resolvedLoading && resolvedHours.length === 0 && !resolvedError && (
-                      <span className="strat-block-msg strat-text-amber">Aucun créneau résolu récupéré pour cette période.</span>
-                    )}
-                    {resolvedError && (
-                      <span className="strat-block-msg strat-text-red">{resolvedError}</span>
-                    )}
-                    {!resolvedLoading && resolvedHours.length > 0 && (
-                      <span className="strat-block-msg strat-text-green">{resolvedHours.length} créneau{resolvedHours.length !== 1 ? 'x' : ''} chargé{resolvedHours.length !== 1 ? 's' : ''} (résolus).</span>
-                    )}
-                    <span className="strat-muted-tight">
-                      Même règles que le bot : prix dans {SIGNAL_BAND_PCT_LABEL} et pas d&apos;entrée dans les 5 dernières minutes du créneau. Le WR reflète ce que le bot aurait fait avec l&apos;historique CLOB. En live le bot voit le prix à chaque cycle (1 s) et en WebSocket ; il peut rater une fenêtre très courte entre deux mises à jour.
-                    </span>
-                  </p>
-                </div>
-                {resolvedError && <p className="strat-data-window__body strat-text-red">{resolvedError}</p>}
-                {resolvedLoading ? (
-                  <p className="strat-data-window__body">Chargement…</p>
-                ) : resolvedHours.length === 0 ? (
-                  <p className="strat-data-window__body">Aucun créneau résolu sur les {resolvedDaysCount} derniers jours. Utilisez « Rafraîchir » ou « Un jour de plus » après la fenêtre ci‑dessus.</p>
-                ) : (
-                  <div className="strat-table-wrap">
-                    <table className="strat-table">
-                      <thead>
-                        <tr>
-                          <th className="strat-th">Résultat</th>
-                          <th className="strat-th">Bot aurait pris</th>
-                          <th className="strat-th">Prix d&apos;entrée</th>
-                          <th className="strat-th">Signal</th>
-                          <th
-                            className="strat-th"
-                            title="Eastern Time (ET), comme sur polymarket.com — infobulle sur la cellule = UTC"
-                          >
-                            Heure trade (ET)
-                          </th>
-                          <th className="strat-th">Type</th>
-                          <th className="strat-th">Simul.</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {resolvedHours.map((r, i) => {
-                          const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
-                          return (
-                            <tr key={r.eventSlug ?? `h-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
-                              <td className="strat-td strat-td--strong">
-                                {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
-                              </td>
-                              <td className="strat-td strat-td--muted">
-                                {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
-                              </td>
-                              <td className="strat-td">
-                                {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
-                              </td>
-                              <td className="strat-td strat-td--signal">
-                                {signalLabel ?? '—'}
-                              </td>
-                              <td
-                                className="strat-td"
-                                title={
-                                  r.botEntryTimestamp != null
-                                    ? `UTC : ${formatTimestampUtcTooltip(r.botEntryTimestamp)}`
-                                    : undefined
-                                }
-                              >
-                                {formatTradeTimestampEt(r.botEntryTimestamp)}
-                              </td>
-                              <td className="strat-td">
-                                {r.botOrderType ?? '—'}
-                              </td>
-                              <td className="strat-td">
-                                {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
-                                {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
-                                {r.botWon == null && (r.winner === null ? <span className="strat-muted">En attente</span> : <span className="strat-muted">Données indisponibles</span>)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {resolvedHours.length > 0 && (() => {
-                  const { withSimul, won } = backtestResult;
-                  if (withSimul.length > 0) {
-                    return (
-                      <p className="strat-results-foot">
-                        Simulation : <strong className="strat-text-green">{won}</strong> gagnés /{' '}
-                        <strong>{withSimul.length}</strong> créneaux avec signal {SIGNAL_BAND_PCT_LABEL} · Données historiques CLOB.
-                      </p>
-                    );
-                  }
-                  return (
-                    <p className="strat-help-text-xs strat-mt-xs">
-                      Bot / Simul. : historique des prix CLOB indisponible pour ces créneaux. Réessayer plus tard.
-                    </p>
-                  );
-                })()}
-                <div className="strat-actions-row">
-                  <span className="strat-help-text">Affichage : {resolvedDaysCount} derniers jours</span>
-                  <button type="button" onClick={refreshResolved} disabled={resolvedLoading} className="btn btn--default btn--outline">
-                    Rafraîchir
-                  </button>
-                  <button type="button" onClick={() => setExtraDays((d) => Math.min(4, d + 1))} disabled={resolvedLoading || extraDays >= 4} className="btn btn--default btn--outline">
-                    Un jour de plus
-                  </button>
-                  <button type="button" onClick={() => setExtraDays((d) => Math.max(0, d - 1))} disabled={resolvedLoading || extraDays <= 0} className="btn btn--default btn--outline">
-                    Un jour de moins
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExtraDays(0)}
-                    disabled={resolvedLoading || extraDays <= 0}
-                    className="btn btn--default btn--outline"
-                    title="Revenir directement aux 3 derniers jours (extraDays = 0)"
-                  >
-                    3 jours
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExtraDays(4)}
-                    disabled={resolvedLoading || extraDays >= 4}
-                    className="btn btn--default btn--outline"
-                    title="Afficher les 7 derniers jours (168 h)"
-                  >
-                    7 jours
-                  </button>
-                </div>
-              </>
-            )}
-
-            {resultMode === '15m' && (
               <>
                 {/* Fenêtre de données 15m : toujours visible pour indiquer la période et le statut */}
                 <div className="strat-data-window">
@@ -1394,7 +1330,9 @@ export function BitcoinUpDownStrategy() {
                                             : undefined
                                         }
                                       >
-                                        Stop-loss
+                                        {r.botResolutionWouldWin === true
+                                          ? 'Stop-loss (résolution gagnante)'
+                                          : 'Stop-loss'}
                                       </span>
                                     ) : (
                                       <>
@@ -1473,7 +1411,6 @@ export function BitcoinUpDownStrategy() {
                   </>
                 )}
               </>
-            )}
         </div>
       </div>
     </div>

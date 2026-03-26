@@ -613,6 +613,8 @@ const wsPriceMismatchMaxP = Math.max(0.0001, Number(process.env.WS_PRICE_MISMATC
 const executionErrorCooldownMinMs = Math.max(1000, Number(process.env.EXECUTION_ERROR_COOLDOWN_MIN_MS) || 15_000);
 const executionErrorCooldownMaxMs = Math.max(executionErrorCooldownMinMs, Number(process.env.EXECUTION_ERROR_COOLDOWN_MAX_MS) || 60_000);
 const executionDelayAlertMs = Math.max(1000, Number(process.env.EXECUTION_DELAY_ALERT_MS) || 5000);
+const latencyAbnormalAlertMs = Math.max(500, Number(process.env.ALERT_TELEGRAM_LATENCY_MS) || 1500);
+const latencyAbnormalAlertsEnabled = process.env.ALERT_TELEGRAM_LATENCY !== 'false';
 const walletConfigured = !!privateKey;
 
 // ——— Wallet & provider ———
@@ -865,6 +867,31 @@ async function notifyTelegramStopLossRecoveredLater(p) {
     await sendTelegramAlert(lines.join('\n'));
   } catch (e) {
     console.warn('[Telegram] notify stop-loss recovered-later:', e?.message || e);
+  }
+}
+
+async function notifyTelegramLatencyAbnormal(p) {
+  if (!telegramTradeAlertsEnabled() || !latencyAbnormalAlertsEnabled) return;
+  try {
+    const totalLatencyMs = Number(p?.latencyMs);
+    const placeOrderMs = Number(p?.timingsMs?.placeOrder);
+    if (!(Number.isFinite(placeOrderMs) && placeOrderMs > latencyAbnormalAlertMs)) return;
+    const ratio =
+      Number.isFinite(totalLatencyMs) && totalLatencyMs > 0
+        ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
+        : null;
+    const lines = [
+      `⏱️ Latence anormale trade`,
+      `source : ${p?.source ?? '?'}`,
+      `conditionId : ${String(p?.conditionId || '').slice(0, 20)}…`,
+      Number.isFinite(totalLatencyMs) ? `latence totale : ${Math.round(totalLatencyMs)} ms` : '',
+      `placeOrder : ${Math.round(placeOrderMs)} ms (seuil ${Math.round(latencyAbnormalAlertMs)} ms)`,
+      ratio != null ? `ratio placeOrder/total : ${(ratio * 100).toFixed(1)}%` : '',
+      p?.orderID ? `orderID : ${p.orderID}` : '',
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify latency abnormal:', e?.message || e);
   }
 }
 
@@ -1596,6 +1623,12 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
     const amtStr = typeof amt === 'number' && Number.isFinite(amt) ? amt.toFixed(2) : String(amt ?? '?');
 
     const deltaLine = formatSessionDeltaLine(balanceAfter);
+    const totalLatencyMs = Number(orderData?.latencyMs);
+    const placeOrderMs = Number(orderData?.timingsMs?.placeOrder);
+    const latencyRatio =
+      Number.isFinite(totalLatencyMs) && totalLatencyMs > 0 && Number.isFinite(placeOrderMs) && placeOrderMs >= 0
+        ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
+        : null;
     const lines = [
       hasFilled ? `✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})` : `⚠️ Trade accepté (remplissage immédiat nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
@@ -1610,6 +1643,15 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
     if (hasFilled && mtmLine) lines.push(mtmLine);
     if (clobStatus) lines.push(`CLOB status : ${String(clobStatus)}`);
     if (clobSuccess != null) lines.push(`CLOB success : ${clobSuccess}`);
+    if (Number.isFinite(totalLatencyMs) && totalLatencyMs > 0) {
+      lines.push(`Latence totale : ${Math.round(totalLatencyMs)} ms`);
+    }
+    if (Number.isFinite(placeOrderMs) && placeOrderMs >= 0) {
+      lines.push(`placeOrder : ${Math.round(placeOrderMs)} ms`);
+    }
+    if (latencyRatio != null) {
+      lines.push(`ratio placeOrder/total : ${(latencyRatio * 100).toFixed(1)}%`);
+    }
     lines.push(`Solde CLOB (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`);
     if (deltaLine) lines.push(deltaLine);
 
@@ -3927,11 +3969,20 @@ async function tryPlaceOrderForSignal(signal) {
       clobFunderAddress: clobFunderAddress ?? null,
       ...(signalWithPrice?.eventSlug ? { eventSlug: String(signalWithPrice.eventSlug).slice(0, 120) } : {}),
       ...(marketEndMs != null ? { marketEndMs } : {}),
+      latencyMs,
+      timingsMs,
       ...fillLog,
     };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
     void notifyTelegramTradeSuccess('ws', orderData, clobClient);
+    void notifyTelegramLatencyAbnormal({
+      source: 'ws',
+      conditionId: key,
+      orderID: result.orderID,
+      latencyMs,
+      timingsMs,
+    });
     logJson('info', 'Ordre placé (WS)', {
       takeSide: signalWithPrice.takeSide,
       amountUsd,
@@ -4609,11 +4660,20 @@ async function run() {
         clobFunderAddress: clobFunderAddress ?? null,
         ...(s?.eventSlug ? { eventSlug: String(s.eventSlug).slice(0, 120) } : {}),
         ...(marketEndMs != null ? { marketEndMs } : {}),
+        latencyMs,
+        timingsMs,
         ...fillLog,
       };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
       void notifyTelegramTradeSuccess('poll', orderData, clobClient);
+      void notifyTelegramLatencyAbnormal({
+        source: 'poll',
+        conditionId: key,
+        orderID: result.orderID,
+        latencyMs,
+        timingsMs,
+      });
       logJson('info', 'Ordre placé', {
         takeSide: s.takeSide,
         amountUsd,

@@ -89,6 +89,7 @@ export const BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT = Math.max(
   1,
   Math.min(95, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT) || 30),
 );
+export const BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED = import.meta.env.VITE_BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 const BACKTEST_STOP_LOSS_WORST_PRICE_P = Math.max(
   0.001,
   Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_WORST_PRICE_P) || 0.01),
@@ -631,7 +632,8 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
     if (!Number.isFinite(bidProxy)) continue;
     const drawdownPct = ((bidProxy - entryPrice) / entryPrice) * 100;
     const triggerByPrice = bidProxy < BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
-    const triggerByDrawdown = drawdownPct <= -Math.abs(BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT);
+    const triggerByDrawdown =
+      BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED && drawdownPct <= -Math.abs(BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT);
     if (triggerByPrice || triggerByDrawdown) {
       return {
         triggered: true,
@@ -1199,7 +1201,8 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               stopLoss: {
                 enabled: BACKTEST_STOP_LOSS_ENABLED,
                 triggerPriceP: BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
-                maxDrawdownPct: BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT,
+                drawdownEnabled: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
+                maxDrawdownPct: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED ? BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT : null,
                 worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
                 minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
               },
