@@ -46,11 +46,11 @@ function formatAxiosError(err) {
 }
 /**
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
- * Seuil détection : ≥ 97¢ (aligné bot 15m) ; entrée simulée **97–98¢**.
+ * Seuil détection : ≥ 95¢ (aligné bot 15m) ; entrée simulée **95–96¢**.
  */
-const DEFAULT_DETECT_MIN_P = 0.97;
-const DEFAULT_SIM_ENTRY_MIN_P = 0.97;
-const DEFAULT_SIM_ENTRY_MAX_P = 0.98;
+const DEFAULT_DETECT_MIN_P = 0.95;
+const DEFAULT_SIM_ENTRY_MIN_P = 0.95;
+const DEFAULT_SIM_ENTRY_MAX_P = 0.96;
 
 function resolve15mSimConfig(options) {
   const cfg = options?.simulation ?? options?.simConfig ?? null;
@@ -119,7 +119,7 @@ function hasCrossedHighConviction(p, detectMinP) {
   return Number.isFinite(p) && p >= d && p <= 1;
 }
 
-/** Prix d’entrée reporté : plancher 96¢, plafond 98¢. */
+/** Prix d’entrée reporté : plancher 95¢, plafond 96¢. */
 function clampEntryPrice(p, entryMinP, entryMaxP) {
   const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
   const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
@@ -1204,7 +1204,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
                 minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
               },
               label:
-                'Détection ≥97¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 97–98¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
+                'Détection ≥95¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 95–96¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
             },
           };
         }

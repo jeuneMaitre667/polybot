@@ -3,7 +3,7 @@
  *
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
- * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 97–98 %)
+ * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 95–96 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
@@ -231,13 +231,13 @@ const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Fenêtre de prix pour signaux et mise max : 97 % – 98 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.97;
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.98;
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98;
+// Fenêtre de prix pour signaux et mise max : 95 % – 96 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.95;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.96;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.96;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
- * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 97–98 %).
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 95–96 %).
  */
 const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
 let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.99;
@@ -432,6 +432,8 @@ const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
 const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.75));
+/** Désactiver la condition drawdown avec STOP_LOSS_DRAWDOWN_ENABLED=false (le SL ne déclenche alors que sur le prix). */
+const stopLossDrawdownEnabled = process.env.STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 /** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */
 const stopLossMaxDrawdownPct = Math.max(1, Math.min(95, Number(process.env.STOP_LOSS_MAX_DRAWDOWN_PCT) || 30));
 /** Prix mini accepté pour une vente stop-loss au marché (évite une exécution à 0). */
@@ -444,6 +446,15 @@ const stopLossRetryBackoffMsRaw = Number(process.env.STOP_LOSS_RETRY_BACKOFF_MS)
 const STOP_LOSS_RETRY_BACKOFF_MS = Math.max(
   0,
   Number.isFinite(stopLossRetryBackoffMsRaw) ? stopLossRetryBackoffMsRaw : 20_000
+);
+/** Retry du reliquat après un SL partiellement rempli (SELL FAK). */
+const stopLossPartialRetryEnabled = process.env.STOP_LOSS_PARTIAL_RETRY !== 'false';
+const STOP_LOSS_PARTIAL_RETRY_MAX_EXTRA = Math.max(0, Math.min(20, Number(process.env.STOP_LOSS_PARTIAL_RETRY_MAX_EXTRA) || 5));
+const STOP_LOSS_PARTIAL_RETRY_DELAY_MS = Math.max(0, Number(process.env.STOP_LOSS_PARTIAL_RETRY_DELAY_MS) || 400);
+const STOP_LOSS_PARTIAL_RETRY_MAX_WINDOW_MS = Math.max(500, Number(process.env.STOP_LOSS_PARTIAL_RETRY_MAX_WINDOW_MS) || 15_000);
+const STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS = Math.max(
+  0.000001,
+  Number(process.env.STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) || 0.00001
 );
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
@@ -1602,7 +1613,7 @@ async function tryStopLossForOpenPosition(clobClient) {
 
   const drawdownPct = ((bestBid - entryPriceP) / entryPriceP) * 100;
   const triggerByPrice = bestBid < stopLossTriggerPriceP;
-  const triggerByDrawdown = drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
+  const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
   if (!triggerByPrice && !triggerByDrawdown) return;
 
   let tokensToSell = Number(last.filledOutcomeTokens);
@@ -1692,7 +1703,7 @@ async function tryStopLossForOpenPosition(clobClient) {
       bestBidP: bestBid,
       drawdownPct,
       stopLossTriggerPriceP,
-      stopLossMaxDrawdownPct: Math.abs(stopLossMaxDrawdownPct),
+      stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? Math.abs(stopLossMaxDrawdownPct) : null,
       stopLossWorstPricePUsed: worstPricePUsed,
     });
 
@@ -1701,20 +1712,69 @@ async function tryStopLossForOpenPosition(clobClient) {
     const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
     const clobResponse = serializeClobPostOrderResponseForLog(result);
     const nowIso = new Date().toISOString();
+    const firstFilledTokens = Number(fill?.filledOutcomeTokens);
+    const firstFilledUsdc = Number(fill?.filledUsdc);
     const exitFilledOk =
-      Number.isFinite(fill?.filledOutcomeTokens) &&
-      fill.filledOutcomeTokens > 0 &&
-      Number.isFinite(fill?.filledUsdc) &&
-      fill.filledUsdc > 0;
+      Number.isFinite(firstFilledTokens) &&
+      firstFilledTokens > 0 &&
+      Number.isFinite(firstFilledUsdc) &&
+      firstFilledUsdc > 0;
+
+    let totalFilledTokens = exitFilledOk ? firstFilledTokens : 0;
+    let totalFilledUsdc = exitFilledOk ? firstFilledUsdc : 0;
+    let remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
+    let lastResult = result;
+    let lastClobResponse = clobResponse;
+    let stopLossPartialFillRetries = 0;
+
+    if (exitFilledOk && stopLossPartialRetryEnabled && remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) {
+      const retryStartedAt = Date.now();
+      while (
+        stopLossPartialFillRetries < STOP_LOSS_PARTIAL_RETRY_MAX_EXTRA &&
+        Date.now() - retryStartedAt < STOP_LOSS_PARTIAL_RETRY_MAX_WINDOW_MS &&
+        remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS
+      ) {
+        if (STOP_LOSS_PARTIAL_RETRY_DELAY_MS > 0) await sleep(STOP_LOSS_PARTIAL_RETRY_DELAY_MS);
+        stopLossPartialFillRetries += 1;
+        try {
+          const retrySignedOrder = await createSignedMarketOrder(clobClient, {
+            tokenID: tokenId,
+            amount: remainingTokens,
+            side: Side.SELL,
+            price: worstPricePUsed,
+          });
+          const retryResult = await clobClient.postOrder(retrySignedOrder, marketOrderType);
+          const retryFill = parsePolymarketPostOrderFill(retryResult, { orderSide: Side.SELL, requestedUsd: null });
+          const retryFilledTokens = Number(retryFill?.filledOutcomeTokens);
+          const retryFilledUsdc = Number(retryFill?.filledUsdc);
+          lastResult = retryResult;
+          lastClobResponse = serializeClobPostOrderResponseForLog(retryResult);
+          if (
+            Number.isFinite(retryFilledTokens) &&
+            retryFilledTokens > 0 &&
+            Number.isFinite(retryFilledUsdc) &&
+            retryFilledUsdc > 0
+          ) {
+            totalFilledTokens += retryFilledTokens;
+            totalFilledUsdc += retryFilledUsdc;
+            remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
+          } else {
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+    }
 
     const baseExitOrder = {
       at: nowIso,
       conditionId,
       tokenId,
       takeSide,
-      orderID: result?.orderID ?? result?.id,
+      orderID: lastResult?.orderID ?? lastResult?.id,
       stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
-      stopLossMaxDrawdownPct: -Math.abs(stopLossMaxDrawdownPct),
+      stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
       stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       stopLossObservedDrawdownPct: Math.round(drawdownPct * 100) / 100,
       stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
@@ -1724,7 +1784,17 @@ async function tryStopLossForOpenPosition(clobClient) {
       clobSignerAddress: wallet?.address ?? null,
       clobSignatureType: CLOB_SIGNATURE_TYPE,
       clobFunderAddress: clobFunderAddress ?? null,
-      ...pickFillFieldsForLog({ clobResponse, ...fill }),
+      stopLossPartialFillRetries,
+      stopLossRemainingOutcomeTokens: Math.round(Math.max(0, remainingTokens) * 1e6) / 1e6,
+      ...pickFillFieldsForLog({
+        clobResponse: lastClobResponse,
+        clobStatus: lastResult?.status,
+        clobSuccess: lastResult?.success,
+        filledOutcomeTokens: totalFilledTokens,
+        filledUsdc: totalFilledUsdc,
+        fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+        averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+      }),
     };
 
     // Si l’ordre n’est pas rempli (ou rejeté sans throw), on ne doit PAS écraser last-order.json avec
@@ -1742,9 +1812,9 @@ async function tryStopLossForOpenPosition(clobClient) {
         exitFilledOk,
         stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
         stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
-        orderID: result?.orderID ?? result?.id,
+        orderID: lastResult?.orderID ?? lastResult?.id,
         triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
-        errorHint: fill?.clobErrorMsg ?? fill?.clobStatus ?? clobResponse?.error ?? null,
+        errorHint: fill?.clobErrorMsg ?? fill?.clobStatus ?? lastClobResponse?.error ?? null,
       });
       return;
     }
@@ -1764,10 +1834,10 @@ async function tryStopLossForOpenPosition(clobClient) {
     void notifyTelegramStopLossFilled({
       conditionId,
       takeSide,
-      filledUsdc: fill?.filledUsdc ?? null,
-      filledOutcomeTokens: fill?.filledOutcomeTokens ?? null,
-      fillRatio: fill?.fillRatio ?? null,
-      orderID: result?.orderID ?? result?.id,
+      filledUsdc: totalFilledUsdc || null,
+      filledOutcomeTokens: totalFilledTokens || null,
+      fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+      orderID: lastResult?.orderID ?? lastResult?.id,
     });
 
     logJson('warn', 'Stop-loss déclenché: sortie avant résolution', {
@@ -1775,12 +1845,14 @@ async function tryStopLossForOpenPosition(clobClient) {
       takeSide,
       drawdownPct: Math.round(drawdownPct * 100) / 100,
       triggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
-      maxDrawdownPct: -Math.abs(stopLossMaxDrawdownPct),
+      maxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
       triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
       bestBidP: Math.round(bestBid * 1e6) / 1e6,
-      orderID: result?.orderID ?? result?.id,
+      orderID: lastResult?.orderID ?? lastResult?.id,
       worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+      stopLossPartialFillRetries,
+      stopLossRemainingOutcomeTokens: Math.round(Math.max(0, remainingTokens) * 1e6) / 1e6,
     });
     console.warn(
       `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
@@ -4353,7 +4425,9 @@ async function main() {
     }
     if (stopLossEnabled) {
       console.log(
-        `Stop-loss: activé | trigger bid < ${(stopLossTriggerPriceP * 100).toFixed(2)}¢ OU drawdown <= -${Math.abs(stopLossMaxDrawdownPct)}% | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
+        `Stop-loss: activé | trigger bid < ${(stopLossTriggerPriceP * 100).toFixed(2)}¢${
+          stopLossDrawdownEnabled ? ` OU drawdown <= -${Math.abs(stopLossMaxDrawdownPct)}%` : ''
+        } | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
       );
     } else {
       console.log('Stop-loss: désactivé (STOP_LOSS_ENABLED=false).');

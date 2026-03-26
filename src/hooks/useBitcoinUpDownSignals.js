@@ -25,8 +25,8 @@ const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 
 /** Fenêtre signal affichée / alignée bot (dashboard + `.env` bot). */
-const MIN_PRICE = 0.97;
-const MAX_SIGNAL_PRICE = 0.98;
+const MIN_PRICE = 0.95;
+const MAX_SIGNAL_PRICE = 0.96;
 
 /** Mode horaire : polling complet (Gamma) — compromis charge API. */
 const HOURLY_POLL_MS = 5 * 1000;

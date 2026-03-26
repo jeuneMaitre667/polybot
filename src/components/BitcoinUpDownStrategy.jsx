@@ -136,8 +136,8 @@ export function BitcoinUpDownStrategy() {
   const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
-  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 97));
-  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 98));
+  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 95));
+  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 96));
   const resolvedWindowHours = 72 + extraDays * 24;
   const resolvedDaysCount = 3 + extraDays;
   const { resolved: resolvedHours, loading: resolvedLoading, error: resolvedError, refresh: refreshResolved } = useBitcoinUpDownResolved(resolvedWindowHours);
@@ -300,7 +300,7 @@ export function BitcoinUpDownStrategy() {
   }, [resolvedHours, initialBalance, includeFees]);
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 97–98 %). */
+    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 95–96 %). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
@@ -354,8 +354,8 @@ export function BitcoinUpDownStrategy() {
   }, [resolved15m, initialBalance, includeFees]);
 
   const stopLossSweep97c = useMemo(() => {
-    // Analyse : pour des entrées ~97–98¢, on regarde le plus bas prix observé après entrée.
-    // On répond à la question “si j’entre à 97¢, quel % touche un SL à X¢ ?” via un proxy conservateur:
+    // Analyse : pour des entrées ~95–96¢, on regarde le plus bas prix observé après entrée.
+    // On répond à la question “si j’entre à 95¢, quel % touche un SL à X¢ ?” via un proxy conservateur:
     // si minObservedAfterEntryP <= X, alors SL X¢ touché.
     const rows = Array.isArray(resolved15m) ? resolved15m : [];
     const withEntry = rows.filter((r) => r.botWouldTake != null && r.botEntryPrice != null && r.botMinObservedAfterEntryP != null);
@@ -494,7 +494,7 @@ export function BitcoinUpDownStrategy() {
       sizeUsd = options.capUsd;
     }
     const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
-    /** Plafond signal (ex. 98¢) comme le backtest / carnet, même si le best ask live dépasse. */
+    /** Plafond signal (ex. 96¢) comme le backtest / carnet, même si le best ask live dépasse. */
     const n = Number(raw);
     const price = Number.isFinite(n)
       ? Math.min(Math.max(n, ORDER_BOOK_SIGNAL_MIN_P), ORDER_BOOK_SIGNAL_MAX_P)
@@ -528,7 +528,7 @@ export function BitcoinUpDownStrategy() {
     setPlacingFor(null);
   };
 
-  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 97–98 %) apparaît
+  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 95–96 %) apparaît
   useEffect(() => {
     if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
     const toPlace = signals.filter(
@@ -617,7 +617,7 @@ export function BitcoinUpDownStrategy() {
                   <span className="strat-rule-chevron" aria-hidden>
                     &gt;
                   </span>
-                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 98¢ (ex. achat 97¢ → gain 3¢ si résolu 1 $)
+                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 96¢ (ex. achat 95¢ → gain 5¢ si résolu 1 $)
                 </li>
               </ul>
               <div className="strat-reason-bars">
@@ -842,7 +842,7 @@ export function BitcoinUpDownStrategy() {
 
               {resultMode === '15m' && stopLossSweep97c.baseN > 0 && (
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
-                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~97–98¢, proxy Data API/CLOB)</p>
+                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~95–96¢, proxy Data API/CLOB)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
                     Base : <strong>{stopLossSweep97c.baseN}</strong> entrées simulées avec “min après entrée” observé.
                     Le % ci-dessous = part des créneaux où le prix a touché au moins une fois le seuil.
@@ -879,7 +879,7 @@ export function BitcoinUpDownStrategy() {
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Modifie la bande d’entrée simulée (ex. 95–97¢). Cela recharge les données et recalcul le tableau 15m.
+                    Modifie la bande d’entrée simulée (ex. 95–96¢). Cela recharge les données et recalcul le tableau 15m.
                   </p>
                   <div className="strat-hero-controls" style={{ marginTop: 10 }}>
                     <label className="strat-label-inline">
@@ -909,13 +909,13 @@ export function BitcoinUpDownStrategy() {
                     <button
                       type="button"
                       onClick={() => {
-                        setSignalMinC(97);
-                        setSignalMaxC(98);
+                        setSignalMinC(95);
+                        setSignalMaxC(96);
                       }}
                       className="btn btn--xs btn--outline"
-                      title="Revenir à 97–98¢"
+                      title="Revenir à 95–96¢"
                     >
-                      Reset 97–98¢
+                      Reset 95–96¢
                     </button>
                     <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--xs btn--outline">
                       Recalculer

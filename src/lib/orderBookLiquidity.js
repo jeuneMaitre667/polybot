@@ -1,6 +1,6 @@
-/** Bande prix signal / « mise max » carnet (alignée bot : 97 % – 98 %). */
-export const ORDER_BOOK_SIGNAL_MIN_P = 0.97;
-export const ORDER_BOOK_SIGNAL_MAX_P = 0.98;
+/** Bande prix signal / « mise max » carnet (alignée bot : 95 % – 96 %). */
+export const ORDER_BOOK_SIGNAL_MIN_P = 0.95;
+export const ORDER_BOOK_SIGNAL_MAX_P = 0.96;
 /** Plafond exécution marché type bot (`MARKET_WORST_PRICE_P` / FAK) : liquidité cumulée jusqu’à ce prix. */
 export const ORDER_BOOK_MARKET_WORST_P = 0.99;
 
