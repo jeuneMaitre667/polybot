@@ -1,0 +1,63 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, Segoe UI, Arial, sans-serif;
+  background: #0b1020;
+  color: #e6edf7;
+}
+header, main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1, h2 { margin: 0 0 10px; }
+h3 { margin: 14px 0 10px; font-size: 16px; color: #c7d6f1; }
+p { margin: 0; color: #9fb0cf; }
+.card {
+  background: #111a31;
+  border: 1px solid #233154;
+  border-radius: 10px;
+  padding: 14px;
+  margin: 14px 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #b9c8e4; }
+input {
+  border: 1px solid #30466f;
+  background: #0a1327;
+  color: #e6edf7;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.actions { margin-top: 12px; display: flex; gap: 10px; }
+button {
+  border: 1px solid #2d4f8f;
+  background: #1f4fb0;
+  color: white;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+button.secondary { background: #20304e; border-color: #3d527a; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.stat {
+  background: #0d1730;
+  border: 1px solid #27385f;
+  border-radius: 8px;
+  padding: 10px;
+}
+.k { font-size: 12px; color: #95a9ce; }
+.v { font-size: 18px; font-weight: 600; margin-top: 3px; }
+#histogram, #compareChart {
+  width: 100%;
+  border: 1px solid #27385f;
+  background: #0a1327;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+#summary {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  color: #d9e4fa;
+}

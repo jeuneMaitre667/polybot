@@ -41,6 +41,7 @@ import {
   getAlignedUpDownTokenIds,
   getTokenIdForSide,
 } from './gammaUpDownOrder.js';
+import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -60,6 +61,7 @@ const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
 const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
 const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
+const STOP_LOSS_METRICS_FILE = path.join(BOT_DIR, 'stop-loss-metrics.json');
 const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
 const TRADE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'trade-latency-history.json');
 const CYCLE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'cycle-latency-history.json');
@@ -196,6 +198,89 @@ function writeHealth(updates) {
   }
 }
 
+function readStopLossMetrics() {
+  const base = {
+    triggered: 0,
+    filled: 0,
+    failed: 0,
+    partial: 0,
+    withRetries: 0,
+    sumFillRatio: 0,
+    fillRatioSamples: 0,
+    sumTriggerToFillMs: 0,
+    triggerToFillSamples: 0,
+    sumSlippageCents: 0,
+    slippageSamples: 0,
+    last: { at: null, conditionId: null, status: null, error: null },
+  };
+  try {
+    const raw = fs.readFileSync(STOP_LOSS_METRICS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return base;
+    return { ...base, ...parsed, last: { ...base.last, ...(parsed.last || {}) } };
+  } catch (_) {
+    return base;
+  }
+}
+
+function writeStopLossMetrics(next) {
+  try {
+    fs.writeFileSync(STOP_LOSS_METRICS_FILE, JSON.stringify(next), 'utf8');
+  } catch (_) {}
+}
+
+function recordStopLossMetric(event, payload = {}) {
+  const m = readStopLossMetrics();
+  const nowIso = new Date().toISOString();
+  if (event === 'triggered') m.triggered += 1;
+  if (event === 'filled') m.filled += 1;
+  if (event === 'failed') m.failed += 1;
+
+  if (event === 'filled') {
+    if (Number.isFinite(payload?.fillRatio)) {
+      m.sumFillRatio += Number(payload.fillRatio);
+      m.fillRatioSamples += 1;
+    }
+    if (Number.isFinite(payload?.retries) && payload.retries > 0) m.withRetries += 1;
+    if (Number.isFinite(payload?.remainingTokens) && payload.remainingTokens > 0.00001) m.partial += 1;
+    if (Number.isFinite(payload?.triggeredAtMs)) {
+      const dt = Date.now() - Number(payload.triggeredAtMs);
+      if (Number.isFinite(dt) && dt >= 0) {
+        m.sumTriggerToFillMs += dt;
+        m.triggerToFillSamples += 1;
+      }
+    }
+    if (Number.isFinite(payload?.triggerPriceP) && Number.isFinite(payload?.averageFillPriceP)) {
+      const slippageCents = (Number(payload.triggerPriceP) - Number(payload.averageFillPriceP)) * 100;
+      if (Number.isFinite(slippageCents)) {
+        m.sumSlippageCents += slippageCents;
+        m.slippageSamples += 1;
+      }
+    }
+  }
+
+  m.last = {
+    at: nowIso,
+    conditionId: payload?.conditionId ?? null,
+    status: event,
+    error: payload?.errorHint ? String(payload.errorHint).slice(0, 180) : null,
+  };
+  writeStopLossMetrics(m);
+  writeHealth({
+    stopLossMetrics: {
+      triggered: m.triggered,
+      filled: m.filled,
+      failed: m.failed,
+      partial: m.partial,
+      withRetries: m.withRetries,
+      avgFillRatio: m.fillRatioSamples > 0 ? m.sumFillRatio / m.fillRatioSamples : null,
+      avgTriggerToFillMs: m.triggerToFillSamples > 0 ? Math.round(m.sumTriggerToFillMs / m.triggerToFillSamples) : null,
+      avgSlippageCents: m.slippageSamples > 0 ? Math.round((m.sumSlippageCents / m.slippageSamples) * 100) / 100 : null,
+      last: m.last,
+    },
+  });
+}
+
 function writeBalance(balanceUsd) {
   try {
     const at = new Date().toISOString();
@@ -222,6 +307,10 @@ function appendOrderLog(obj) {
   try {
     fs.appendFileSync(ORDERS_LOG_FILE, JSON.stringify(obj) + '\n', 'utf8');
   } catch (_) {}
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ——— Config ———
@@ -456,6 +545,8 @@ const STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS = Math.max(
   0.000001,
   Number(process.env.STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) || 0.00001
 );
+/** Escalade Telegram si la position reste ouverte après déclenchement SL. */
+const STOP_LOSS_ESCALATION_MS = Math.max(10_000, Number(process.env.STOP_LOSS_ESCALATION_MS) || 60_000);
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /**
@@ -658,6 +749,9 @@ const redeemTelegramFailureNotified = new Set();
 const stopLossTelegramTriggeredNotified = new Set();
 const stopLossTelegramFilledNotified = new Set();
 const stopLossTelegramExitFailedNotified = new Set();
+const stopLossTelegramEscalatedNotified = new Set();
+const stopLossTelegramRecoveredNotified = new Set();
+const stopLossFirstTriggeredAtByCondition = new Map();
 
 function telegramStopLossAlertsEnabled() {
   // Par défaut activé si bot Telegram configuré, désactivable via ALERT_TELEGRAM_STOPLOSS=false
@@ -734,6 +828,43 @@ async function notifyTelegramStopLossExitFailed(p) {
     await sendTelegramAlert(lines.join('\n'));
   } catch (e) {
     console.warn('[Telegram] notify stop-loss exit failed:', e?.message || e);
+  }
+}
+
+async function notifyTelegramStopLossEscalation(p) {
+  if (!telegramStopLossAlertsEnabled()) return;
+  const cid = String(p?.conditionId || '').trim();
+  if (!cid || stopLossTelegramEscalatedNotified.has(cid)) return;
+  stopLossTelegramEscalatedNotified.add(cid);
+  try {
+    const lines = [
+      `🚨 Escalade SL: position non clôturée`,
+      `conditionId : ${cid.slice(0, 20)}…`,
+      `takeSide : ${p?.takeSide ?? '?'}`,
+      Number.isFinite(p?.openSinceMs) ? `ouvert depuis : ${Math.round(Number(p.openSinceMs) / 1000)}s` : '',
+      p?.lastErrorHint ? `dernier rejet : ${String(p.lastErrorHint).slice(0, 180)}` : '',
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify stop-loss escalation:', e?.message || e);
+  }
+}
+
+async function notifyTelegramStopLossRecoveredLater(p) {
+  if (!telegramStopLossAlertsEnabled()) return;
+  const cid = String(p?.conditionId || '').trim();
+  if (!cid || stopLossTelegramRecoveredNotified.has(cid)) return;
+  stopLossTelegramRecoveredNotified.add(cid);
+  try {
+    const lines = [
+      `ℹ️ SL rattrapé: sortie détectée a posteriori`,
+      `conditionId : ${cid.slice(0, 20)}…`,
+      `takeSide : ${p?.takeSide ?? '?'}`,
+      p?.detail ? `détail : ${String(p.detail).slice(0, 180)}` : '',
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join('\n'));
+  } catch (e) {
+    console.warn('[Telegram] notify stop-loss recovered-later:', e?.message || e);
   }
 }
 
@@ -985,10 +1116,7 @@ function isRetryableExecutionError(errLike) {
 }
 
 function isInsufficientBalanceOrAllowanceError(errLike) {
-  const msg = String(errLike?.message || errLike || '').toLowerCase();
-  const status = Number(errLike?.response?.status);
-  if (status !== 400 && status !== 422 && !msg) return false;
-  return /not enough balance|insufficient balance|allowance|insufficient funds|size too large/.test(msg);
+  return isInsufficientBalanceOrAllowance(errLike);
 }
 
 function computeExecutionCooldownMs(errLike) {
@@ -1672,12 +1800,24 @@ async function tryStopLossForOpenPosition(clobClient) {
   }
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
   const spendableTokensFromClob = await getOutcomeSpendableViaClob(clobClient, tokenId);
-  if (Number.isFinite(spendableTokensFromClob) && spendableTokensFromClob > 0) {
-    // Petite marge pour éviter les rejets sur arrondis côté CLOB.
-    const safeSpendable = Math.max(0, spendableTokensFromClob - 0.00001);
-    if (safeSpendable > 0) tokensToSell = Math.min(tokensToSell, safeSpendable);
+  const adjustedSellAmount = resolveSellAmountFromSpendable(tokensToSell, spendableTokensFromClob, 0.00001);
+  if (adjustedSellAmount != null) tokensToSell = adjustedSellAmount;
+  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
+    // Cas fréquent après échecs SL: la position a finalement été fermée (manuel ou autre flux),
+    // donc on envoie un message de rattrapage pour éviter l'ambiguïté.
+    if (stopLossTelegramExitFailedNotified.has(conditionId) || stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+      void notifyTelegramStopLossRecoveredLater({
+        conditionId,
+        takeSide,
+        detail: 'plus de tokens vendables détectés au CLOB',
+      });
+    }
+    stopLossTelegramExitFailedNotified.delete(conditionId);
+    stopLossTelegramEscalatedNotified.delete(conditionId);
+    stopLossFirstTriggeredAtByCondition.delete(conditionId);
+    stopLossNextAttemptByCondition.delete(conditionId);
+    return;
   }
-  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
 
   const filledUsdForDust = Number(last.filledUsdc);
   if (Number.isFinite(filledUsdForDust) && filledUsdForDust >= 0 && filledUsdForDust < 0.05) {
@@ -1749,6 +1889,11 @@ async function tryStopLossForOpenPosition(clobClient) {
     // Notification dédiée : on prévient quand le stop-loss est déclenché (pas à chaque retry),
     // avant de tenter l'ordre CLOB.
     // Ne pas bloquer la boucle bot (Telegram peut être lent).
+    const stopLossTriggeredAtMs = Date.now();
+    if (!stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+      stopLossFirstTriggeredAtByCondition.set(conditionId, stopLossTriggeredAtMs);
+      recordStopLossMetric('triggered', { conditionId, takeSide });
+    }
     void notifyTelegramStopLossTriggered({
       conditionId,
       takeSide,
@@ -1783,9 +1928,8 @@ async function tryStopLossForOpenPosition(clobClient) {
 
     if (!exitFilledOk && isInsufficientBalanceOrAllowanceError(fill?.clobErrorMsg || clobResponse?.error || clobResponse?.status)) {
       const refreshedSpendable = await getOutcomeSpendableViaClob(clobClient, tokenId);
-      if (Number.isFinite(refreshedSpendable) && refreshedSpendable > 0) {
-        const retryAmount = Math.max(0, Math.min(tokensToSell, refreshedSpendable - 0.00001));
-        if (retryAmount > 0 && retryAmount < tokensToSell) {
+      const retryAmount = resolveSellAmountFromSpendable(tokensToSell, refreshedSpendable, 0.00001);
+      if (Number.isFinite(retryAmount) && retryAmount > 0 && retryAmount < tokensToSell) {
           try {
             const retrySignedOrder = await createSignedMarketOrder(clobClient, {
               tokenID: tokenId,
@@ -1812,7 +1956,6 @@ async function tryStopLossForOpenPosition(clobClient) {
           } catch (_) {
             // on laisse le flux normal logger l'échec
           }
-        }
       }
     }
 
@@ -1896,6 +2039,16 @@ async function tryStopLossForOpenPosition(clobClient) {
         stopLossExitAttemptFailed: true,
       });
       stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      recordStopLossMetric('failed', { conditionId, errorHint });
+      const firstTriggeredAtMs = stopLossFirstTriggeredAtByCondition.get(conditionId) || stopLossTriggeredAtMs;
+      if (Date.now() - firstTriggeredAtMs >= STOP_LOSS_ESCALATION_MS) {
+        void notifyTelegramStopLossEscalation({
+          conditionId,
+          takeSide,
+          openSinceMs: Date.now() - firstTriggeredAtMs,
+          lastErrorHint: errorHint,
+        });
+      }
       void notifyTelegramStopLossExitFailed({
         conditionId,
         takeSide,
@@ -1923,9 +2076,22 @@ async function tryStopLossForOpenPosition(clobClient) {
       stopLossExit: true,
     };
 
+    recordStopLossMetric('filled', {
+      conditionId,
+      fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+      retries: stopLossPartialFillRetries,
+      remainingTokens,
+      triggeredAtMs: stopLossTriggeredAtMs,
+      triggerPriceP: stopLossTriggerPriceP,
+      averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+    });
+
     writeLastOrder(exitOrder);
     appendOrderLog(exitOrder);
     stopLossTelegramExitFailedNotified.delete(conditionId);
+    stopLossTelegramEscalatedNotified.delete(conditionId);
+    stopLossTelegramRecoveredNotified.delete(conditionId);
+    stopLossFirstTriggeredAtByCondition.delete(conditionId);
     stopLossNextAttemptByCondition.delete(conditionId);
     executionCooldownByCondition.set(conditionId, endMs + 60_000);
 
@@ -1964,6 +2130,19 @@ async function tryStopLossForOpenPosition(clobClient) {
   } catch (err) {
     stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
     notePolymarketIncidentError('stop_loss_exit', err);
+    recordStopLossMetric('failed', {
+      conditionId,
+      errorHint: String(err?.message || err).slice(0, 180),
+    });
+    const firstTriggeredAtMs = stopLossFirstTriggeredAtByCondition.get(conditionId) || Date.now();
+    if (Date.now() - firstTriggeredAtMs >= STOP_LOSS_ESCALATION_MS) {
+      void notifyTelegramStopLossEscalation({
+        conditionId,
+        takeSide,
+        openSinceMs: Date.now() - firstTriggeredAtMs,
+        lastErrorHint: String(err?.message || err).slice(0, 180),
+      });
+    }
     void notifyTelegramStopLossExitFailed({
       conditionId,
       takeSide,
