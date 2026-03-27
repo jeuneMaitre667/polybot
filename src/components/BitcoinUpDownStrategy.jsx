@@ -1362,7 +1362,7 @@ export function BitcoinUpDownStrategy() {
                         )}{' '}
                         Alignement serveur :{' '}
                         <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P</code> ={' '}
-                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (ex. <strong>0.60</strong> = 60¢). Valeur
+                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (ex. <strong>0.70</strong> = 70¢). Valeur
                         utilisée ici : <strong>{backtestSlC}¢</strong>, et{' '}
                         <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED</code> ={' '}
                         <code className="strat-code-inline">STOP_LOSS_DRAWDOWN_ENABLED</code>.

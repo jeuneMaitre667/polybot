@@ -547,7 +547,7 @@ const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
-const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.6));
+const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.7));
 /** Désactiver la condition drawdown avec STOP_LOSS_DRAWDOWN_ENABLED=false (le SL ne déclenche alors que sur le prix). */
 const stopLossDrawdownEnabled = process.env.STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 /** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */
