@@ -7,6 +7,7 @@ import {
   resolveGammaMarketForBtcUpDown,
 } from '@/lib/gammaPolymarket.js';
 import { isLive15mEntryForbiddenNow } from '@/lib/bitcoin15mSlotEntryTiming.js';
+import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '@/lib/orderBookLiquidity.js';
 
 const GAMMA_EVENTS_URL = import.meta.env.DEV ? '/api/events' : 'https://gamma-api.polymarket.com/events';
 const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
@@ -24,9 +25,9 @@ const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
 /** Même endpoint que le bot Node (`bot-24-7/index.js`) — événements `best_bid_ask`. */
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 
-/** Fenêtre signal affichée / alignée bot (dashboard + `.env` bot). */
-const MIN_PRICE = 0.95;
-const MAX_SIGNAL_PRICE = 0.96;
+/** Fenêtre signal affichée / alignée bot (`orderBookLiquidity` = bande unique dashboard + bot). */
+const MIN_PRICE = ORDER_BOOK_SIGNAL_MIN_P;
+const MAX_SIGNAL_PRICE = ORDER_BOOK_SIGNAL_MAX_P;
 
 /** Mode horaire : polling complet (Gamma) — compromis charge API. */
 const HOURLY_POLL_MS = 5 * 1000;
@@ -243,7 +244,7 @@ function buildSignalEntries15m({
 }
 
 /**
- * Signaux dans la fenêtre prix (MIN_PRICE–MAX_SIGNAL_PRICE, ex. 97–98 %) pour le marché horaire ou 15 min.
+ * Signaux dans la fenêtre prix (MIN_PRICE–MAX_SIGNAL_PRICE, alignée `orderBookLiquidity` / bot) pour le marché horaire ou 15 min.
  * En **15m** : prix quasi temps réel (WebSocket CLOB `best_bid_ask`) + REST ~500 ms ; métadonnées Gamma ~12 s.
  * En **hourly** : polling complet toutes les 5 s (inchangé).
  * @param {'hourly' | '15m'} marketMode — défaut `hourly`. En `15m`, secours GET /events/slug/{slug} créneau courant.

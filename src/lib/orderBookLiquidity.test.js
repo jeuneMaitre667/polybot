@@ -14,13 +14,13 @@ describe('liquidityUsdFromAsks', () => {
 
   it('somme prix×taille pour objets { price, size } dans la bande', () => {
     const asks = [
-      { price: '0.96', size: '100' },
+      { price: '0.91', size: '100' },
       { price: '0.97', size: '10' },
       { price: '0.975', size: '20' },
       { price: '0.98', size: '50' },
     ];
-    // Bande défaut 95–96¢ : inclut 0,96 → 0.96*100 = 96
-    expect(liquidityUsdFromAsks(asks)).toBe(96);
+    // Bande défaut 90–91¢ : inclut 0,91 → 0.91*100 = 91
+    expect(liquidityUsdFromAsks(asks)).toBe(91);
   });
 
   it('accepte tuples [price, size]', () => {
@@ -28,7 +28,7 @@ describe('liquidityUsdFromAsks', () => {
       [0.97, 100],
       [0.98, 200],
     ];
-    // Bande défaut 95–96¢ : rien dans la bande
+    // Bande défaut 90–91¢ : rien dans la bande
     expect(liquidityUsdFromAsks(asks)).toBe(0);
   });
 
@@ -38,7 +38,7 @@ describe('liquidityUsdFromAsks', () => {
   });
 
   it('expose les constantes de bande signal', () => {
-    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.95);
-    expect(ORDER_BOOK_SIGNAL_MAX_P).toBe(0.96);
+    expect(ORDER_BOOK_SIGNAL_MIN_P).toBe(0.9);
+    expect(ORDER_BOOK_SIGNAL_MAX_P).toBe(0.91);
   });
 });

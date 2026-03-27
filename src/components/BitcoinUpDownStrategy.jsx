@@ -53,6 +53,7 @@ function normalizeBacktestWindowDays(raw) {
 /** Grille SL dans les tableaux d’analyse 15m (70¢ → 60¢, pas 5¢). */
 const SL_ANALYSIS_THRESHOLDS_C = [70, 65, 60];
 const OPT_SIGNAL_BANDS_C = [
+  [90, 91],
   [94, 95],
   [95, 96],
   [96, 97],
@@ -228,8 +229,8 @@ export function BitcoinUpDownStrategy() {
   );
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
-  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 95));
-  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 96));
+  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 90));
+  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 91));
   const [backtestSlC, setBacktestSlC] = useState(() =>
     readNumberFromStorage(STORAGE_BACKTEST_15M_SL_C, Math.round(BACKTEST_STOP_LOSS_TRIGGER_PRICE_P * 100))
   );
@@ -356,7 +357,7 @@ export function BitcoinUpDownStrategy() {
   };
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 95–96 %). */
+    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 90–91 %). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
@@ -457,8 +458,8 @@ export function BitcoinUpDownStrategy() {
   }, [resolved15m, initialBalance, includeFees, backtestSlC, backtestMaxStakeEur]);
 
   const slAnalysisSweep = useMemo(() => {
-    // Analyse : pour des entrées ~95–96¢, on regarde le plus bas prix observé après entrée.
-    // On répond à la question “si j’entre à 95¢, quel % touche un SL à X¢ ?” via un proxy conservateur:
+    // Analyse : pour des entrées dans la bande signal (~90–91¢ par défaut), on regarde le plus bas prix observé après entrée.
+    // On répond à la question « quel % touche un SL à X¢ ? » via un proxy conservateur :
     // si minObservedAfterEntryP <= X, alors SL X¢ touché.
     const rows = Array.isArray(resolved15m) ? resolved15m : [];
     const withEntry = rows.filter((r) => r.botWouldTake != null && r.botEntryPrice != null && r.botMinObservedAfterEntryP != null);
@@ -612,7 +613,7 @@ export function BitcoinUpDownStrategy() {
       sizeUsd = options.capUsd;
     }
     const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
-    /** Plafond signal (ex. 96¢) comme le backtest / carnet, même si le best ask live dépasse. */
+    /** Plafond signal (ex. 91¢) comme le backtest / carnet, même si le best ask live dépasse. */
     const n = Number(raw);
     const price = Number.isFinite(n)
       ? Math.min(Math.max(n, ORDER_BOOK_SIGNAL_MIN_P), ORDER_BOOK_SIGNAL_MAX_P)
@@ -646,7 +647,7 @@ export function BitcoinUpDownStrategy() {
     setPlacingFor(null);
   };
 
-  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 95–96 %) apparaît
+  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 90–91 %) apparaît
   useEffect(() => {
     if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
     const toPlace = signals.filter(
@@ -739,7 +740,7 @@ export function BitcoinUpDownStrategy() {
                   <span className="strat-rule-chevron" aria-hidden>
                     &gt;
                   </span>
-                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge théorique plus faible qu’à 96¢ (ex. achat 95¢ → gain 5¢ si résolu 1 $)
+                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge plus faible qu’à des entrées plus hautes (ex. achat ~90¢ → ~10¢ brut si résolu 1 $)
                 </li>
               </ul>
               <div className="strat-reason-bars">
@@ -954,7 +955,7 @@ export function BitcoinUpDownStrategy() {
 
               {resultMode === '15m' && slAnalysisSweep.baseN > 0 && (
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
-                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~95–96¢, proxy Data API/CLOB)</p>
+                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~90–91¢, proxy Data API/CLOB)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
                     Base : <strong>{slAnalysisSweep.baseN}</strong> entrées simulées avec “min après entrée” observé.
                     Le % ci-dessous = part des créneaux où le prix a touché au moins une fois le seuil.
@@ -991,7 +992,7 @@ export function BitcoinUpDownStrategy() {
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Modifie la bande d’entrée simulée (ex. 95–96¢) et le SL de simulation. Cela recharge les données et
+                    Modifie la bande d’entrée simulée (défaut 90–91¢, alignée bot) et le SL de simulation. Cela recharge les données et
                     recalcule le tableau 15m.
                   </p>
                   <div className="strat-hero-controls" style={{ marginTop: 10 }}>
@@ -1057,13 +1058,13 @@ export function BitcoinUpDownStrategy() {
                     <button
                       type="button"
                       onClick={() => {
-                        setSignalMinC(95);
-                        setSignalMaxC(96);
+                        setSignalMinC(90);
+                        setSignalMaxC(91);
                       }}
                       className="btn btn--xs btn--outline"
-                      title="Revenir à 95–96¢"
+                      title="Revenir à 90–91¢ (aligné bot)"
                     >
-                      Reset 95–96¢
+                      Reset 90–91¢
                     </button>
                     <button
                       type="button"
@@ -1361,7 +1362,7 @@ export function BitcoinUpDownStrategy() {
                         )}{' '}
                         Alignement serveur :{' '}
                         <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P</code> ={' '}
-                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (ex. <strong>0.75</strong> = 75¢). Valeur
+                        <code className="strat-code-inline">STOP_LOSS_TRIGGER_PRICE_P</code> (ex. <strong>0.60</strong> = 60¢). Valeur
                         utilisée ici : <strong>{backtestSlC}¢</strong>, et{' '}
                         <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED</code> ={' '}
                         <code className="strat-code-inline">STOP_LOSS_DRAWDOWN_ENABLED</code>.

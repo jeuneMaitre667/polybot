@@ -46,11 +46,11 @@ function formatAxiosError(err) {
 }
 /**
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
- * Seuil détection : ≥ 95¢ (aligné bot 15m) ; entrée simulée **95–96¢**.
+ * Seuil détection : ≥ 90¢ (aligné bot 15m) ; entrée simulée **90–91¢** par défaut.
  */
-const DEFAULT_DETECT_MIN_P = 0.95;
-const DEFAULT_SIM_ENTRY_MIN_P = 0.95;
-const DEFAULT_SIM_ENTRY_MAX_P = 0.96;
+const DEFAULT_DETECT_MIN_P = 0.9;
+const DEFAULT_SIM_ENTRY_MIN_P = 0.9;
+const DEFAULT_SIM_ENTRY_MAX_P = 0.91;
 
 function resolve15mSimConfig(options) {
   const cfg = options?.simulation ?? options?.simConfig ?? null;
@@ -81,14 +81,14 @@ function resolve15mSimConfig(options) {
 /**
  * Stop-loss backtest 15m : mêmes défauts **numériques** que `STOP_LOSS_*` dans `bot-24-7/index.js`.
  * Le bot utilise le **best bid** CLOB pour le SL ; le backtest utilise le prix **historique** (mid / trades). Pour coller
- * au serveur, définir `VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P` comme `STOP_LOSS_TRIGGER_PRICE_P` (défaut **0.75**).
+ * au serveur, définir `VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P` comme `STOP_LOSS_TRIGGER_PRICE_P` (défaut **0.60**).
  */
 const envBacktestSl = import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED;
 const BACKTEST_STOP_LOSS_ENABLED = envBacktestSl !== 'false' && envBacktestSl !== '0';
 /** Export UI : seuil SL simulé (défaut 0.75 = 75¢, aligné bot). */
 export const BACKTEST_STOP_LOSS_TRIGGER_PRICE_P = Math.max(
   0.01,
-  Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P) || 0.75),
+  Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_TRIGGER_PRICE_P) || 0.6),
 );
 export const BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT = Math.max(
   1,
@@ -125,7 +125,7 @@ function hasCrossedHighConviction(p, detectMinP) {
   return Number.isFinite(p) && p >= d && p <= 1;
 }
 
-/** Prix d’entrée reporté : plancher 95¢, plafond 96¢. */
+/** Prix d’entrée reporté : plancher 90¢, plafond 91¢ (défaut ; simConfig UI peut override). */
 function clampEntryPrice(p, entryMinP, entryMaxP) {
   const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
   const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
@@ -1235,7 +1235,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
                 minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
               },
               label:
-                'Détection ≥95¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 95–96¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
+                'Détection ≥90¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 90–91¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
             },
           };
         }

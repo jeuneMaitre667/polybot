@@ -1,7 +1,7 @@
 /**
  * Place un ordre sur le CLOB Polymarket (Bitcoin Up or Down - Hourly).
  * Par défaut : ordre au marché (exécution immédiate au meilleur prix disponible).
- * Option : ordre limite (prix fixe 95–96 %) pour garantir un rendement minium.
+ * Option : ordre limite (prix fixe dans la bande signal, ex. 90–91 %) pour garantir un plafond d’achat.
  */
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 
@@ -38,7 +38,7 @@ export async function placePolymarketMarketOrder(signer, params) {
 }
 
 /**
- * Ordre limite : prix fixe (ex. 95–96 %), exécution seulement si le carnet le permet.
+ * Ordre limite : prix fixe (ex. 90–91 %), exécution seulement si le carnet le permet.
  * @param {import('ethers').Signer} signer
  * @param {{ tokenIdToBuy: string, price: number, sizeUsd: number }} params
  * @returns {Promise<{ orderID?: string, error?: string }>}
@@ -79,7 +79,7 @@ export async function placePolymarketOrder(signer, params) {
   }
   return placePolymarketLimitOrder(signer, {
     tokenIdToBuy: params.tokenIdToBuy,
-    price: params.price ?? 0.95,
+    price: params.price ?? 0.9,
     sizeUsd: params.sizeUsd,
   });
 }
