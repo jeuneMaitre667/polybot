@@ -309,6 +309,19 @@ export function BitcoinUpDownStrategy() {
     };
   }, [decisionReasonCounts]);
 
+  const liveLastStopLoss = useMemo(() => {
+    const lo = botStatusData15m?.lastOrder;
+    if (!lo || lo.stopLossExit !== true) return null;
+    const conditionId = typeof lo.conditionId === 'string' ? lo.conditionId.toLowerCase() : null;
+    return {
+      conditionId,
+      at: lo.at ?? null,
+      bestBidP: Number.isFinite(Number(lo.stopLossBestBidP)) ? Number(lo.stopLossBestBidP) : null,
+      triggerPriceP:
+        Number.isFinite(Number(lo.stopLossTriggerPriceP)) ? Number(lo.stopLossTriggerPriceP) : null,
+    };
+  }, [botStatusData15m]);
+
   const [orderSizeUsd] = useState(10);
   const [useMarketOrder] = useState(true);
   const [autoPlaceEnabled, setAutoPlaceEnabled] = useState(() => readAutoPlaceFromStorage());
@@ -1483,13 +1496,29 @@ export function BitcoinUpDownStrategy() {
                             const signalLabel = signalBucketLabelFromPrice(r.botEntryPrice);
                             const dbg = r.simDebug;
                             const dbgCode = dbg?.why?.code ?? '—';
+                            const rowConditionId =
+                              typeof r.conditionId === 'string' ? r.conditionId.toLowerCase() : null;
+                            const isLiveLastStopLossRow =
+                              rowConditionId != null &&
+                              liveLastStopLoss?.conditionId != null &&
+                              rowConditionId === liveLastStopLoss.conditionId;
+                            const isBacktestPendingResolution =
+                              isLiveLastStopLossRow && !(r.winner === 'Up' || r.winner === 'Down');
+                            const slotEndSec = Number(r.slotEndSec);
+                            const isRecentSlotPendingApi =
+                              Number.isFinite(slotEndSec) &&
+                              Date.now() / 1000 - slotEndSec >= 0 &&
+                              Date.now() / 1000 - slotEndSec <= 90 * 60;
+                            const unavailableLabel = isRecentSlotPendingApi
+                              ? 'En attente de consolidation API (créneau récent)'
+                              : 'Données indisponibles';
                             return (
                                 <tr key={r.eventSlug ?? `15m-${r.slotEndSec ?? i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
                                   <td className="strat-td strat-td--strong">
                                     {r.winner === 'Up' || r.winner === 'Down' ? <UpDownDot side={r.winner} /> : r.winner === null ? <span className="strat-muted">En attente</span> : r.winner ?? '—'}
                                   </td>
                                   <td className="strat-td strat-td--muted">
-                                    {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : 'Données indisponibles'}
+                                    {r.botWouldTake != null ? <UpDownDot side={r.botWouldTake} /> : unavailableLabel}
                                   </td>
                                   <td className="strat-td">
                                     {r.botEntryPrice != null ? `${(r.botEntryPrice * 100).toFixed(1)} %` : '—'}
@@ -1509,6 +1538,29 @@ export function BitcoinUpDownStrategy() {
                                   </td>
                                   <td className="strat-td">
                                     {r.botOrderType ?? '—'}
+                                    {isLiveLastStopLossRow && (
+                                      <div className="strat-muted-tight" style={{ marginTop: 4 }}>
+                                        <span
+                                          className="strat-sim-stopped"
+                                          title={
+                                            liveLastStopLoss?.triggerPriceP != null ||
+                                            liveLastStopLoss?.bestBidP != null
+                                              ? `Bot-status: bid ${
+                                                  liveLastStopLoss?.bestBidP != null
+                                                    ? `${(liveLastStopLoss.bestBidP * 100).toFixed(2)}¢`
+                                                    : '—'
+                                                } | seuil ${
+                                                  liveLastStopLoss?.triggerPriceP != null
+                                                    ? `${(liveLastStopLoss.triggerPriceP * 100).toFixed(2)}¢`
+                                                    : '—'
+                                                }`
+                                              : 'SL live détecté via bot-status'
+                                          }
+                                        >
+                                          SL live détecté (bot-status)
+                                        </span>
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="strat-td">
                                     {r.botStopLossExit === true ? (
@@ -1532,13 +1584,16 @@ export function BitcoinUpDownStrategy() {
                                       </span>
                                     ) : (
                                       <>
+                                        {isBacktestPendingResolution && (
+                                          <span className="strat-muted">en attente de résolution backtest</span>
+                                        )}
                                         {r.botWon === true && <span className="strat-sim-won">Gagné</span>}
                                         {r.botWon === false && <span className="strat-sim-lost">Perdu</span>}
                                         {r.botWon == null &&
                                           (r.winner === null ? (
                                             <span className="strat-muted">En attente</span>
                                           ) : (
-                                            <span className="strat-muted">Données indisponibles</span>
+                                            <span className="strat-muted">{unavailableLabel}</span>
                                           ))}
                                       </>
                                     )}
