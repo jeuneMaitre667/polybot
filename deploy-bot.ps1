@@ -1,5 +1,5 @@
 # Déploie le dossier bot-24-7 sur l'instance Lightsail via SCP puis exécute setup-remote.sh via SSH
-# Usage: .\deploy-bot.ps1 -KeyPath "C:\Users\cedpa\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "18.203.159.101"
+# Usage: .\deploy-bot.ps1 -KeyPath "C:\Users\cedpa\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "34.253.136.19"
 # Ou sans paramètres : le script cherche la clé dans Downloads et te demande l'IP
 
 param(
@@ -33,7 +33,7 @@ if (-not (Test-Path $KeyPath)) {
 }
 
 if (-not $Ip) {
-    $Ip = Read-Host "IPv4 publique de l'instance Lightsail (ex: 18.203.159.101)"
+    $Ip = Read-Host "IPv4 publique de l'instance Lightsail (ex: 34.253.136.19)"
 }
 
 $user = "ubuntu"

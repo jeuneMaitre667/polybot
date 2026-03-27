@@ -1,6 +1,6 @@
 # Configure le bot sur Lightsail pour le redéploiement depuis GitHub (GIT_REPO_URL + redeploy.sh)
 # Usage: .\setup-lightsail-git.ps1
-# Ou: .\setup-lightsail-git.ps1 -KeyPath "chemin\vers\cle.pem" -Ip "18.203.159.101"
+# Ou: .\setup-lightsail-git.ps1 -KeyPath "chemin\vers\cle.pem" -Ip "34.253.136.19"
 # Prérequis: le bot a déjà été déployé au moins une fois (.\deploy-bot.ps1) pour que redeploy.sh existe.
 
 param(
@@ -30,7 +30,7 @@ if (-not $KeyPath) {
 if (-not (Test-Path $KeyPath)) { Write-Error "Fichier clé introuvable : $KeyPath" }
 
 if (-not $Ip) {
-    $Ip = Read-Host "IPv4 publique de l'instance Lightsail (ex: 18.203.159.101)"
+    $Ip = Read-Host "IPv4 publique de l'instance Lightsail (ex: 34.253.136.19)"
 }
 
 # Une seule ligne pour éviter les problèmes d'échappement SSH
