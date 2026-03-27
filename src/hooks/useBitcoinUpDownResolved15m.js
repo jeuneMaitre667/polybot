@@ -57,11 +57,16 @@ function resolve15mSimConfig(options) {
   const detectMinP = Number(cfg?.detectMinP);
   const entryMinP = Number(cfg?.entryMinP);
   const entryMaxP = Number(cfg?.entryMaxP);
+  const stopLossTriggerPriceP = Number(cfg?.stopLossTriggerPriceP);
   const out = {
     detectMinP:
       Number.isFinite(detectMinP) && detectMinP > 0 && detectMinP < 1 ? detectMinP : DEFAULT_DETECT_MIN_P,
     entryMinP: Number.isFinite(entryMinP) && entryMinP > 0 && entryMinP < 1 ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P,
     entryMaxP: Number.isFinite(entryMaxP) && entryMaxP > 0 && entryMaxP < 1 ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P,
+    stopLossTriggerPriceP:
+      Number.isFinite(stopLossTriggerPriceP) && stopLossTriggerPriceP > 0 && stopLossTriggerPriceP < 1
+        ? stopLossTriggerPriceP
+        : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
   };
   if (out.entryMaxP < out.entryMinP) {
     const tmp = out.entryMaxP;
@@ -188,6 +193,25 @@ const DEFAULT_WINDOW_HOURS = 72;
 // 1 h = 4 créneaux 15 min. 3 jours = 72 h = 288 créneaux ; 7 jours = 168 h = 672 créneaux.
 const SLOTS_PER_HOUR = 4;
 const MAX_15M_SLUG_FETCH = 168 * SLOTS_PER_HOUR; // 672 = 7 jours max (pour « un jour de plus »)
+const PROCESS_EVENTS_CONCURRENCY = Math.max(1, Math.min(12, Number(import.meta.env.VITE_BACKTEST_15M_PROCESS_CONCURRENCY) || 6));
+const ENRICH_ROWS_CONCURRENCY = Math.max(1, Math.min(12, Number(import.meta.env.VITE_BACKTEST_15M_ENRICH_CONCURRENCY) || 4));
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const arr = Array.isArray(items) ? items : [];
+  if (arr.length === 0) return [];
+  const out = new Array(arr.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, arr.length) }, async () => {
+    for (;;) {
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= arr.length) break;
+      out[idx] = await mapper(arr[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 /**
  * Slugs récents : suffixe = **eventStart** UTC (`floor(now/900)*900`, puis -900, -1800, …).
@@ -227,7 +251,7 @@ function resolve15mRefEndMs(ev) {
 }
 
 /** GET /events/slug en parallèle par petits paquets + pause (évite 429 Gamma qui vide tout le chargement). */
-async function fetch15mEventsBySlugBatches(slugs, batchSize = 4) {
+async function fetch15mEventsBySlugBatches(slugs, batchSize = 4, pauseMs = 120) {
   const events = [];
   for (let i = 0; i < slugs.length; i += batchSize) {
     const chunk = slugs.slice(i, i + batchSize);
@@ -243,7 +267,7 @@ async function fetch15mEventsBySlugBatches(slugs, batchSize = 4) {
       })
     );
     for (const ev of parts) if (ev) events.push(ev);
-    if (i + batchSize < slugs.length) await new Promise((r) => setTimeout(r, 120));
+    if (i + batchSize < slugs.length && pauseMs > 0) await new Promise((r) => setTimeout(r, pauseMs));
   }
   return events;
 }
@@ -613,9 +637,13 @@ function mergePriceSeriesSorted(a, b) {
  * **Écart vs bot** : `tryStopLossForOpenPosition` lit le **best bid** CLOB ; ici le bid peut être plus bas que le mid
  * historique → le tableau peut ne pas afficher de SL alors qu’en live il a été déclenché (ou l’inverse).
  */
-function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
+function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, simCfg) {
   if (!BACKTEST_STOP_LOSS_ENABLED) return { triggered: false };
   const holdEnd = entryTs + minHoldSec;
+  const slTriggerPriceP =
+    Number.isFinite(simCfg?.stopLossTriggerPriceP) && simCfg.stopLossTriggerPriceP > 0 && simCfg.stopLossTriggerPriceP < 1
+      ? simCfg.stopLossTriggerPriceP
+      : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
   const arr = Array.isArray(heldSeries) ? [...heldSeries] : [];
   arr.sort((a, b) => {
     const ta = toSeconds(a?.t ?? a?.timestamp);
@@ -631,7 +659,7 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec) {
     const bidProxy = normalizeOutcomePrice(pt?.p ?? pt?.price);
     if (!Number.isFinite(bidProxy)) continue;
     const drawdownPct = ((bidProxy - entryPrice) / entryPrice) * 100;
-    const triggerByPrice = bidProxy < BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
+    const triggerByPrice = bidProxy < slTriggerPriceP;
     const triggerByDrawdown =
       BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED && drawdownPct <= -Math.abs(BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT);
     if (triggerByPrice || triggerByDrawdown) {
@@ -857,7 +885,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   const settled = winner === 'Up' || winner === 'Down';
   const resolutionWin = settled ? winner === first.side : null;
   const heldSeries = first.side === 'Up' ? up : down;
-  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
   const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
   if (sl.triggered) {
@@ -902,7 +930,8 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
  * @param {{ debug?: boolean }} [options] — `debug: true` : remplit `simDebug` par ligne + `debugSummary` (coût mémoire / logs).
  */
 export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, options = {}) {
-  const debug = Boolean(options.debug);
+  const requestedDebug = Boolean(options.debug);
+  const debug = requestedDebug && windowHours <= 96;
   // Dépendances sur les champs numériques : `options` est souvent un objet inline (nouvelle ref à chaque render).
   /* eslint-disable react-hooks/exhaustive-deps -- resolve15mSimConfig(options) : seuils listés dans le tableau */
   const simCfg = useMemo(
@@ -911,9 +940,11 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       options?.simulation?.detectMinP,
       options?.simulation?.entryMinP,
       options?.simulation?.entryMaxP,
+      options?.simulation?.stopLossTriggerPriceP,
       options?.simConfig?.detectMinP,
       options?.simConfig?.entryMinP,
       options?.simConfig?.entryMaxP,
+      options?.simConfig?.stopLossTriggerPriceP,
     ]
   );
   /* eslint-enable react-hooks/exhaustive-deps */
@@ -994,9 +1025,11 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       };
 
       const slotCount = Math.min(MAX_15M_SLUG_FETCH, Math.ceil(windowHours * SLOTS_PER_HOUR));
+      const slugBatchSize = 4;
+      const slugPauseMs = 120;
       const recent15mSlugs = getRecent15mSlugs(slotCount);
-      const slugEventsFirst = await fetch15mEventsBySlugBatches(recent15mSlugs, 4);
-      for (const ev of slugEventsFirst) await processEvent(ev);
+      const slugEventsFirst = await fetch15mEventsBySlugBatches(recent15mSlugs, slugBatchSize, slugPauseMs);
+      await mapWithConcurrency(slugEventsFirst, PROCESS_EVENTS_CONCURRENCY, processEvent);
 
       const endDateMinIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
       try {
@@ -1013,9 +1046,8 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
             timeout: 15000,
           });
           const page = Array.isArray(closedPage) ? closedPage : closedPage?.data ?? closedPage?.results ?? [];
-          for (const ev of page) {
-            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
-          }
+          const only15m = page.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG));
+          await mapWithConcurrency(only15m, PROCESS_EVENTS_CONCURRENCY, processEvent);
           if (page.length < 100) break;
         }
       } catch {
@@ -1026,9 +1058,8 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
             timeout: 15000,
           });
           const arr = Array.isArray(data) ? data : data?.data ?? data?.results ?? [];
-          for (const ev of arr) {
-            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
-          }
+          const only15m = arr.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG));
+          await mapWithConcurrency(only15m, PROCESS_EVENTS_CONCURRENCY, processEvent);
         } catch {
           /* on garde ce que la phase slug a récupéré */
         }
@@ -1040,16 +1071,14 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           timeout: 15000,
         });
         const activeEvents = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-        for (const ev of activeEvents) {
-          if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
-        }
+        const only15m = activeEvents.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG));
+        await mapWithConcurrency(only15m, PROCESS_EVENTS_CONCURRENCY, processEvent);
       } catch {
         try {
           const { data: activeRes } = await axios.get(GAMMA_EVENTS_URL, { params: { active: true, closed: false, limit: 300 }, timeout: 15000 });
           const arr = Array.isArray(activeRes) ? activeRes : activeRes?.data ?? activeRes?.results ?? [];
-          for (const ev of arr) {
-            if ((ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) await processEvent(ev);
-          }
+          const only15m = arr.filter((ev) => (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG));
+          await mapWithConcurrency(only15m, PROCESS_EVENTS_CONCURRENCY, processEvent);
         } catch {
           /* inchangé : phase slug + closed déjà fusionnés */
         }
@@ -1058,18 +1087,15 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       results.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
       const resultsOnePerSlot = dedupeResultsOnePer15mSlot(results);
 
-      for (const r of resultsOnePerSlot) {
+      await mapWithConcurrency(resultsOnePerSlot, PROCESS_EVENTS_CONCURRENCY, async (r) => {
         if (!r.tokenIdUp && r.eventSlug) {
           const { tokenIdUp, tokenIdDown } = await fetchTokenIdsByMarketSlug(r.eventSlug);
           r.tokenIdUp = tokenIdUp;
           r.tokenIdDown = tokenIdDown;
         }
-      }
+      });
 
-      const enriched = [];
-      for (let i = 0; i < resultsOnePerSlot.length; i++) {
-        const r = resultsOnePerSlot[i];
-        if (i > 0) await new Promise((res) => setTimeout(res, 40));
+      const enrichedRows = await mapWithConcurrency(resultsOnePerSlot, ENRICH_ROWS_CONCURRENCY, async (r) => {
         const historyEndIso =
           r.slotEndSec != null && Number.isFinite(r.slotEndSec)
             ? new Date(r.slotEndSec * 1000).toISOString()
@@ -1083,43 +1109,45 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
         let clobUpMeta = null;
         let clobDownMeta = null;
         let tradesMeta = null;
-        if (r.tokenIdUp) {
-          const clobRes = await fetchPriceHistory(r.tokenIdUp, historyEndIso);
-          upBeforeSlot = clobRes.history;
-          debugClobFetchError = clobRes.error;
-          clobUpMeta = clobRes.meta;
+        const cidForTrades = r.normalizedConditionId ?? normalizeConditionId(r.conditionId);
+        const [clobResUp, clobResDown, trRes] = await Promise.all([
+          r.tokenIdUp ? fetchPriceHistory(r.tokenIdUp, historyEndIso) : Promise.resolve(null),
+          r.tokenIdDown ? fetchPriceHistory(r.tokenIdDown, historyEndIso) : Promise.resolve(null),
+          cidForTrades
+            ? fetchDataApiTradePointsByToken(
+                cidForTrades,
+                r.tokenIdUp,
+                r.tokenIdDown,
+                historyEndIso,
+                r.gammaEventId
+              )
+            : Promise.resolve(null),
+        ]);
+
+        debugDataFetchError = trRes?.error ?? null;
+        tradesMeta = trRes?.meta ?? null;
+        const tradePointsUp = Array.isArray(trRes?.pointsUp) ? trRes.pointsUp : [];
+        const tradePointsDown = Array.isArray(trRes?.pointsDown) ? trRes.pointsDown : [];
+
+        if (clobResUp) {
+          upBeforeSlot = clobResUp.history;
+          debugClobFetchError = clobResUp.error;
+          clobUpMeta = clobResUp.meta;
           if (upBeforeSlot.length > 0) historySource = 'clob';
         }
-        if (r.tokenIdDown) {
-          const downRes = await fetchPriceHistory(r.tokenIdDown, historyEndIso);
-          downBeforeSlot = downRes.history;
-          debugClobDownFetchError = downRes.error;
-          clobDownMeta = downRes.meta;
+        if (clobResDown) {
+          downBeforeSlot = clobResDown.history;
+          debugClobDownFetchError = clobResDown.error;
+          clobDownMeta = clobResDown.meta;
           if (downBeforeSlot.length > 0 && historySource === 'none') historySource = 'clob';
         }
-        const cidForTrades = r.normalizedConditionId ?? normalizeConditionId(r.conditionId);
         const hadClobUpBeforeTrades = upBeforeSlot.length > 0;
         const hadClobDownBeforeTrades = downBeforeSlot.length > 0;
-        let tradePointsUp = [];
-        let tradePointsDown = [];
-        if (cidForTrades) {
-          const trRes = await fetchDataApiTradePointsByToken(
-            cidForTrades,
-            r.tokenIdUp,
-            r.tokenIdDown,
-            historyEndIso,
-            r.gammaEventId
-          );
-          debugDataFetchError = trRes.error;
-          tradesMeta = trRes.meta ?? null;
-          tradePointsUp = Array.isArray(trRes.pointsUp) ? trRes.pointsUp : [];
-          tradePointsDown = Array.isArray(trRes.pointsDown) ? trRes.pointsDown : [];
-          if (tradePointsUp.length > 0) {
-            upBeforeSlot = mergePriceSeriesSorted(upBeforeSlot, tradePointsUp);
-          }
-          if (tradePointsDown.length > 0) {
-            downBeforeSlot = mergePriceSeriesSorted(downBeforeSlot, tradePointsDown);
-          }
+        if (tradePointsUp.length > 0) {
+          upBeforeSlot = mergePriceSeriesSorted(upBeforeSlot, tradePointsUp);
+        }
+        if (tradePointsDown.length > 0) {
+          downBeforeSlot = mergePriceSeriesSorted(downBeforeSlot, tradePointsDown);
         }
         const hadTradePoints = tradePointsUp.length + tradePointsDown.length > 0;
         if (upBeforeSlot.length > 0) {
@@ -1200,7 +1228,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
               entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
               stopLoss: {
                 enabled: BACKTEST_STOP_LOSS_ENABLED,
-                triggerPriceP: BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
+                triggerPriceP: simCfg.stopLossTriggerPriceP,
                 drawdownEnabled: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
                 maxDrawdownPct: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED ? BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT : null,
                 worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
@@ -1212,7 +1240,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           };
         }
 
-        enriched.push({
+        return {
           ...r,
           ...sim,
           debugHistoryPoints: historyPointCount,
@@ -1221,8 +1249,9 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           debugClobFetchError,
           debugDataFetchError,
           ...(simDebug ? { simDebug } : {}),
-        });
-      }
+        };
+      });
+      const enriched = enrichedRows.filter(Boolean);
       const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
       if (debug) {
         const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simCfg.detectMinP;
@@ -1252,6 +1281,9 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
           rowsMaxBinaryGeMinBeforeSlotFilter: enrichedFinal.filter(highConvBefore).length,
           rowsMaxBinaryGeMinAfterSlotFilter: enrichedFinal.filter(highConvAfter).length,
           rowsLikelyHighConvictionStrippedBySlotFilter: strippedBySlot.length,
+          slugFetchCount: slotCount,
+          slugBatchSize,
+          slugPauseMs,
           whyNoSignalCounts: enrichedFinal.reduce((acc, e) => {
             const c = e.simDebug?.why?.code;
             if (c) acc[c] = (acc[c] ?? 0) + 1;

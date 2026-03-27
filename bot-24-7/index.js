@@ -90,6 +90,19 @@ ensureJsonArrayFileExists(REDEEMED_CONDITION_IDS_FILE);
 // Cache Gamma (évite de retaper l'API Gamma deux fois par cycle : fetchSignals + fetchActiveWindows).
 const GAMMA_EVENTS_CACHE_MS = Number(process.env.GAMMA_EVENTS_CACHE_MS) || 4000;
 const gammaEventsCache = new Map(); // cacheKey -> { expiresAt, events, profile }
+/** Fast-path "slot courant" : cache dédié du GET /events/slug (utilisé par fetchSignals). */
+const GAMMA_SLOT_EVENT_CACHE_MS = Math.max(1000, Number(process.env.GAMMA_SLOT_EVENT_CACHE_MS) || 60_000);
+const GAMMA_DIRECT_SLUG_TIMEOUT_MS = Math.max(500, Number(process.env.GAMMA_DIRECT_SLUG_TIMEOUT_MS) || 3500);
+const gammaSlotEventCache = new Map(); // slotSlugLower -> { expiresAt, event }
+
+function computeGammaSlotEventCacheExpiresAt(slotSlugLower, nowMs = Date.now()) {
+  const base = nowMs + GAMMA_SLOT_EVENT_CACHE_MS;
+  if (MARKET_MODE !== '15m') return base;
+  const endMs = slotEndMsFrom15mSlug(slotSlugLower);
+  if (!Number.isFinite(endMs)) return base;
+  // Invalidation naturelle au changement de créneau + petite marge.
+  return Math.min(base, endMs + 5000);
+}
 
 /** Compteur / throttle pour ne pas saturer stderr si bot.log reste injoignable. */
 let botLogAppendFailCount = 0;
@@ -515,6 +528,20 @@ const PARTIAL_FILL_RETRY_MIN_REMAINING_USD = Math.max(0.01, Number(process.env.P
 /** Si true : entre deux compléments, vérifie que le best ask CLOB est encore dans [MIN_P, MAX_P] (sinon arrêt). */
 const partialFillRetryRevalidatePrice = process.env.PARTIAL_FILL_RETRY_REVALIDATE_PRICE === 'true';
 const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 1;
+/** Cache court pour éviter de refaire un fetchSignals complet à chaque tick. 0 = désactivé. */
+const fetchSignalsCacheMsRaw = Number(process.env.FETCH_SIGNALS_CACHE_MS);
+const FETCH_SIGNALS_CACHE_MS = Math.max(
+  0,
+  Number.isFinite(fetchSignalsCacheMsRaw) ? fetchSignalsCacheMsRaw : 1200
+);
+/** Boucle rapide dédiée au SL (indépendante du cycle poll lourd). 0 = désactivée. */
+const stopLossFastIntervalMsRaw = Number(process.env.STOP_LOSS_FAST_INTERVAL_MS);
+const STOP_LOSS_FAST_INTERVAL_MS = Math.max(
+  0,
+  Number.isFinite(stopLossFastIntervalMsRaw) ? stopLossFastIntervalMsRaw : 500
+);
+/** Priorise l'entrée en position: reporte les relevés de liquidité lourds si un signal est présent. */
+const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 /** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
@@ -754,6 +781,56 @@ const stopLossTelegramExitFailedNotified = new Set();
 const stopLossTelegramEscalatedNotified = new Set();
 const stopLossTelegramRecoveredNotified = new Set();
 const stopLossFirstTriggeredAtByCondition = new Map();
+let stopLossPassBusy = false;
+let fetchSignalsCacheEntry = null;
+let fetchSignalsInFlight = null;
+const fetchSignalsPerfWindowMs = [];
+let fetchSignalsCacheHitCount = 0;
+let fetchSignalsCacheMissCount = 0;
+let fetchSignalsPerfLastLogAt = 0;
+let fetchSignalsBreakdownLastLogAt = 0;
+
+function pushFetchSignalsPerf(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  fetchSignalsPerfWindowMs.push(ms);
+  if (fetchSignalsPerfWindowMs.length > 300) fetchSignalsPerfWindowMs.shift();
+}
+
+function percentileFromSorted(sortedValues, p) {
+  if (!Array.isArray(sortedValues) || sortedValues.length === 0) return null;
+  const clamped = Math.max(0, Math.min(1, p));
+  const idx = Math.min(sortedValues.length - 1, Math.floor(clamped * (sortedValues.length - 1)));
+  return sortedValues[idx];
+}
+
+function maybeLogFetchSignalsPerf() {
+  const now = Date.now();
+  if (now - fetchSignalsPerfLastLogAt < 60_000) return;
+  fetchSignalsPerfLastLogAt = now;
+  if (!fetchSignalsPerfWindowMs.length) return;
+  const sorted = [...fetchSignalsPerfWindowMs].sort((a, b) => a - b);
+  const p50 = percentileFromSorted(sorted, 0.5);
+  const p95 = percentileFromSorted(sorted, 0.95);
+  const max = sorted[sorted.length - 1];
+  const total = fetchSignalsCacheHitCount + fetchSignalsCacheMissCount;
+  const hitRatePct = total > 0 ? Math.round((fetchSignalsCacheHitCount / total) * 100) : 0;
+  console.log(
+    `[fetchSignals_perf] cache=${FETCH_SIGNALS_CACHE_MS}ms | samples=${sorted.length} | p50=${Math.round(p50 ?? 0)}ms | p95=${Math.round(p95 ?? 0)}ms | max=${Math.round(max ?? 0)}ms | cache_hit_rate=${hitRatePct}% (${fetchSignalsCacheHitCount}/${total})`
+  );
+}
+
+function maybeLogFetchSignalsBreakdown(profile) {
+  if (!profile || typeof profile !== 'object') return;
+  if (!CYCLE_PROFILER) return;
+  const totalMs = Number(profile.totalMs);
+  if (!Number.isFinite(totalMs) || totalMs < 1500) return;
+  const now = Date.now();
+  if (now - fetchSignalsBreakdownLastLogAt < 20_000) return;
+  fetchSignalsBreakdownLastLogAt = now;
+  console.log(
+    `[fetchSignals_breakdown] total=${Math.round(totalMs)}ms eventsFetch=${Math.round(profile.eventsFetchMs ?? 0)}ms resolve15m=${Math.round(profile.resolve15mMs ?? 0)}ms loop=${Math.round(profile.loopMs ?? 0)}ms priceLookups=${profile.priceLookups ?? 0} priceAvg=${Math.round(profile.priceLookupMsAvg ?? 0)}ms eventsRaw=${profile.eventCountRaw ?? 0} eventsAfter=${profile.eventCountAfterResolve ?? 0} markets=${profile.marketCountVisited ?? 0} strategy=${profile.strategy ?? 'n/a'}`
+  );
+}
 
 function telegramStopLossAlertsEnabled() {
   // Par défaut activé si bot Telegram configuré, désactivable via ALERT_TELEGRAM_STOPLOSS=false
@@ -2197,6 +2274,24 @@ async function tryStopLossForOpenPosition(clobClient) {
   }
 }
 
+/** Exécute une passe stop-loss avec verrou anti-chevauchement. Retourne un client CLOB réutilisable pour le cycle. */
+async function runStopLossPass() {
+  if (!walletConfigured || !wallet || !stopLossEnabled) return null;
+  if (stopLossPassBusy) return null;
+  stopLossPassBusy = true;
+  try {
+    const clobClient = await buildClobClientCachedCreds();
+    await tryStopLossForOpenPosition(clobClient);
+    return clobClient;
+  } catch (err) {
+    notePolymarketIncidentError('stop_loss_pass', err);
+    warnClobClientIfThrottled(err);
+    return null;
+  } finally {
+    stopLossPassBusy = false;
+  }
+}
+
 /**
  * Fin de marché par `conditionId` : `marketEndMs` ou `endDate` dans orders.log puis last-order.json (dernier écrase).
  * Utilisé avec REDEEM_AFTER_MARKET_END_MS pour ne pas tenter le redeem avant la cloche (+ délai).
@@ -2998,9 +3093,12 @@ function getGammaEventsCacheKey(slugMatch) {
  * Récupère la liste d'events Gamma, avec fallback par slug courant si `slug_contains` ne renvoie pas.
  * Met en cache pour réduire la latence du cycle (fetchSignals + fetchActiveWindows).
  */
-async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
+async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, options = {}) {
   const cacheKey = getGammaEventsCacheKey(slugMatch);
   const now = Date.now();
+  const preferCurrentSlotOnly = options?.preferCurrentSlotOnly === true;
+  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
+  const currentSlugLower = String(currentSlug || '').toLowerCase();
   const cached = gammaEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached;
 
@@ -3011,7 +3109,58 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
     hasMatchingSlugAfterEvents: null,
     fallbackSlugOk: null,
     fallbackSlugMs: null,
+    fastPath: null,
   };
+
+  // Fast-path fetchSignals: si on ne veut que le créneau courant, réutiliser le cache slug direct.
+  if (preferCurrentSlotOnly && currentSlugLower) {
+    const slotCached = gammaSlotEventCache.get(currentSlugLower);
+    if (slotCached && slotCached.expiresAt > now) {
+      const out = {
+        expiresAt: now + Math.min(GAMMA_EVENTS_CACHE_MS, 2000),
+        events: [slotCached.event],
+        profile: {
+          ...profile,
+          usedEvents: false,
+          hasMatchingSlugAfterEvents: true,
+          fallbackSlugOk: true,
+          fallbackSlugMs: 0,
+          fastPath: 'slot_cache_hit',
+        },
+      };
+      gammaEventsCache.set(cacheKey, out);
+      return out;
+    }
+    try {
+      const tDirect0 = Date.now();
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(currentSlugLower)}`, {
+        timeout: GAMMA_DIRECT_SLUG_TIMEOUT_MS,
+      });
+      const slugOk = (ev?.slug ?? '').toLowerCase().includes(slugMatch);
+      if (ev && slugOk) {
+        gammaSlotEventCache.set(currentSlugLower, {
+          expiresAt: computeGammaSlotEventCacheExpiresAt(currentSlugLower, now),
+          event: ev,
+        });
+        const out = {
+          expiresAt: now + Math.min(GAMMA_EVENTS_CACHE_MS, 2000),
+          events: [ev],
+          profile: {
+            ...profile,
+            usedEvents: false,
+            hasMatchingSlugAfterEvents: true,
+            fallbackSlugOk: true,
+            fallbackSlugMs: Date.now() - tDirect0,
+            fastPath: 'direct_slug_first',
+          },
+        };
+        gammaEventsCache.set(cacheKey, out);
+        return out;
+      }
+    } catch (_) {
+      // On continue sur la stratégie liste complète.
+    }
+  }
 
   let events = [];
   try {
@@ -3041,11 +3190,15 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
   if (MARKET_MODE === '15m' && !hasMatchingSlug) {
     try {
       const tFallback0 = Date.now();
-      const slug = getCurrent15mEventSlug();
+      const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
       if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
         events = [ev];
         profile.fallbackSlugOk = true;
+        gammaSlotEventCache.set(String(slug).toLowerCase(), {
+          expiresAt: computeGammaSlotEventCacheExpiresAt(String(slug).toLowerCase(), now),
+          event: ev,
+        });
       } else {
         profile.fallbackSlugOk = false;
       }
@@ -3059,11 +3212,15 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
   if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
     try {
       const tFallback0 = Date.now();
-      const slug = getCurrentHourlyEventSlug();
+      const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
       if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
         events = [ev];
         profile.fallbackSlugOk = true;
+        gammaSlotEventCache.set(String(slug).toLowerCase(), {
+          expiresAt: computeGammaSlotEventCacheExpiresAt(String(slug).toLowerCase(), now),
+          event: ev,
+        });
       } else {
         profile.fallbackSlugOk = false;
       }
@@ -3080,8 +3237,18 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000) {
   return out;
 }
 
+function cloneSignalsWithProfile(signals, profileOverrides = null) {
+  if (!Array.isArray(signals)) return [];
+  const out = signals.slice();
+  const baseProfile = signals?._fetchSignalsProfile && typeof signals._fetchSignalsProfile === 'object'
+    ? { ...signals._fetchSignalsProfile }
+    : {};
+  out._fetchSignalsProfile = profileOverrides ? { ...baseProfile, ...profileOverrides } : baseProfile;
+  return out;
+}
+
 /** Récupère les signaux (fenêtre MIN_P–MAX_P) : marchés via Gamma, prix via Gamma ou best ask CLOB selon signalPriceSource. */
-async function fetchSignals() {
+async function fetchSignalsFresh() {
   const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
   let events = [];
   const tFetchStartMs = Date.now();
@@ -3097,13 +3264,26 @@ async function fetchSignals() {
     hasMatchingSlugAfterEvents: null,
     fallbackSlugOk: null,
     fallbackSlugMs: null,
+    // Sous-profiler fetchSignals (pour cibler précisément le goulot).
+    eventsFetchMs: null,
+    resolve15mMs: null,
+    eventCountRaw: 0,
+    eventCountAfterResolve: 0,
+    marketCountVisited: 0,
+    priceLookups: 0,
+    priceLookupMsTotal: 0,
+    priceLookupMsAvg: null,
+    loopMs: null,
   };
 
   // Même logique pour 15m et horaire : d'abord GET /events (liste), puis secours par slug si la liste ne contient pas le créneau actuel.
   // On appelle un helper mutualisé + cache pour réduire la latence (évite un 2e appel Gamma dans fetchActiveWindows()).
   const eventsTimeoutMs = 15000;
-  const gammaOut = await fetchGammaEventsCached(slugMatch, eventsTimeoutMs);
+  const tEventsFetch0 = Date.now();
+  const gammaOut = await fetchGammaEventsCached(slugMatch, eventsTimeoutMs, { preferCurrentSlotOnly: true });
+  profile.eventsFetchMs = Date.now() - tEventsFetch0;
   events = gammaOut.events;
+  profile.eventCountRaw = Array.isArray(events) ? events.length : 0;
   profile.usedEvents = gammaOut.profile.usedEvents;
   profile.eventsMsTotal = gammaOut.profile.eventsMsTotal;
   profile.eventsRetryUsed = gammaOut.profile.eventsRetryUsed;
@@ -3112,24 +3292,32 @@ async function fetchSignals() {
   profile.fallbackSlugMs = gammaOut.profile.fallbackSlugMs;
 
   if (MARKET_MODE === '15m') {
+    const tResolve0 = Date.now();
     const r = await resolve15mEventsForTrading(events, Date.now());
+    profile.resolve15mMs = Date.now() - tResolve0;
     events = r.events;
     profile.fifteenMResolveStrategy = r.resolveStrategy;
     profile.fifteenMSlugMismatch = r.slugMismatch;
     profile.expected15mSlug = r.expectedSlug;
   }
+  profile.eventCountAfterResolve = Array.isArray(events) ? events.length : 0;
 
   const results = [];
   /** @type {Array<Record<string, unknown>>} */
   const visibilitySnapshots = [];
+  const tLoop0 = Date.now();
   for (const ev of events) {
     if (!ev?.markets?.length) continue;
     const eventSlug = (ev.slug ?? '').toLowerCase();
     if (!eventSlug.includes(slugMatch)) continue;
     const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
     for (const m of ev.markets) {
+      profile.marketCountVisited += 1;
       const merged = mergeGammaEventMarketForUpDown(ev, m);
+      const tPrice0 = Date.now();
       const prices = await getOutcomePricesForSignal(merged);
+      profile.priceLookups += 1;
+      profile.priceLookupMsTotal += Date.now() - tPrice0;
       if (!prices) continue;
       const [priceUp, priceDown] = prices;
       const upInRange = priceUp >= MIN_P && priceUp <= MAX_P;
@@ -3183,6 +3371,9 @@ async function fetchSignals() {
       }
     }
   }
+  profile.loopMs = Date.now() - tLoop0;
+  profile.priceLookupMsAvg =
+    profile.priceLookups > 0 ? Math.round((profile.priceLookupMsTotal / profile.priceLookups) * 100) / 100 : null;
 
   if (signalVisibilityLog && visibilitySnapshots.length > 0) {
     const nowVis = Date.now();
@@ -3206,12 +3397,52 @@ async function fetchSignals() {
   if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
   else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
   else profile.strategy = 'events_empty_or_invalid';
+  if (profile.fastPath) profile.strategy = `${profile.strategy}|fast:${profile.fastPath}`;
   if (MARKET_MODE === '15m' && profile.fifteenMResolveStrategy) {
     const mis = profile.fifteenMSlugMismatch ? '|mismatch' : '';
     profile.strategy = `${profile.strategy}|15m:${profile.fifteenMResolveStrategy}${mis}`;
   }
   results._fetchSignalsProfile = profile;
+  pushFetchSignalsPerf(profile.totalMs);
+  maybeLogFetchSignalsPerf();
+  maybeLogFetchSignalsBreakdown(profile);
   return results;
+}
+
+/** Wrapper cache + déduplication in-flight pour limiter la latence moyenne des cycles. */
+async function fetchSignals() {
+  const now = Date.now();
+  if (FETCH_SIGNALS_CACHE_MS > 0 && fetchSignalsCacheEntry && now < fetchSignalsCacheEntry.expiresAt) {
+    fetchSignalsCacheHitCount += 1;
+    return cloneSignalsWithProfile(fetchSignalsCacheEntry.signals, {
+      cache: 'hit',
+      cacheAgeMs: Math.max(0, now - fetchSignalsCacheEntry.createdAt),
+      cacheTtlMs: FETCH_SIGNALS_CACHE_MS,
+    });
+  }
+  fetchSignalsCacheMissCount += 1;
+  if (fetchSignalsInFlight) {
+    const shared = await fetchSignalsInFlight;
+    return cloneSignalsWithProfile(shared, { cache: 'shared_inflight', cacheTtlMs: FETCH_SIGNALS_CACHE_MS });
+  }
+  fetchSignalsInFlight = (async () => {
+    const fresh = await fetchSignalsFresh();
+    fetchSignalsCacheEntry =
+      FETCH_SIGNALS_CACHE_MS > 0
+        ? {
+            createdAt: Date.now(),
+            expiresAt: Date.now() + FETCH_SIGNALS_CACHE_MS,
+            signals: cloneSignalsWithProfile(fresh),
+          }
+        : null;
+    return fresh;
+  })();
+  try {
+    const out = await fetchSignalsInFlight;
+    return cloneSignalsWithProfile(out, { cache: 'miss', cacheTtlMs: FETCH_SIGNALS_CACHE_MS });
+  } finally {
+    fetchSignalsInFlight = null;
+  }
 }
 
 /** Vérifie si l’IP est autorisée à trader (geoblock). */
@@ -4182,6 +4413,7 @@ async function run() {
   const profiler = createCycleProfiler();
   let signalsCount = 0;
   let fetchProfile = null;
+  let clobClient = null;
   const cycleBookStats = {
     bookCacheHits: 0,
     bookCacheMisses: 0,
@@ -4198,6 +4430,8 @@ async function run() {
   }
 
   try {
+    // Fast-path sécurité: évaluer le SL avant le gros bloc fetchSignals.
+    clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
     const signals = await profiler.measure('fetchSignals', () => fetchSignals());
     fetchProfile = signals?._fetchSignalsProfile ?? null;
     signalsCount = Array.isArray(signals) ? signals.length : 0;
@@ -4219,6 +4453,12 @@ async function run() {
         fetchSignalsFallbackSlugMs: fetchProfile?.fallbackSlugMs ?? null,
       });
     }
+    const shouldPrioritizeEntryNow =
+      entryFastPathEnabled &&
+      signalsCount > 0 &&
+      walletConfigured &&
+      autoPlaceEnabled &&
+      !killSwitchActive;
 
     // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
     const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
@@ -4226,7 +4466,7 @@ async function run() {
       if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
     // Option legacy: relever la mise max périodiquement (uniquement si RECORD_LIQUIDITY_HISTORY=true).
-    if (!recordMiseMaxOnSignalOnly && recordLiquidityHistory) {
+    if (!recordMiseMaxOnSignalOnly && recordLiquidityHistory && !shouldPrioritizeEntryNow) {
       await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
         try {
           const activeWindows = await fetchActiveWindows();
@@ -4287,7 +4527,7 @@ async function run() {
     }
     // B) "signal -> décision" + relevé liquidité (uniquement si RECORD_LIQUIDITY_HISTORY=true)
     let decisionLogged = 0;
-    if (recordLiquidityHistory) {
+    if (recordLiquidityHistory && !shouldPrioritizeEntryNow) {
     await profiler.measure('signal_decision_liquidity', async () => {
     for (const s of signals) {
       if (!s.tokenIdToBuy) continue;
@@ -4352,6 +4592,12 @@ async function run() {
     }
     });
     }
+    if (shouldPrioritizeEntryNow && recordLiquidityHistory) {
+      logJson('info', 'entry_fastpath: relevés liquidité reportés', {
+        mode: MARKET_MODE,
+        signalsCount,
+      });
+    }
 
     // Observabilité : `place_orders` (timing_forbidden, etc.) n’est pas exécuté si autotrade off / sans wallet —
     // le dashboard restait vide alors qu’un signal poll était bien dans [MIN_P, MAX_P] et la grille ET interdisait l’entrée.
@@ -4380,22 +4626,7 @@ async function run() {
     // (récupération USDC), tant que wallet + REDEEM_ENABLED. tryRedeemResolvedPositions() no-op sinon.
     await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
-    // Stop-loss : doit tourner même si AUTO_PLACE_ENABLED=false (sinon une position ouverte n’a aucune protection).
-    // Avant : le garde-fou ci-dessous empêchait tout le bloc creds+SL quand autotrade était off.
-    let clobClient = null;
-    if (walletConfigured) {
-      await profiler.measure('clob_creds', async () => {
-        try {
-          clobClient = await buildClobClientCachedCreds();
-        } catch (err) {
-          notePolymarketIncidentError('clob_creds', err);
-          warnClobClientIfThrottled(err);
-        }
-      });
-      await profiler.measure('stop_loss', async () => {
-        await tryStopLossForOpenPosition(clobClient);
-      });
-    }
+    // Stop-loss déjà évalué en fast-path en début de cycle.
 
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
     if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
@@ -4750,6 +4981,10 @@ async function main() {
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
   );
+  console.log(`fetchSignals cache: ${FETCH_SIGNALS_CACHE_MS} ms (FETCH_SIGNALS_CACHE_MS).`);
+  if (entryFastPathEnabled) {
+    console.log('Entry fast-path: activé (relevés liquidité reportés quand signal présent).');
+  }
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
@@ -4812,6 +5047,12 @@ async function main() {
   if (useWebSocket) startClobWs();
 
   const pollMs = pollIntervalSec * 1000;
+  if (walletConfigured && stopLossEnabled && STOP_LOSS_FAST_INTERVAL_MS > 0) {
+    setInterval(() => {
+      void runStopLossPass();
+    }, STOP_LOSS_FAST_INTERVAL_MS);
+    console.log(`Stop-loss fast loop: activée (${STOP_LOSS_FAST_INTERVAL_MS} ms, indépendante du poll).`);
+  }
   for (;;) {
     try {
       await run();
