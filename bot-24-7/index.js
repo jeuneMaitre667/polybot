@@ -3,7 +3,7 @@
  *
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
- * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 95–96 %)
+ * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 90–91 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
@@ -333,13 +333,13 @@ const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Fenêtre de prix pour signaux et mise max : 95 % – 96 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.95;
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.96;
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.96;
+// Fenêtre de prix pour signaux et mise max : 90 % – 91 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.9;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.91;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.91;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
- * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 95–96 %).
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 90–91 %).
  */
 const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
 let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.99;
@@ -547,7 +547,7 @@ const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
-const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.75));
+const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.6));
 /** Désactiver la condition drawdown avec STOP_LOSS_DRAWDOWN_ENABLED=false (le SL ne déclenche alors que sur le prix). */
 const stopLossDrawdownEnabled = process.env.STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 /** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */
