@@ -15,7 +15,7 @@ import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '../lib/orderBo
 
 const SIGNAL_BAND_PCT_LABEL = `${Math.round(ORDER_BOOK_SIGNAL_MIN_P * 100)}–${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)} %`;
 const SIGNAL_MAX_CENTS_LABEL = `${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)}¢`;
-import { build15mBacktestDisplayRows, SLOT_15M_SEC } from '../lib/bitcoin15mGridDisplay.js';
+import { build15mBacktestDisplayRows, MAX_15M_GRID_SLOTS, SLOT_15M_SEC } from '../lib/bitcoin15mGridDisplay.js';
 import {
   formatBitcoin15mSlotRangeEt,
   formatTradeTimestampEt,
@@ -41,6 +41,15 @@ const STORAGE_BACKTEST_15M_SIGNAL_MIN_C = 'polymarket-dashboard.backtest15mSigna
 const STORAGE_BACKTEST_15M_SIGNAL_MAX_C = 'polymarket-dashboard.backtest15mSignalMaxC';
 const STORAGE_BACKTEST_15M_SL_C = 'polymarket-dashboard.backtest15mSlC';
 const STORAGE_BACKTEST_15M_MAX_STAKE_EUR = 'polymarket-dashboard.backtest15mMaxStakeEur';
+const STORAGE_BACKTEST_15M_WINDOW_DAYS = 'polymarket-dashboard.backtest15mWindowDays';
+
+/** Fenêtres historique backtest 15m (jours calendaires × 24 h). */
+const BACKTEST_WINDOW_DAYS_OPTIONS = [3, 7, 30];
+
+function normalizeBacktestWindowDays(raw) {
+  const n = Number(raw);
+  return BACKTEST_WINDOW_DAYS_OPTIONS.includes(n) ? n : 3;
+}
 /** Grille SL dans les tableaux d’analyse 15m (70¢ → 60¢, pas 5¢). */
 const SL_ANALYSIS_THRESHOLDS_C = [70, 65, 60];
 const OPT_SIGNAL_BANDS_C = [
@@ -214,7 +223,9 @@ export function BitcoinUpDownStrategy() {
   const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
   const liquidityStats = botStatusData?.liquidityStats ?? null;
 
-  const [extraDays, setExtraDays] = useState(0); // 0 = 3 jours, 1..4 = 4 à 7 jours
+  const [backtestWindowDays, setBacktestWindowDays] = useState(() =>
+    normalizeBacktestWindowDays(readNumberFromStorage(STORAGE_BACKTEST_15M_WINDOW_DAYS, 3))
+  );
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
   const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 95));
@@ -226,8 +237,8 @@ export function BitcoinUpDownStrategy() {
   const [backtestMaxStakeEur, setBacktestMaxStakeEur] = useState(() =>
     readNumberFromStorage(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, 0)
   );
-  const resolvedWindowHours = 72 + extraDays * 24;
-  const resolvedDaysCount = 3 + extraDays;
+  const resolvedWindowHours = backtestWindowDays * 24;
+  const resolvedDaysCount = backtestWindowDays;
   const {
     resolved: resolved15m,
     loading: resolved15mLoading,
@@ -250,10 +261,11 @@ export function BitcoinUpDownStrategy() {
       window.localStorage.setItem(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, String(signalMaxC));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_SL_C, String(backtestSlC));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, String(backtestMaxStakeEur));
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_WINDOW_DAYS, String(backtestWindowDays));
     } catch {
       /* ignore */
     }
-  }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur]);
+  }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur, backtestWindowDays]);
 
   /** Grille complète : un créneau 15 min par ligne (placeholders pour les trous). */
   const resolved15mDisplayRows = useMemo(
@@ -543,7 +555,7 @@ export function BitcoinUpDownStrategy() {
   }, [resolved15m, includeFees]);
 
   const setupGridTop10 = useMemo(() => {
-    const days = Math.max(3, Math.min(7, Number(gridDays) || 3));
+    const days = Math.max(3, Math.min(30, Number(gridDays) || 3));
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
     const rows = (Array.isArray(resolved15m) ? resolved15m : []).filter((r) => {
       const t = r?.endDate ? new Date(r.endDate).getTime() : NaN;
@@ -1369,7 +1381,7 @@ export function BitcoinUpDownStrategy() {
                   </div>
                   <p className="strat-data-window__body">
                     Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
-                    {' '}({Math.min(672, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
+                    {' '}({Math.min(MAX_15M_GRID_SLOTS, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
                     {resolved15mLoading && ' Chargement en cours…'}
                     {!resolved15mLoading && resolved15m.length === 0 && !resolved15mError && (
                       <span className="strat-block-msg strat-text-amber">Aucun créneau résolu récupéré pour cette période.</span>
@@ -1570,21 +1582,30 @@ export function BitcoinUpDownStrategy() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setExtraDays(0)}
-                        disabled={resolved15mLoading || extraDays === 0}
+                        onClick={() => setBacktestWindowDays(3)}
+                        disabled={resolved15mLoading || backtestWindowDays === 3}
                         className="btn btn--default btn--outline"
-                        title="Revenir directement aux 3 derniers jours (extraDays = 0)"
+                        title="3 derniers jours (72 h)"
                       >
                         3 jours
                       </button>
                       <button
                         type="button"
-                        onClick={() => setExtraDays(4)}
-                        disabled={resolved15mLoading || extraDays === 4}
+                        onClick={() => setBacktestWindowDays(7)}
+                        disabled={resolved15mLoading || backtestWindowDays === 7}
                         className="btn btn--default btn--outline"
-                        title="Afficher les 7 derniers jours (168 h)"
+                        title="7 derniers jours (168 h)"
                       >
                         7 jours
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBacktestWindowDays(30)}
+                        disabled={resolved15mLoading || backtestWindowDays === 30}
+                        className="btn btn--default btn--outline"
+                        title="30 derniers jours — chargement long, préférer cet onglet sur dev:backtest"
+                      >
+                        30 jours
                       </button>
                     </div>
                   </>

@@ -190,9 +190,9 @@ function get15mLabelFromSlug(slug) {
 }
 
 const DEFAULT_WINDOW_HOURS = 72;
-// 1 h = 4 créneaux 15 min. 3 jours = 72 h = 288 créneaux ; 7 jours = 168 h = 672 créneaux.
+// 1 h = 4 créneaux 15 min. 30 j = 720 h = 2880 créneaux. Plafond requêtes slug aligné sur la fenêtre max UI.
 const SLOTS_PER_HOUR = 4;
-const MAX_15M_SLUG_FETCH = 168 * SLOTS_PER_HOUR; // 672 = 7 jours max (pour « un jour de plus »)
+const MAX_15M_SLUG_FETCH = 30 * 24 * SLOTS_PER_HOUR;
 const PROCESS_EVENTS_CONCURRENCY = Math.max(1, Math.min(12, Number(import.meta.env.VITE_BACKTEST_15M_PROCESS_CONCURRENCY) || 6));
 const ENRICH_ROWS_CONCURRENCY = Math.max(1, Math.min(12, Number(import.meta.env.VITE_BACKTEST_15M_ENRICH_CONCURRENCY) || 4));
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backtest": "vite --config vite.backtest.config.js",
     "build": "vite build",
     "lint": "eslint .",
     "test": "vitest run",

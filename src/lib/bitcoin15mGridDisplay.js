@@ -5,7 +5,8 @@
  */
 
 export const SLOT_15M_SEC = 15 * 60;
-export const MAX_15M_GRID_SLOTS = 168 * 4;
+/** Grille affichée : jusqu’à 30 j de créneaux 15 min (aligné hook backtest). */
+export const MAX_15M_GRID_SLOTS = 30 * 24 * 4;
 
 /** Fin de fenêtre (s UTC) depuis le slug `btc-updown-15m-{eventStartSec}`. */
 export function slotEndSecFromBitcoin15mSlug(slug) {
