@@ -181,6 +181,9 @@ export function BitcoinUpDownStrategy() {
   const backtest15mLiveOnly =
     import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === 'true' ||
     import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === '1';
+  const backtestSignalMinDwellSec = Number(import.meta.env.VITE_BACKTEST_SIGNAL_MIN_DWELL_SEC);
+  const backtestSignalDwellActive =
+    Number.isFinite(backtestSignalMinDwellSec) && backtestSignalMinDwellSec > 0;
   const resultMode = '15m';
   const { signals, live15mMeta } = useBitcoinUpDownSignals('15m');
 
@@ -761,6 +764,14 @@ export function BitcoinUpDownStrategy() {
                     Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot) et le SL de simulation. En mode live, cela
                     recharge les données et recalcule le tableau 15m.
                   </p>
+                  {backtestSignalDwellActive ? (
+                    <p className="strat-metric-card__sub strat-muted-tight" style={{ marginTop: 4, fontSize: 12.5, lineHeight: 1.45 }}>
+                      Détection signal : le prix du token choisi doit rester ≥ seuil min. pendant{' '}
+                      <strong>{backtestSignalMinDwellSec} s</strong> après le franchissement (
+                      <code className="strat-code-inline">VITE_BACKTEST_SIGNAL_MIN_DWELL_SEC</code>) — proche du bot qui ne voit
+                      le carnet qu’à chaque poll (~<code className="strat-code-inline">POLL_INTERVAL_SEC</code> s).
+                    </p>
+                  ) : null}
                   <div className="strat-hero-controls" style={{ marginTop: 10 }}>
                     <label className="strat-label-inline">
                       <span>Solde départ (€)</span>

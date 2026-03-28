@@ -66,6 +66,13 @@ export function resolve15mSimConfig(options) {
   const entryMinP = Number(cfg?.entryMinP);
   const entryMaxP = Number(cfg?.entryMaxP);
   const stopLossTriggerPriceP = Number(cfg?.stopLossTriggerPriceP);
+  const dwellFromCfg = cfg?.signalMinDwellSec;
+  const dwellFromEnv = import.meta.env.VITE_BACKTEST_SIGNAL_MIN_DWELL_SEC;
+  const dwellRaw = dwellFromCfg !== undefined && dwellFromCfg !== null ? dwellFromCfg : dwellFromEnv;
+  const signalMinDwellSec =
+    dwellRaw === undefined || dwellRaw === '' || dwellRaw === null
+      ? 0
+      : Math.max(0, Number(dwellRaw) || 0);
   const out = {
     detectMinP:
       Number.isFinite(detectMinP) && detectMinP > 0 && detectMinP < 1 ? detectMinP : DEFAULT_DETECT_MIN_P,
@@ -75,6 +82,8 @@ export function resolve15mSimConfig(options) {
       Number.isFinite(stopLossTriggerPriceP) && stopLossTriggerPriceP > 0 && stopLossTriggerPriceP < 1
         ? stopLossTriggerPriceP
         : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
+    /** Secondes : le prix du token choisi doit rester ≥ detectMinP sur [ts entrée, ts + dwell] (alignement poll bot). */
+    signalMinDwellSec,
   };
   if (out.entryMaxP < out.entryMinP) {
     const tmp = out.entryMaxP;
@@ -131,6 +140,57 @@ const EMPTY_BOT_SIM_15M = {
 function hasCrossedHighConviction(p, detectMinP) {
   const d = Number.isFinite(detectMinP) ? detectMinP : DEFAULT_DETECT_MIN_P;
   return Number.isFinite(p) && p >= d && p <= 1;
+}
+
+function evalLinearPrice(t1, p1, t2, p2, t) {
+  if (!Number.isFinite(t1) || !Number.isFinite(t2) || !Number.isFinite(p1) || !Number.isFinite(p2)) return NaN;
+  if (t2 === t1) return p1;
+  return p1 + ((p2 - p1) * (t - t1)) / (t2 - t1);
+}
+
+/**
+ * Prix minimum du token (série Up ou Down seule) sur [tLo, tHi] par interpolation linéaire entre points.
+ * Utilisé pour exiger que le signal « reste » dans la bande au moins `dwell` secondes (comme un poll bot ~1 s).
+ */
+function minSidePriceBetween(historySide, tLo, tHi) {
+  if (!Number.isFinite(tLo) || !Number.isFinite(tHi) || tHi < tLo) return null;
+  const pts = [];
+  for (const pt of Array.isArray(historySide) ? historySide : []) {
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    if (t == null || !Number.isFinite(p)) continue;
+    pts.push({ t, p });
+  }
+  pts.sort((a, b) => a.t - b.t);
+  if (pts.length === 0) return null;
+  let minP = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    if (pts[i].t >= tLo && pts[i].t <= tHi) minP = Math.min(minP, pts[i].p);
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (b.t < tLo || a.t > tHi) continue;
+    const lo = Math.max(a.t, tLo);
+    const hi = Math.min(b.t, tHi);
+    if (lo > hi) continue;
+    const pLo = evalLinearPrice(a.t, a.p, b.t, b.p, lo);
+    const pHi = evalLinearPrice(a.t, a.p, b.t, b.p, hi);
+    if (Number.isFinite(pLo)) minP = Math.min(minP, pLo);
+    if (Number.isFinite(pHi)) minP = Math.min(minP, pHi);
+  }
+  return Number.isFinite(minP) ? minP : null;
+}
+
+function passesSignalMinDwell(side, historyUp, historyDown, detectMinP, tsUsed, dwellSec) {
+  if (!Number.isFinite(dwellSec) || dwellSec <= 0) return true;
+  const series = side === 'Up' ? historyUp : historyDown;
+  const tLo = tsUsed;
+  const tHi = tsUsed + dwellSec;
+  const minP = minSidePriceBetween(series, tLo, tHi);
+  if (minP == null || !Number.isFinite(minP)) return false;
+  const d = Number.isFinite(detectMinP) ? detectMinP : DEFAULT_DETECT_MIN_P;
+  return minP >= d - 1e-9;
 }
 
 /** Prix d’entrée reporté : plancher 77¢, plafond 78¢ (défaut ; simConfig UI peut override). */
@@ -842,7 +902,7 @@ const BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC = {
  * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: typeof BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC }}
  */
 function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
-  const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
+  const { detectMinP, entryMinP, entryMaxP, signalMinDwellSec = 0 } = simCfg || resolve15mSimConfig(null);
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   let endTsSec = null;
@@ -894,6 +954,13 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
         lastBySide[side] = { t, price };
         continue;
       }
+    }
+    if (
+      signalMinDwellSec > 0 &&
+      !passesSignalMinDwell(side, historyUp, historyDown, detectMinP, tsUsed, signalMinDwellSec)
+    ) {
+      lastBySide[side] = { t, price };
+      continue;
     }
     candidates.push({ side, price: clampEntryPrice(price, entryMinP, entryMaxP), ts: tsUsed });
     lastBySide[side] = { t, price };
@@ -1277,6 +1344,7 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
               detectMinP: simCfg.detectMinP,
               simEntryMinP: simCfg.entryMinP,
               simEntryMaxP: simCfg.entryMaxP,
+              signalMinDwellSec: simCfg.signalMinDwellSec ?? 0,
               forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
               entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
               seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
