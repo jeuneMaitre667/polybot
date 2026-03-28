@@ -21,13 +21,11 @@ function TestWrapper({ children }) {
 }
 
 describe('App', () => {
-  it('renders header with title and bot badge', () => {
+  it('renders header avec pastille(s) bot ou hint si pas de VITE_* (CI)', () => {
     render(<App />, { wrapper: TestWrapper });
-    const badges = screen.getAllByTestId('bot-status-badge');
-    expect(badges.length).toBeGreaterThanOrEqual(1);
-    expect(badges[0]).toBeInTheDocument();
-    // Le header est surtout utilisé comme conteneur des badges : le texte peut varier.
-    expect(badges[0].parentElement).toBeTruthy();
+    const badges = screen.queryAllByTestId('bot-status-badge');
+    const hint1h = screen.queryByText(/Bot 1h : non configuré/);
+    expect(badges.length >= 1 || hint1h != null).toBe(true);
   });
 
   it('renders main sections', () => {
