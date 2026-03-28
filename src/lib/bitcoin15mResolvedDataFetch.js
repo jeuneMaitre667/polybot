@@ -17,6 +17,7 @@ import {
   SLOT_15M_ENTRY_FORBID_LAST_SEC,
   ENTRY_TIMING_ET_TIMEZONE,
 } from '@/lib/bitcoin15mSlotEntryTiming.js';
+import { applyManualStopLossOverride } from '@/lib/bitcoin15mManualSlOverrides.js';
 
 /** En navigateur + dev Vite : proxy ; Node (script cache) ou prod = HTTPS direct (évite `/api/...` sans serveur). */
 const useDevApiProxy =
@@ -1234,6 +1235,8 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
         ) {
           sim = emptySim;
         }
+
+        sim = applyManualStopLossOverride(sim, r);
 
         let simDebug = null;
         if (debug) {
