@@ -7,6 +7,8 @@
  *
  * Fenêtre par défaut : 2026-03-27 19:00 → 2026-03-28 14:00 **ET** (EDT -04:00). Override ISO :
  *   $env:RECALC_SESSION_START_ISO='2026-03-27T19:00:00-04:00'; $env:RECALC_SESSION_END_ISO='2026-03-28T14:00:00-04:00'
+ *
+ * Détail ligne à ligne par heure : activé par défaut. Pour n’afficher que le tableau récap : `SESSION_HOURLY_DETAIL=0`
  */
 import { getBacktestMaxLossFractionOfStake } from '../src/lib/bitcoinBacktestLossFraction.js';
 import { fetchBitcoin15mResolvedData, resolve15mSimConfig } from '../src/lib/bitcoin15mResolvedDataFetch.js';
@@ -98,6 +100,30 @@ function hourKeyEt(r) {
   return `${day}_${String(h).padStart(2, '0')}`;
 }
 
+/** Libellé heure trade / fin créneau en ET pour les lignes détail. */
+function formatInstantEt(isoOrDate) {
+  if (isoOrDate == null) return '—';
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (Number.isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(d);
+}
+
+function simulLabel(r, isSl) {
+  if (isSl) return 'Stop-loss';
+  if (r.botWon === true) return 'Gagné';
+  if (r.botWon === false) return 'Perdu';
+  return '—';
+}
+
 console.info(
   `[session-hourly] Fenêtre ET [${startIso} → ${endIso}) · bucket ${hourlyBreakdownBy === 'trade' ? 'heure trade' : 'heure fin créneau'} · fetch ${windowHours} h · signal ${minC}–${maxC}¢ · SL ${slC}¢ · perte SL ${useSlFrac ? `${(slFrac * 100).toFixed(0)} %` : 'historique'} · départ ${initialBalance} € · plafond ${maxStakeEur} € · dwell ${simCfg.signalMinDwellSec ?? 0} s`,
 );
@@ -143,6 +169,9 @@ let maxLossStreak = 0;
 
 /** @type {Record<string, { trades: number, pnl: number, wonNet: number, sl: number, resWin: number }>} */
 const hourly = {};
+
+/** Une ligne par trade (ordre chronologique), pour le détail par heure. */
+const tradeDetails = [];
 
 for (const r of sorted) {
   const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
@@ -198,6 +227,23 @@ for (const r of sorted) {
   if (delta > 0) hourly[hk].wonNet += 1;
   if (isStrictStopLoss) hourly[hk].sl += 1;
   if (r.botWon === true) hourly[hk].resWin += 1;
+
+  const instForLabel = instantForHourlyBreakdownEt(r, hourlyBreakdownBy);
+  const slugShort = String(r.eventSlug ?? r.conditionId ?? '—').slice(-42);
+  tradeDetails.push({
+    hourKey: hk,
+    timeEt: formatInstantEt(instForLabel),
+    slug: slugShort,
+    side: r.botWouldTake ?? '—',
+    winner: r.winner ?? '—',
+    entryPct: p != null ? `${(p * 100).toFixed(1)} %` : '—',
+    sl: isStrictStopLoss,
+    simul: simulLabel(r, isStrictStopLoss),
+    delta,
+    stake,
+    feeUsd,
+    capitalAfter: capital,
+  });
 }
 
 const pnl = capital - initialBalance;
@@ -241,3 +287,41 @@ console.log('');
 console.log(
   `(Signal ${minC}–${maxC}¢ · SL ${slC}¢ · perte SL fixe ${useSlFrac ? `${(slFrac * 100).toFixed(0)} % du stake` : '—'} · même fetch que le dashboard.)`,
 );
+
+const showDetail = process.env.SESSION_HOURLY_DETAIL !== '0';
+if (showDetail && tradeDetails.length > 0) {
+  console.log('');
+  console.log('══════════════════════════════════════════════════════════════════════════════');
+  console.log('DÉTAIL PAR HEURE (America/New_York) — une ligne par créneau / trade');
+  console.log('══════════════════════════════════════════════════════════════════════════════');
+
+  const byHour = new Map();
+  for (const row of tradeDetails) {
+    if (!byHour.has(row.hourKey)) byHour.set(row.hourKey, []);
+    byHour.get(row.hourKey).push(row);
+  }
+
+  for (const hk of hourKeys) {
+    const rows = byHour.get(hk) ?? [];
+    if (rows.length === 0) continue;
+    const x = hourly[hk];
+    const label = hk.replace('_', ' ');
+    console.log('');
+    console.log(
+      `--- ${label} ET — ${rows.length} trade(s) · PnL heure ${(x.pnl >= 0 ? '+' : '') + x.pnl.toFixed(2)} € · SL : ${x.sl} · WR net : ${x.trades > 0 ? Math.round((x.wonNet / x.trades) * 1000) / 10 : '—'} % ---`,
+    );
+    console.log(
+      '  Heure (ET)           | Slug / id (tronqué)                  | Bot | Résol. | Entrée  | Col. simul. | Δ PnL € | Mise € | Frais € | Capital après €',
+    );
+    console.log(
+      '  ---------------------|--------------------------------------|-----|--------|---------|-------------|---------|--------|---------|----------------',
+    );
+    for (const t of rows) {
+      const dStr = (t.delta >= 0 ? '+' : '') + t.delta.toFixed(2);
+      console.log(
+        `  ${t.timeEt.padEnd(20)} | ${t.slug.padEnd(36)} | ${String(t.side).padEnd(3)} | ${String(t.winner).padEnd(6)} | ${t.entryPct.padEnd(7)} | ${t.simul.padEnd(11)} | ${dStr.padStart(7)} | ${t.stake.toFixed(2).padStart(6)} | ${t.feeUsd.toFixed(2).padStart(7)} | ${t.capitalAfter.toFixed(2).padStart(15)}`,
+      );
+    }
+  }
+  console.log('');
+}
