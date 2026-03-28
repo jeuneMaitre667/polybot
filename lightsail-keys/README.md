@@ -8,7 +8,7 @@ Ce dossier contient les clés `.pem` pour se connecter aux instances Lightsail (
 | `LightsailDefaultKey-eu-west-1-bot15m.pem` | (ancienne / autre) | selon instance |
 | **`clé 2gb ram bot15m.pem`** | **bot15m2gbRAM** (actuelle) | **63.34.0.38** |
 
-Le secret GitHub **`LIGHTSAIL_SSH_KEY`** doit contenir le **texte complet** du fichier utilisé pour l’instance (souvent `clé 2gb ram bot15m.pem`).
+Pour le **déploiement auto du bot 15m** (Actions), les secrets sont **`LIGHTSAIL_SSH_KEY_15M`** et **`LIGHTSAIL_HOST_15M`** (voir `.github/workflows/README-REDEPLOY-AUTO.md`). La valeur de la clé = **texte complet** du `.pem` (ex. `clé 2gb ram bot15m.pem`).
 
 **Exemple (PowerShell)** — instance actuelle :
 ```powershell

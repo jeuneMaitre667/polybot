@@ -1,22 +1,26 @@
 # Mise à jour automatique du bot sur Lightsail
 
-Quand tu fais **git push** (surtout si tu modifies `bot-24-7/`), une GitHub Action se déclenche et exécute `~/bot-24-7/redeploy.sh` sur ton instance Lightsail. Le bot est mis à jour sans rien faire à la main.
+Quand tu fais **git push** sur `main` avec des changements sous **`bot-24-7/**`**, une GitHub Action se déclenche et exécute `ci-redeploy-remote.sh` sur l’instance **bot 15m**.
 
-## Une seule fois : configurer les secrets du repo
+## Secrets à configurer (repo → Settings → Secrets and variables → Actions)
 
-1. Va sur **https://github.com/jeuneMaitre667/polybot**
-2. **Settings** → **Secrets and variables** → **Actions**
-3. **New repository secret** pour chacun :
+### Déploiement **15m** sur push (obligatoire pour ce flux)
 
-| Nom du secret    | Valeur |
-|------------------|--------|
-| `LIGHTSAIL_SSH_KEY` | Ouvre ta clé `.pem` (Lightsail) dans un éditeur, copie **tout** le contenu (y compris `-----BEGIN ...` et `-----END ...`) et colle-le ici. |
-| `LIGHTSAIL_HOST`    | L’IP de ton instance Lightsail, ex. `63.34.0.38` |
+| Nom du secret | Valeur |
+|---------------|--------|
+| **`LIGHTSAIL_HOST_15M`** | IP publique de l’instance 15m, ex. **`63.34.0.38`** |
+| **`LIGHTSAIL_SSH_KEY_15M`** | Contenu **complet** du fichier `.pem` (celui qui ouvre cette instance, ex. `clé 2gb ram bot15m.pem`), du `-----BEGIN` au `-----END`. |
 
-Sans ces secrets, l’Action ne fait rien (et affiche un avertissement).
+Sans **`LIGHTSAIL_HOST_15M`** ou **`LIGHTSAIL_SSH_KEY_15M`**, l’étape « Deploy bot 15m » échoue ou ne peut pas s’authentifier.
+
+### Bot **horaire** (uniquement si tu lances le workflow à la main et choisis *hourly* / *both*)
+
+| Nom du secret | Valeur |
+|---------------|--------|
+| `LIGHTSAIL_HOST` | IP de l’instance horaire |
+| `LIGHTSAIL_SSH_KEY` | Clé `.pem` correspondante (plein texte) |
 
 ## Ensuite
 
-- Tu modifies le code du bot → **git push** vers `main` (ou `master`).
-- L’Action tourne, se connecte en SSH à Lightsail et lance `redeploy.sh`.
-- Vérifier : onglet **Actions** du repo pour voir l’exécution et les éventuelles erreurs.
+- Tu modifies le code sous **`bot-24-7/`** → **git push** vers `main`.
+- Onglet **Actions** : vérifier **Redeploy bot on Lightsail**.
