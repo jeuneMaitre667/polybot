@@ -70,7 +70,8 @@ function estimateCryptoTakerFeeRate(p, includeFees) {
   return 0.25 * Math.pow(x, 2);
 }
 
-function computeRowDelta(r, {
+/** Export pour scripts CLI (agrégats horaires, WR, etc.). */
+export function computeRowDelta(r, {
   stake,
   feeUsd,
   backtestSlC,
@@ -120,7 +121,7 @@ function computeRowDelta(r, {
  * @param {object} r — ligne créneau enrichie
  * @param {'slotEnd' | 'trade'} bucket — `slotEnd` : heure de fin de créneau (`endDate`) ; `trade` : heure du signal / ordre (`botEntryTimestamp`, sec ou ms).
  */
-function instantForHourlyBreakdownEt(r, bucket) {
+export function instantForHourlyBreakdownEt(r, bucket) {
   if (bucket === 'trade' && r.botEntryTimestamp != null) {
     const t = Number(r.botEntryTimestamp);
     if (Number.isFinite(t)) {
