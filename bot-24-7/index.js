@@ -1649,6 +1649,24 @@ function formatSessionDeltaLine(balanceAfter) {
 }
 
 /**
+ * Aligné sur les alertes trade : solde collateral CLOB (API) si disponible, sinon USDC sur l’EOA (RPC).
+ * Après redeem relayer/proxy, les USDC sont souvent visibles côté CLOB alors que le wallet EOA reste à ~0.
+ */
+async function getUsdcBalanceForTelegramAlerts() {
+  try {
+    const client = await buildClobClientCachedCreds();
+    const viaClob = await getUsdcSpendableViaClob(client);
+    if (viaClob != null && Number.isFinite(viaClob)) {
+      return { balance: viaClob, source: 'clob' };
+    }
+  } catch (_) {
+    // creds CLOB indisponibles → RPC
+  }
+  const rpc = await getUsdcBalanceRpc();
+  return { balance: rpc, source: 'rpc' };
+}
+
+/**
  * Alerte Telegram après ordre accepté (WS ou poll) : position, remplissage, MTM best bid, solde.
  * @param {'ws'|'poll'} source
  * @param {Record<string, unknown>} orderData
@@ -1757,37 +1775,51 @@ async function notifyTelegramRedeemFailureOnce(cid, fields) {
 async function notifyTelegramRedeemEvent(p) {
   if (!telegramRedeemAlertsEnabled()) return;
   try {
-    const balBefore = await getUsdcBalanceRpc();
+    const beforeSnap = await getUsdcBalanceForTelegramAlerts();
+    const balBefore = beforeSnap.balance;
     noteSessionBaselineIfNeeded(balBefore);
 
     let bal = balBefore;
+    let labelSource = beforeSnap.source;
     if (p?.ok) {
-      // Quand on redeems via relayer ou juste après un indexer event,
-      // le solde peut ne pas être mis à jour instantanément côté RPC.
-      // On poll pendant un court moment pour afficher le solde "après".
+      // CLOB + RPC peuvent mettre quelques centaines de ms à refléter le redeem (surtout via relayer).
       const pollStart = Date.now();
-      const POLL_TOTAL_MS = 4_000;
-      const POLL_STEP_MS = 500;
-      const MIN_DELTA_USDC = 0.01;
+      const POLL_TOTAL_MS = 8_000;
+      const POLL_STEP_MS = 400;
+      const MIN_DELTA_USDC = 0.005;
 
       while (Date.now() - pollStart < POLL_TOTAL_MS) {
         await new Promise((r) => setTimeout(r, POLL_STEP_MS));
-        const candidate = await getUsdcBalanceRpc();
+        const snap = await getUsdcBalanceForTelegramAlerts();
+        const candidate = snap.balance;
         if (candidate == null || !Number.isFinite(candidate)) continue;
         if (balBefore != null && Number.isFinite(balBefore)) {
           if (Math.abs(candidate - balBefore) >= MIN_DELTA_USDC) {
             bal = candidate;
+            labelSource = snap.source;
             break;
           }
         } else {
           bal = candidate;
+          labelSource = snap.source;
           break;
         }
       }
+      const finalSnap = await getUsdcBalanceForTelegramAlerts();
+      if (finalSnap.balance != null && Number.isFinite(finalSnap.balance)) {
+        bal = finalSnap.balance;
+        labelSource = finalSnap.source;
+      }
+    } else {
+      const snap = await getUsdcBalanceForTelegramAlerts();
+      bal = snap.balance;
+      labelSource = snap.source;
     }
 
     const deltaLine = formatSessionDeltaLine(bal);
     const cid = String(p.conditionId || '').slice(0, 22);
+    const balanceLabel =
+      labelSource === 'clob' ? 'Solde CLOB (après redeem)' : 'Solde USDC wallet (RPC, après redeem)';
     let msg;
     if (p.ok) {
       msg = [
@@ -1795,19 +1827,21 @@ async function notifyTelegramRedeemEvent(p) {
         `conditionId : ${cid}…`,
         p.hash ? `Tx : ${p.hash}` : '',
         p.viaRelayer != null ? `Via relayer : ${p.viaRelayer ? 'oui' : 'non'}` : '',
-        `Solde USDC (après redeem) : ${bal != null ? bal.toFixed(2) : '?'}`,
+        `${balanceLabel} : ${bal != null ? bal.toFixed(2) : '?'} USDC`,
         deltaLine || '',
       ]
         .filter(Boolean)
         .join('\n');
     } else {
+      const failLabel =
+        labelSource === 'clob' ? 'Solde CLOB' : 'Solde USDC wallet (RPC)';
       msg = [
         `⚠️ Redeem échoué ou en attente`,
         `conditionId : ${cid}…`,
         p.detail ? `Détail : ${p.detail}` : '',
         p.error ? `Erreur : ${String(p.error).slice(0, 400)}` : '',
         p.viaRelayer != null ? `Via relayer : ${p.viaRelayer ? 'oui' : 'non'}` : '',
-        `Solde USDC (RPC) : ${bal != null ? bal.toFixed(2) : '?'}`,
+        `${failLabel} : ${bal != null ? bal.toFixed(2) : '?'} USDC`,
         deltaLine || '',
       ]
         .filter(Boolean)
