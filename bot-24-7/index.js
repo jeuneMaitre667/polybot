@@ -2009,6 +2009,21 @@ async function tryStopLossForOpenPosition(clobClient) {
     let worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
     // Contrainte logique : en stop-loss, le worst acceptable ne devrait pas dépasser le seuil de déclenchement.
     worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
+    // SELL : le « worst price » est le plancher de vente. S’il reste au-dessus du best bid (ex. seuil 60¢
+    // alors que le carnet est déjà à 59¢), FAK ne trouve aucun contrepartie → « no orders found to match ».
+    // On aligne donc sur le best bid observé au moment du déclenchement pour permettre le match immédiat.
+    if (Number.isFinite(bestBid) && bestBid > 0 && bestBid < 1) {
+      const beforeFollow = worstPricePUsed;
+      worstPricePUsed = Math.min(worstPricePUsed, bestBid);
+      if (beforeFollow > bestBid + 1e-9) {
+        logJson('info', 'Stop-loss: worst price aligné sur bestBid (évite FAK sans match)', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          worstBefore: Math.round(beforeFollow * 1e6) / 1e6,
+          bestBid: Math.round(bestBid * 1e6) / 1e6,
+          worstAfter: Math.round(worstPricePUsed * 1e6) / 1e6,
+        });
+      }
+    }
     worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
     const rawTaker = tokensToSell * worstPricePUsed * 1e6; // taker = USDC.e reçu côté SELL
     if (!(rawTaker >= minRawAmount)) {
