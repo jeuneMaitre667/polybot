@@ -5041,6 +5041,13 @@ async function main() {
   if (walletConfigured && wallet) {
     const sizeMode = useBalanceAsSize ? 'taille = solde USDC (réinvestissement)' : `fixe ${orderSizeUsd} USDC`;
     console.log(`Wallet: ${wallet.address} | Auto: ${autoPlaceEnabled} | Ordre: ${useMarketOrder ? 'marché' : 'limite'} | ${sizeMode} | Poll: ${pollIntervalSec}s`);
+    if (hasMaxStakeUsd) {
+      console.log(
+        `Mise max par ordre: ${maxStakeUsd} USDC (MAX_STAKE_USD) — chaque ordre = min(solde disponible, ${maxStakeUsd})${useBalanceAsSize ? " (réinvestissement jusqu'au plafond)" : ''}.`
+      );
+    } else {
+      console.log('Mise max par ordre: aucun plafond (MAX_STAKE_USD=0).');
+    }
     if (useMarketOrder) {
       const tifHint = marketOrderType === OrderType.FOK ? 'FOK (tout ou rien)' : 'FAK (partiel OK si carnet insuffisant)';
       console.log(
