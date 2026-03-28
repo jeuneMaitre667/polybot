@@ -1,11 +1,11 @@
 # Configure les secrets GitHub (LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST) pour l'Action de redéploiement.
 # Prérequis : GitHub CLI installé et connecte (winget install GitHub.cli ou https://cli.github.com/)
 # Usage: .\setup-github-secrets.ps1
-# Ou:   .\setup-github-secrets.ps1 -KeyPath "C:\chemin\vers\cle.pem" -HostIp "34.253.136.19"
+# Ou:   .\setup-github-secrets.ps1 -KeyPath "C:\chemin\vers\cle.pem" -HostIp "108.130.195.85"
 
 param(
     [string]$KeyPath = "",
-    [string]$HostIp = "34.253.136.19"
+    [string]$HostIp = "108.130.195.85"
 )
 
 $ErrorActionPreference = "Stop"

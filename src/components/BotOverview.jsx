@@ -153,7 +153,7 @@ export function BotOverview() {
   const { data: data15m } = useBotStatus(statusUrl15m);
   /** Persisté (localStorage) ; 15m seulement si URL bot 15m configurée. */
   const [latencyMode, setLatencyMode] = useState(() =>
-    readLatencyModeFromStorage(Boolean(DEFAULT_BOT_STATUS_URL_15M)),
+    readLatencyModeFromStorage(Boolean(DEFAULT_BOT_STATUS_URL_15M), Boolean(DEFAULT_BOT_STATUS_URL)),
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -250,6 +250,9 @@ export function BotOverview() {
   const hasSignalDecisionLatencyStats = (signalDecisionLatencyStats?.all?.count ?? 0) > 0;
   const hasSignalDecisionLatencyStats15m = (signalDecisionLatencyStats15m?.all?.count ?? 0) > 0;
   const show15m = !!statusUrl15m;
+  const showStatus1h = !!statusUrl;
+  /** Sans URL bot 1h, toutes les latences / watch lisent le 15m. */
+  const latencySourceMode = !statusUrl && statusUrl15m ? '15m' : latencyMode;
 
   /** Funder Polymarket (profil) depuis last-order bot — pour aligner l’historique Data API sur le même compte que le bot. */
   const tradeHistoryBotFunders = useMemo(
@@ -350,7 +353,7 @@ export function BotOverview() {
   const bestAskUpAligned = bestAskDeltaUp != null ? bestAskDeltaUp <= BEST_ASK_DELTA_OK_P : null;
   const bestAskDownAligned = bestAskDeltaDown != null ? bestAskDeltaDown <= BEST_ASK_DELTA_OK_P : null;
 
-  const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
+  const activeLatency = latencySourceMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   /** Dernier ordre mesuré : WS ou poll (souvent poll si placement via boucle principale, pas le handler WS). */
   const lastTradeLatency = useMemo(() => {
     if (!activeLatency) return null;
@@ -369,13 +372,13 @@ export function BotOverview() {
       ? { ms: wsMs, source: 'ws', at: ws.lastLatencyAt }
       : { ms: pollMs, source: 'poll', at: poll.lastLatencyAt };
   }, [activeLatency]);
-  const hasActiveLatency = latencyMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
-  const activeLatencyBreakdown = latencyMode === '15m' ? tradeLatencyBreakdownStats15m : tradeLatencyBreakdownStats;
-  const activeCycleLatency = latencyMode === '15m' ? cycleLatencyStats15m : cycleLatencyStats;
-  const hasActiveCycleLatency = latencyMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
-  const activeSignalDecisionLatency = latencyMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
-  const hasActiveSignalDecisionLatency = latencyMode === '15m' ? hasSignalDecisionLatencyStats15m : hasSignalDecisionLatencyStats;
-  const activeStatus = latencyMode === '15m' ? data15m : data;
+  const hasActiveLatency = latencySourceMode === '15m' ? hasTradeLatencyStats15m : hasTradeLatencyStats;
+  const activeLatencyBreakdown = latencySourceMode === '15m' ? tradeLatencyBreakdownStats15m : tradeLatencyBreakdownStats;
+  const activeCycleLatency = latencySourceMode === '15m' ? cycleLatencyStats15m : cycleLatencyStats;
+  const hasActiveCycleLatency = latencySourceMode === '15m' ? hasCycleLatencyStats15m : hasCycleLatencyStats;
+  const activeSignalDecisionLatency = latencySourceMode === '15m' ? signalDecisionLatencyStats15m : signalDecisionLatencyStats;
+  const hasActiveSignalDecisionLatency = latencySourceMode === '15m' ? hasSignalDecisionLatencyStats15m : hasSignalDecisionLatencyStats;
+  const activeStatus = latencySourceMode === '15m' ? data15m : data;
   const activeAlerts = Array.isArray(activeStatus?.alerts) ? activeStatus.alerts : [];
   const hasPolymarketDelayRisk = activeAlerts.some((a) => ['polymarket_degraded', 'stale_ws_data', 'execution_delayed'].includes(String(a?.kind)));
   const activeNoOrderEvents = Array.isArray(activeStatus?.signalInRangeNoOrderRecent)
@@ -530,18 +533,18 @@ export function BotOverview() {
     return Number.isFinite(n) ? `${Math.round(n)}` : '—';
   }
 
-  if (!statusUrl) {
+  if (!statusUrl && !statusUrl15m) {
     return (
       <div className="bot-overview-grid">
         <div className="grid-main">
           <div className="card" style={{ gridColumn: '1 / -1' }}>
             <div className="card-label">Statut bot non configuré</div>
             <p className="card-sub" style={{ marginTop: 10, lineHeight: 1.65, maxWidth: 52 * 16 }}>
-              Les cartes Solde / PNL / latences viennent du serveur de statut. Définissez dans votre{' '}
-              <code style={{ fontSize: 12 }}>.env</code> à la racine du projet :{' '}
-              <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL=http://VOTRE_IP:3001</code> (et optionnellement{' '}
-              <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL_15M=...</code> pour le 15m), puis redémarrez{' '}
-              <code style={{ fontSize: 12 }}>npm run dev</code>. Voir <code style={{ fontSize: 12 }}>.env.example</code>.
+              Les cartes Solde / PNL / latences viennent du serveur de statut. Définissez au minimum{' '}
+              <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL_15M=http://VOTRE_IP:3001</code> pour le bot 15m. Pour
+              remettre un bot horaire plus tard : <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL=...</code> en plus.
+              Puis redémarrez <code style={{ fontSize: 12 }}>npm run dev</code>. Voir{' '}
+              <code style={{ fontSize: 12 }}>.env.example</code>.
             </p>
           </div>
         </div>
@@ -554,9 +557,13 @@ export function BotOverview() {
       <div className="grid-main">
         <div className="card">
           <div className="card-label">Solde Horaire</div>
-          <div className="card-value green">{balance != null ? formatUsd(balance) : '—'}</div>
+          <div className="card-value green">{showStatus1h && balance != null ? formatUsd(balance) : '—'}</div>
           <div className="card-sub">
-            {data?.at ? new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} · 1h
+            {showStatus1h && data?.at
+              ? `${new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} · 1h`
+              : showStatus1h
+                ? '— · 1h'
+                : 'Pas de bot 1h — ajoutez VITE_BOT_STATUS_URL pour rebrancher'}
           </div>
         </div>
         <div className="card">
@@ -592,10 +599,12 @@ export function BotOverview() {
           <div className="card-label">
             {pnl?.window === 'sinceFirst' ? 'PNL Horaire (depuis 1er relevé)' : 'PNL Horaire (24h)'}
           </div>
-          <div className={`card-value ${pnl != null ? (pnl.pct >= 0 ? 'green' : 'red') : ''}`}>
-            {pnl != null ? `${pnl.pct >= 0 ? '+' : ''}${pnl.pct.toFixed(1)} %` : '—'}
+          <div className={`card-value ${showStatus1h && pnl != null ? (pnl.pct >= 0 ? 'green' : 'red') : ''}`}>
+            {showStatus1h && pnl != null ? `${pnl.pct >= 0 ? '+' : ''}${pnl.pct.toFixed(1)} %` : '—'}
           </div>
-          <div className="card-sub">{orders24h ? `${orders24h} ordre(s)` : 'Aucun trade exécuté'}</div>
+          <div className="card-sub">
+            {showStatus1h ? (orders24h ? `${orders24h} ordre(s)` : 'Aucun trade exécuté') : 'Bot horaire non connecté'}
+          </div>
         </div>
         <div className="card">
           <div className="card-label">PNL net 15m (vs dépôts)</div>
@@ -658,7 +667,7 @@ export function BotOverview() {
             <h2>Latences</h2>
             <div className="line" />
           </div>
-          {show15m && (
+          {show15m && statusUrl && (
             <div className="overview-toggle" role="group" aria-label="Source latences">
               <button
                 type="button"
@@ -946,7 +955,7 @@ export function BotOverview() {
                     <div className="overview-num-strong">{formatCount(activeLatencyBreakdown?.all?.placeOrder?.count)}</div>
                   </div>
                   <div className="overview-last-update">
-                    Source: {latencyMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
+                    Source: {latencySourceMode === '15m' ? 'bot 15m' : 'bot horaire'} · agrégé sur 24 h (trades).
                   </div>
                 </>
               ) : (

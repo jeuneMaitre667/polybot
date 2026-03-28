@@ -8,7 +8,7 @@
 set -euo pipefail
 REPO="${HOME}/polymarket-dashboard"
 BOT15M_STATUS_PORT="${BOT15M_STATUS_PORT:-3001}"
-BOT15M_PUBLIC_IP="${BOT15M_PUBLIC_IP:-34.253.136.19}"
+BOT15M_PUBLIC_IP="${BOT15M_PUBLIC_IP:-108.130.195.85}"
 
 test -f /tmp/polymarket-dash-deploy.tgz
 mkdir -p "$REPO"

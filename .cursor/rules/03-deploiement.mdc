@@ -7,11 +7,11 @@ alwaysApply: false
 # Déploiement
 
 - **Lightsail** : bot dans `~/bot-24-7`, repo cloné dans `~/polymarket-dashboard`. Redéploiement = `bash ~/bot-24-7/redeploy.sh` (git pull dans le repo puis rsync vers bot-24-7, npm install, pm2 restart).
-- **Quand l'utilisateur demande de modifier, mettre à jour ou redéployer le bot** : utiliser la clé SSH pour se connecter au serveur et exécuter les commandes (redeploy.sh, pm2 restart, etc.). La clé `.pem` est disponible (projet ou `%USERPROFILE%\Downloads\LightsailDefaultKey-eu-west-1.pem`). IP : voir `.env` ou variable d'environnement si définie, sinon demander ou utiliser celle documentée (ex. 34.253.136.19). Ne pas se contenter de pousser un commit pour déclencher le workflow si on peut exécuter le redéploiement en SSH directement.
+- **Quand l'utilisateur demande de modifier, mettre à jour ou redéployer le bot** : utiliser la clé SSH pour se connecter au serveur et exécuter les commandes (redeploy.sh, pm2 restart, etc.). La clé `.pem` est disponible (projet ou `%USERPROFILE%\Downloads\LightsailDefaultKey-eu-west-1.pem`). IP : voir `.env` ou variable d'environnement si définie, sinon demander ou utiliser celle documentée (ex. 108.130.195.85). Ne pas se contenter de pousser un commit pour déclencher le workflow si on peut exécuter le redéploiement en SSH directement.
 - **PowerShell** : scripts à la racine (deploy-bot.ps1, setup-lightsail-git.ps1, etc.). Utiliser `-KeyPath` et `-Ip` quand la clé ou l'IP ne sont pas aux emplacements par défaut.
 - **SSH depuis le PC** : clés `.pem` dans `lightsail-keys/` (gitignored) ou dans Téléchargements. Ne pas committer la clé ; pour les Actions GitHub, utiliser les secrets (LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST).
 - **Port 3001** : doit être ouvert dans le pare-feu Lightsail pour que le dashboard appelle `/api/bot-status`.
 - **Accès aux deux bots Lightsail** : l’assistant peut se connecter aux deux instances pour vérifier logs, liquidité, redéploiement, etc. Les deux clés SSH sont dans le dossier `lightsail-keys/` à la racine du projet :
-  - **Bot horaire** : `lightsail-keys/LightsailDefaultKey-eu-west-1.pem`, hôte = première URL dans `.env` (VITE_BOT_STATUS_URL, ex. 34.253.136.19).
-  - **Bot 15m** : `lightsail-keys/LightsailDefaultKey-eu-west-1-bot15m.pem`, hôte = deuxième URL (VITE_BOT_STATUS_URL_15M, ex. 34.253.136.19).
+  - **Bot horaire** : `lightsail-keys/LightsailDefaultKey-eu-west-1.pem`, hôte = première URL dans `.env` (VITE_BOT_STATUS_URL, ex. 108.130.195.85).
+  - **Bot 15m** : `lightsail-keys/LightsailDefaultKey-eu-west-1-bot15m.pem`, hôte = deuxième URL (VITE_BOT_STATUS_URL_15M, ex. 108.130.195.85).
   - Connexion : `ssh -i "chemin/projet/lightsail-keys/cle.pem" -o StrictHostKeyChecking=accept-new ubuntu@IP`.

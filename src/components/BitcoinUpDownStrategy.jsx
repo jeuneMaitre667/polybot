@@ -189,7 +189,8 @@ export function BitcoinUpDownStrategy() {
   const { liquidityUsd: liquidityAtTargetUsd, loading: liquidityLoading, error: liquidityError, refresh: refreshLiquidity } = useOrderBookLiquidity(currentSignalTokenId);
   const { data: botStatusData } = useBotStatus(DEFAULT_BOT_STATUS_URL);
   const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
-  const liquidityStats = botStatusData?.liquidityStats ?? null;
+  const liquidityStats =
+    botStatusData?.liquidityStats ?? botStatusData15m?.liquidityStats ?? null;
 
   const [backtestWindowDays, setBacktestWindowDays] = useState(() => {
     const fromUrl = readWindowDaysFromUrl();

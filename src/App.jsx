@@ -67,7 +67,13 @@ export default function App() {
           </>
         ) : (
           <>
-            <BotStatusBadge label="BOT 1H" />
+            {DEFAULT_BOT_STATUS_URL ? (
+              <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="BOT 1H" />
+            ) : (
+              <span className="bots-row-hint" title="Définissez VITE_BOT_STATUS_URL quand un bot horaire sera de nouveau connecté.">
+                Bot 1h : non configuré
+              </span>
+            )}
             {DEFAULT_BOT_STATUS_URL_15M && (
               <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="BOT 15M" />
             )}

@@ -3,11 +3,11 @@
 #
 # Usage:
 #   .\tout-faire-lightsail.ps1
-#   .\tout-faire-lightsail.ps1 -KeyPath "C:\Users\cedpa\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "34.253.136.19"
+#   .\tout-faire-lightsail.ps1 -KeyPath "C:\Users\cedpa\Downloads\LightsailDefaultKey-eu-west-1.pem" -Ip "108.130.195.85"
 
 param(
     [string]$KeyPath = "",
-    [string]$Ip = "34.253.136.19"
+    [string]$Ip = "108.130.195.85"
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,7 +32,7 @@ if (-not $KeyPath -or -not (Test-Path $KeyPath)) {
     Write-Host ""
     Write-Host "Cle .pem introuvable." -ForegroundColor Yellow
     Write-Host "  Copie ta cle Lightsail dans le projet et nomme-la: LightsailDefaultKey-eu-west-1.pem" -ForegroundColor Gray
-    Write-Host "  Ou lance: .\tout-faire-lightsail.ps1 -KeyPath `"C:\chemin\vers\ta-cle.pem`" -Ip `"34.253.136.19`"" -ForegroundColor Gray
+    Write-Host "  Ou lance: .\tout-faire-lightsail.ps1 -KeyPath `"C:\chemin\vers\ta-cle.pem`" -Ip `"108.130.195.85`"" -ForegroundColor Gray
     Write-Host ""
     exit 1
 }
