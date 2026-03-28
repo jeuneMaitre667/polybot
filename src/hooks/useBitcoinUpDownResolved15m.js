@@ -43,6 +43,8 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [debugSummary, setDebugSummary] = useState(null);
+  /** Dernière source ayant alimenté `resolved` : API live vs fichier JSON statique (pour l’UI et le debug SL). */
+  const [dataSource, setDataSource] = useState(null);
   const fetchSeqRef = useRef(0);
 
   const fetchResolved = useCallback(async () => {
@@ -50,7 +52,10 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
     setError(null);
     setLoading(true);
 
-    const staticUrl = (import.meta.env.VITE_BACKTEST_15M_STATIC_JSON || '').trim();
+    const liveOnly =
+      import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === 'true' ||
+      import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === '1';
+    const staticUrl = liveOnly ? '' : (import.meta.env.VITE_BACKTEST_15M_STATIC_JSON || '').trim();
     if (staticUrl) {
       try {
         const r = await fetch(staticUrl, { cache: 'no-store' });
@@ -61,6 +66,7 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
             if (seq !== fetchSeqRef.current) return;
             setResolved(rows);
             setDebugSummary(data.debugSummary ?? null);
+            setDataSource('static');
             setError(null);
             setLoading(false);
             return;
@@ -76,10 +82,12 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       if (seq !== fetchSeqRef.current) return;
       setResolved(enrichedFinal);
       setDebugSummary(debug ? sum : null);
+      setDataSource('live');
     } catch (err) {
       if (seq !== fetchSeqRef.current) return;
       setError(err.message || 'Erreur lors du chargement des résultats 15 min.');
       setResolved([]);
+      setDataSource(null);
     } finally {
       if (seq === fetchSeqRef.current) setLoading(false);
     }
@@ -89,5 +97,5 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
     fetchResolved();
   }, [fetchResolved]);
 
-  return { resolved, loading, error, refresh: fetchResolved, debugSummary };
+  return { resolved, loading, error, refresh: fetchResolved, debugSummary, dataSource };
 }

@@ -178,6 +178,9 @@ function signalBucketLabelFromPrice(priceP) {
 
 export function BitcoinUpDownStrategy() {
   const static15mJsonUrl = (import.meta.env.VITE_BACKTEST_15M_STATIC_JSON || '').trim();
+  const backtest15mLiveOnly =
+    import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === 'true' ||
+    import.meta.env.VITE_BACKTEST_15M_LIVE_ONLY === '1';
   const resultMode = '15m';
   const { signals, live15mMeta } = useBitcoinUpDownSignals('15m');
 
@@ -228,6 +231,7 @@ export function BitcoinUpDownStrategy() {
     error: resolved15mError,
     refresh: refreshResolved15m,
     debugSummary: resolved15mDebugSummary,
+    dataSource: backtest15mDataSource,
   } = useBitcoinUpDownResolved15m(resolvedWindowHours, {
     debug: backtest15mDebug,
     simConfig: {
@@ -262,6 +266,18 @@ export function BitcoinUpDownStrategy() {
   const resolved15mDisplayRows = useMemo(
     () => build15mBacktestDisplayRows(resolved15m, resolvedWindowHours),
     [resolved15m, resolvedWindowHours]
+  );
+
+  /** Query string alignée sur les réglages actuels (évite l’exemple figé sl=58 vs SL 60¢ dans l’UI). */
+  const backtestShareQuery = useMemo(
+    () =>
+      new URLSearchParams({
+        windowDays: String(backtestWindowDays),
+        signalMin: String(signalMinC),
+        signalMax: String(signalMaxC),
+        sl: String(backtestSlC),
+      }).toString(),
+    [backtestWindowDays, signalMinC, signalMaxC, backtestSlC]
   );
 
   const toggleBacktest15mDebug = () => {
@@ -722,18 +738,27 @@ export function BitcoinUpDownStrategy() {
               {
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
-                  {static15mJsonUrl ? (
+                  {backtest15mLiveOnly && static15mJsonUrl ? (
+                    <p className="strat-metric-card__sub strat-text-green" style={{ marginTop: 6, lineHeight: 1.5 }}>
+                      <strong>API live forcée</strong> (<code className="strat-code-inline">VITE_BACKTEST_15M_LIVE_ONLY=true</code>) : le chemin{' '}
+                      <code className="strat-code-inline">{static15mJsonUrl}</code> est ignoré — la simu et les SL viennent du fetch réseau.
+                    </p>
+                  ) : null}
+                  {!resolved15mLoading && backtest15mDataSource === 'static' ? (
                     <p className="strat-metric-card__sub strat-text-amber" style={{ marginTop: 6, lineHeight: 1.5 }}>
-                      <strong>Cache JSON actif</strong> ({static15mJsonUrl}) : le tableau utilise les lignes précalculées du fichier.
-                      Changer signal / SL ici ne refait pas la simu — retirez <code className="strat-code-inline">VITE_BACKTEST_15M_STATIC_JSON</code> du{' '}
-                      <code className="strat-code-inline">.env</code> pour recharger en live, ou régénérez le cache :{' '}
-                      <code className="strat-code-inline">
-                        BACKTEST_SIGNAL_MIN_C=77 BACKTEST_SIGNAL_MAX_C=78 BACKTEST_SL_C=60 npm run cache:15m
-                      </code>
+                      <strong>Cache JSON chargé</strong> ({static15mJsonUrl || 'fichier'}) : lignes précalculées — changer signal / SL ici ne refait pas la simu.
+                      Pour le backtest live (SL à jour avec tes réglages), commentez ou retirez{' '}
+                      <code className="strat-code-inline">VITE_BACKTEST_15M_STATIC_JSON</code> dans le <code className="strat-code-inline">.env</code>, ou définissez{' '}
+                      <code className="strat-code-inline">VITE_BACKTEST_15M_LIVE_ONLY=true</code>, puis redémarrez Vite.
+                    </p>
+                  ) : null}
+                  {!resolved15mLoading && backtest15mDataSource === 'live' ? (
+                    <p className="strat-metric-card__sub strat-text-green" style={{ marginTop: 6, lineHeight: 1.45 }}>
+                      <strong>Backtest live</strong> : données recalculées via API (Gamma, CLOB, Data API). Les stop-loss simulés et la colonne Simul. suivent la bande et le SL ci-dessous.
                     </p>
                   ) : null}
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot) et le SL de simulation. Sans cache statique, cela
+                    Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot) et le SL de simulation. En mode live, cela
                     recharge les données et recalcule le tableau 15m.
                   </p>
                   <div className="strat-hero-controls" style={{ marginTop: 10 }}>
@@ -911,7 +936,10 @@ export function BitcoinUpDownStrategy() {
           <p className="strat-results-desc">
             Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les 3 premières
             minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).{' '}
-            Données historiques CLOB.
+            Données historiques CLOB. Même moteur que les scripts{' '}
+            <code className="strat-code-inline">npm run recalc:day-16h</code> /{' '}
+            <code className="strat-code-inline">recalc-today-15m-pnl.mjs</code> (fonction{' '}
+            <code className="strat-code-inline">fetchBitcoin15mResolvedData</code>).
           </p>
               <>
                 {/* Fenêtre de données 15m : toujours visible pour indiquer la période et le statut */}
@@ -1243,9 +1271,7 @@ export function BitcoinUpDownStrategy() {
                         </strong>{' '}
                         (CLOB + trades + complément 1−p, stop-loss hybride si activé). SL simulé :{' '}
                         <strong>proxy best bid</strong> (mid historique − offset, comme l’ordre de grandeur du bid vs mid côté bot ; pas d’historique bid tick par tick). Lien direct :{' '}
-                        <code className="strat-code-inline">
-                          ?windowDays=30&amp;signalMin=77&amp;signalMax=78&amp;sl=58
-                        </code>
+                        <code className="strat-code-inline">{`?${backtestShareQuery}`}</code>
                         {(import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED === 'false' ||
                           import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED === '0') &&
                           backtestResult15m.withSimul.length > 0 && (
@@ -1262,8 +1288,14 @@ export function BitcoinUpDownStrategy() {
                           backtestResult15m.withSimul.length > 0 && (
                           <>
                             {' '}
-                            · <span className="strat-muted">Aucun SL simulé sur cette fenêtre : le prix proxy n’a pas franchi le
-                            seuil {backtestSlC}¢ après min-hold sur les lignes concernées, ou l’historique est trop clairsemé.</span>
+                            · <span className="strat-muted">
+                              Aucun SL simulé sur cette fenêtre : le proxy (mid − offset) n’a pas franchi le seuil{' '}
+                              {backtestSlC}¢ après min-hold — le WR « à la résolution » peut alors paraître très haut alors qu’en
+                              live le bid aurait pu déclencher un SL. Essayez{' '}
+                              <code className="strat-code-inline">VITE_BACKTEST_SL_BID_PROXY_FROM_MID=false</code> (mid brut pour
+                              la détection) ou augmentez <code className="strat-code-inline">VITE_BACKTEST_SL_BID_FROM_MID_OFFSET_P</code>{' '}
+                              dans le <code className="strat-code-inline">.env</code>, puis redémarrez Vite.
+                            </span>
                           </>
                         )}
                       </p>
