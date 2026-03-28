@@ -6,7 +6,7 @@ Dès que tu modifies le code du bot et fais **git push** sur `main` (ou `master`
 
 **Une seule fois** : ajoute les secrets du repo GitHub (Settings → Secrets and variables → Actions) :
 - **LIGHTSAIL_SSH_KEY** : contenu complet de ton fichier `.pem` Lightsail
-- **LIGHTSAIL_HOST** : IP de l’instance (ex. `108.130.195.85`)
+- **LIGHTSAIL_HOST** : IP de l’instance (ex. `63.34.0.38`)
 
 Détail : voir `.github/workflows/README-REDEPLOY-AUTO.md` à la racine du projet.
 
