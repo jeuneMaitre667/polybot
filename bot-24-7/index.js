@@ -3,7 +3,7 @@
  *
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
- * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 90–91 %)
+ * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 77–78 %)
  * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
@@ -333,13 +333,13 @@ const CLOB_HOST = 'https://clob.polymarket.com';
 const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
-// Fenêtre de prix pour signaux et mise max : 90 % – 91 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.9;
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.91;
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.91;
+// Fenêtre de prix pour signaux et mise max : 77 % – 78 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.77;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.78;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.78;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
- * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 90–91 %).
+ * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 77–78 %).
  */
 const marketWorstPricePRaw = Number(process.env.MARKET_WORST_PRICE_P);
 let marketWorstPriceP = Number.isFinite(marketWorstPricePRaw) && marketWorstPricePRaw > 0 ? marketWorstPricePRaw : 0.99;
@@ -497,9 +497,13 @@ function getEffectiveBalanceForSizing(balanceUsd) {
 /**
  * Plafond fixe de taille d'ordre (USDC), appliqué après solde / liquidité.
  * Remplace l'intérêt de la « mise max » carnet si USE_LIQUIDITY_CAP / USE_AVG_PRICE_SIZING sont désactivés.
- * Désactivé si absent, NaN ou ≤ 0.
+ * Défaut **500** si variable absente (réinvestissement plafonné). `MAX_STAKE_USD=0` désactive le plafond.
  */
-const maxStakeUsd = Number(process.env.MAX_STAKE_USD);
+const maxStakeUsdEnv = process.env.MAX_STAKE_USD;
+const maxStakeUsd =
+  maxStakeUsdEnv !== undefined && String(maxStakeUsdEnv).trim() !== ''
+    ? Number(maxStakeUsdEnv)
+    : 500;
 const hasMaxStakeUsd = Number.isFinite(maxStakeUsd) && maxStakeUsd > 0;
 /** Enregistrer liquidity-history.json (dashboard « mise max »). true = activer (désactivé par défaut avec FAK / sans plafond carnet). */
 const recordLiquidityHistory = process.env.RECORD_LIQUIDITY_HISTORY === 'true';
@@ -547,7 +551,7 @@ const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
-const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.7));
+const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.6));
 /** Désactiver la condition drawdown avec STOP_LOSS_DRAWDOWN_ENABLED=false (le SL ne déclenche alors que sur le prix). */
 const stopLossDrawdownEnabled = process.env.STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 /** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */

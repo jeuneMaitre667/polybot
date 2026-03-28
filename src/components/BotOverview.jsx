@@ -530,7 +530,24 @@ export function BotOverview() {
     return Number.isFinite(n) ? `${Math.round(n)}` : '—';
   }
 
-  if (!statusUrl) return null;
+  if (!statusUrl) {
+    return (
+      <div className="bot-overview-grid">
+        <div className="grid-main">
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <div className="card-label">Statut bot non configuré</div>
+            <p className="card-sub" style={{ marginTop: 10, lineHeight: 1.65, maxWidth: 52 * 16 }}>
+              Les cartes Solde / PNL / latences viennent du serveur de statut. Définissez dans votre{' '}
+              <code style={{ fontSize: 12 }}>.env</code> à la racine du projet :{' '}
+              <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL=http://VOTRE_IP:3001</code> (et optionnellement{' '}
+              <code style={{ fontSize: 12 }}>VITE_BOT_STATUS_URL_15M=...</code> pour le 15m), puis redémarrez{' '}
+              <code style={{ fontSize: 12 }}>npm run dev</code>. Voir <code style={{ fontSize: 12 }}>.env.example</code>.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bot-overview-grid">

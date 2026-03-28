@@ -3,9 +3,9 @@ function viteP(key, fallback) {
   return Number.isFinite(n) && n > 0 && n < 1 ? n : fallback;
 }
 
-/** Bande prix signal / « mise max » carnet (alignée bot : 90 % – 91 % ; override VITE_ORDER_BOOK_SIGNAL_*). */
-export const ORDER_BOOK_SIGNAL_MIN_P = viteP('VITE_ORDER_BOOK_SIGNAL_MIN_P', 0.9);
-export const ORDER_BOOK_SIGNAL_MAX_P = viteP('VITE_ORDER_BOOK_SIGNAL_MAX_P', 0.91);
+/** Bande prix signal / « mise max » carnet (alignée bot : 77 % – 78 % ; override VITE_ORDER_BOOK_SIGNAL_*). */
+export const ORDER_BOOK_SIGNAL_MIN_P = viteP('VITE_ORDER_BOOK_SIGNAL_MIN_P', 0.77);
+export const ORDER_BOOK_SIGNAL_MAX_P = viteP('VITE_ORDER_BOOK_SIGNAL_MAX_P', 0.78);
 /** Plafond exécution marché type bot (`MARKET_WORST_PRICE_P` / FAK) : liquidité cumulée jusqu’à ce prix. */
 export const ORDER_BOOK_MARKET_WORST_P = 0.99;
 

@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
 import { BotStatusBadge } from './components/BotStatus';
-import { DEFAULT_BOT_STATUS_URL_15M } from './hooks/useBotStatus.js';
+import {
+  DEFAULT_BOT_STATUS_URL,
+  DEFAULT_BOT_STATUS_URL_15M,
+  areBotStatusUrlsDuplicate,
+} from './hooks/useBotStatus.js';
 import { BotOverview } from './components/BotOverview';
-import { HeaderWalletBar } from './components/HeaderWalletBar';
 
 /** Ancienne page backtest retirée — évite un hash mort dans la barre d’adresse (favoris / onglet). */
 const LEGACY_HASH_ROUTES = new Set(['strat-95-70']);
@@ -47,14 +50,29 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
-          <HeaderWalletBar />
           <div className="timestamp">{clock}</div>
         </div>
       </header>
 
       <div className="bots-row">
-        <BotStatusBadge label="BOT 1H" />
-        {DEFAULT_BOT_STATUS_URL_15M && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="BOT 15M" />}
+        {areBotStatusUrlsDuplicate(DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M) ? (
+          <>
+            <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="BOT 15M" />
+            <span
+              className="bots-row-hint"
+              title="Le serveur de statut ne renvoie qu’un seul état PM2. Pour afficher le bot horaire séparément, définissez VITE_BOT_STATUS_URL vers l’URL du statut sur l’instance 1h (IP ou port différent du 15m)."
+            >
+              Même URL que 1h : le statut horaire n’est pas indépendant. Utilisez une URL dédiée pour le bot 1h.
+            </span>
+          </>
+        ) : (
+          <>
+            <BotStatusBadge label="BOT 1H" />
+            {DEFAULT_BOT_STATUS_URL_15M && (
+              <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="BOT 15M" />
+            )}
+          </>
+        )}
       </div>
 
       <main className="app-main app-main--flat">

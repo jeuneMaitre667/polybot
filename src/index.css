@@ -577,8 +577,15 @@ body::after {
   display: flex;
   gap: 12px;
   margin-bottom: 28px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
+}
+
+.bots-row-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--amber);
+  max-width: min(520px, 100%);
 }
 
 .bot-pill {
@@ -3538,6 +3545,12 @@ body::after {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+.strat-actions-row .btn.strat-window-btn--active {
+  background: rgba(0, 255, 136, 0.12);
+  border-color: rgba(0, 255, 136, 0.45);
+  color: var(--text-1);
 }
 
 .strat-help-text {

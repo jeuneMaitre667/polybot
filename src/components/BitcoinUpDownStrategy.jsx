@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import {
   useBitcoinUpDownResolved15m,
@@ -9,8 +9,6 @@ import {
 } from '../hooks/useBitcoinUpDownResolved15m';
 import { useOrderBookLiquidity } from '../hooks/useOrderBookLiquidity';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '../hooks/useBotStatus';
-import { useWallet } from '../context/useWallet';
-import { placePolymarketOrder } from '../lib/polymarketOrder';
 import { ORDER_BOOK_SIGNAL_MAX_P, ORDER_BOOK_SIGNAL_MIN_P } from '../lib/orderBookLiquidity.js';
 
 const SIGNAL_BAND_PCT_LABEL = `${Math.round(ORDER_BOOK_SIGNAL_MIN_P * 100)}–${Math.round(ORDER_BOOK_SIGNAL_MAX_P * 100)} %`;
@@ -21,7 +19,7 @@ import {
   formatTradeTimestampEt,
   formatTimestampUtcTooltip,
 } from '../lib/polymarketDisplayTime.js';
-import { getBacktestMaxLossFractionOfStake } from '../lib/bitcoinBacktestLossFraction.js';
+import { simulateReinvestMaxStake } from '../lib/bitcoin15mReinvestBacktest.js';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -35,13 +33,24 @@ function formatMoney(value) {
 
 const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
 const STORAGE_KEY_LIQUIDITY_SUGGESTION = 'polymarket-dashboard.showLiquiditySuggestion';
-const STORAGE_KEY_AUTOTRADE = 'polymarket-dashboard.autoPlaceEnabled';
 const STORAGE_BACKTEST_15M_DEBUG = 'polymarket-dashboard.backtest15mDebug';
 const STORAGE_BACKTEST_15M_SIGNAL_MIN_C = 'polymarket-dashboard.backtest15mSignalMinC';
 const STORAGE_BACKTEST_15M_SIGNAL_MAX_C = 'polymarket-dashboard.backtest15mSignalMaxC';
 const STORAGE_BACKTEST_15M_SL_C = 'polymarket-dashboard.backtest15mSlC';
 const STORAGE_BACKTEST_15M_MAX_STAKE_EUR = 'polymarket-dashboard.backtest15mMaxStakeEur';
 const STORAGE_BACKTEST_15M_WINDOW_DAYS = 'polymarket-dashboard.backtest15mWindowDays';
+const STORAGE_BACKTEST_15M_REINVEST = 'polymarket-dashboard.backtest15mReinvestMaxStake';
+
+/**
+ * Perte comptée à chaque SL dans le PnL agrégé : fraction du stake (aligné exécution bot / scripts `recalc`).
+ * Le **seuil** de déclenchement (`backtestSlC`) et la détection sur l’historique ne changent pas — seul le montant
+ * de perte au bilan utilise ce pourcentage (défaut 25 %). Surcharge : `VITE_BACKTEST_SL_FIXED_LOSS_FRAC`.
+ */
+const BACKTEST_SL_FIXED_LOSS_FRAC = (() => {
+  const v = Number(import.meta.env.VITE_BACKTEST_SL_FIXED_LOSS_FRAC);
+  if (Number.isFinite(v) && v > 0 && v <= 1) return v;
+  return 0.25;
+})();
 
 /** Fenêtres historique backtest 15m (jours calendaires × 24 h). */
 const BACKTEST_WINDOW_DAYS_OPTIONS = [3, 7, 30];
@@ -50,27 +59,8 @@ function normalizeBacktestWindowDays(raw) {
   const n = Number(raw);
   return BACKTEST_WINDOW_DAYS_OPTIONS.includes(n) ? n : 3;
 }
-/** Grille SL dans les tableaux d’analyse 15m (70¢ → 60¢, pas 5¢). */
-const SL_ANALYSIS_THRESHOLDS_C = [70, 65, 60];
-const OPT_SIGNAL_BANDS_C = [
-  [90, 91],
-  [94, 95],
-  [95, 96],
-  [96, 97],
-  [97, 98],
-];
-const OPT_SL_C = [68, 70, 72, 75, 78];
-const OPT_STAKE_EUR = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
-const SL_ANALYSIS_STAKE_USD = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
-
-function readAutoPlaceFromStorage() {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(STORAGE_KEY_AUTOTRADE) === '1';
-  } catch {
-    return false;
-  }
-}
+/** Grille SL dans les tableaux d’analyse 15m (60¢ → 45¢, pas 5¢). */
+const SL_ANALYSIS_THRESHOLDS_C = [60, 58, 55, 50, 45];
 
 function readBacktest15mDebugFromStorage() {
   if (typeof window === 'undefined') return false;
@@ -90,6 +80,58 @@ function readNumberFromStorage(key, fallback) {
     return Number.isFinite(n) ? n : fallback;
   } catch {
     return fallback;
+  }
+}
+
+/** Réinvestissement plafonné (défaut : oui — aligné stratégie « min(capital, mise max) »). */
+function readBacktestReinvestFromStorage() {
+  if (typeof window === 'undefined') return true;
+  try {
+    const v = window.localStorage.getItem(STORAGE_BACKTEST_15M_REINVEST);
+    if (v == null || v === '') return true;
+    return v === '1' || v === 'true';
+  } catch {
+    return true;
+  }
+}
+
+/** Lien direct ex. `/?windowDays=30` pour ouvrir le backtest sur 3 / 7 / 30 jours sans cliquer. */
+function readWindowDaysFromUrl() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = new URLSearchParams(window.location.search).get('windowDays');
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return BACKTEST_WINDOW_DAYS_OPTIONS.includes(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ex. `?signalMin=77&signalMax=78&sl=58` pour aligner l’UI sans cliquer (recharge les données si pas de cache figé). */
+function readBacktestSignalParamsFromUrl() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const min = sp.get('signalMin');
+    const max = sp.get('signalMax');
+    const sl = sp.get('sl') ?? sp.get('backtestSl');
+    const out = {};
+    if (min != null && min !== '') {
+      const n = Number(min);
+      if (Number.isFinite(n) && n >= 50 && n <= 99) out.signalMinC = Math.round(n);
+    }
+    if (max != null && max !== '') {
+      const n = Number(max);
+      if (Number.isFinite(n) && n >= 50 && n <= 99) out.signalMaxC = Math.round(n);
+    }
+    if (sl != null && sl !== '') {
+      const n = Number(sl);
+      if (Number.isFinite(n) && n >= 50 && n <= 95) out.backtestSlC = Math.round(n);
+    }
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
   }
 }
 
@@ -134,83 +176,8 @@ function signalBucketLabelFromPrice(priceP) {
   return `${bucketPct.toFixed(1)}%`;
 }
 
-function runFixedStakeGridSearch(rows, initialBalance, options = {}) {
-  const useReinvest = options.useReinvest === true;
-  const baseRows = (Array.isArray(rows) ? rows : [])
-    .filter(
-      (r) =>
-        r.botWouldTake != null &&
-        r.botEntryPrice != null &&
-        r.botMinObservedAfterEntryP != null &&
-        (r.winner === 'Up' || r.winner === 'Down') &&
-        r.endDate
-    )
-    .sort((a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime());
-
-  const out = [];
-  for (const [minC, maxC] of OPT_SIGNAL_BANDS_C) {
-    for (const slC of OPT_SL_C) {
-      for (const stakeBase of OPT_STAKE_EUR) {
-          const startCapital = initialBalance > 0 ? initialBalance : 0;
-          let capital = startCapital;
-        let peak = capital;
-        let maxDd = 0;
-        let trades = 0;
-        let winsNet = 0;
-        let winsResolution = 0;
-        let slHits = 0;
-          for (const r of baseRows) {
-          const entry = Number(r.botEntryPrice);
-          const minAfter = Number(r.botMinObservedAfterEntryP);
-          if (!(entry > 0 && entry < 1 && minAfter > 0 && minAfter < 1)) continue;
-          const entryC = entry * 100;
-          if (entryC < minC || entryC > maxC) continue;
-          const slP = slC / 100;
-          const slTouched = minAfter <= slP;
-          const winResolution = r.winner === r.botWouldTake;
-            const stakeAmount = useReinvest
-              ? Math.max(0, Math.min(capital, stakeBase * (capital / Math.max(1, startCapital))))
-              : Math.max(0, Math.min(stakeBase, capital));
-            if (!(stakeAmount > 0)) break;
-          let delta = 0;
-          if (slTouched) {
-              delta = stakeAmount * (slP / entry - 1);
-            slHits += 1;
-          } else if (winResolution) {
-              delta = stakeAmount * (1 / entry - 1);
-          } else {
-              delta = -stakeAmount;
-          }
-          trades += 1;
-          if (delta > 0) winsNet += 1;
-          if (winResolution) winsResolution += 1;
-          capital += delta;
-          if (capital > peak) peak = capital;
-          const dd = peak > 0 ? (peak - capital) / peak : 0;
-          if (dd > maxDd) maxDd = dd;
-        }
-        if (trades === 0) continue;
-        out.push({
-          signalBand: `${minC}-${maxC}`,
-          slC,
-            stake: stakeBase,
-            reinvest: useReinvest,
-          trades,
-          pnl: capital - initialBalance,
-          finalCapital: capital,
-          winRateNetPct: (winsNet / trades) * 100,
-          winRateResolutionPct: (winsResolution / trades) * 100,
-          slHitPct: (slHits / trades) * 100,
-          maxDrawdownPct: maxDd * 100,
-        });
-      }
-    }
-  }
-  return out.sort((a, b) => b.pnl - a.pnl);
-}
-
 export function BitcoinUpDownStrategy() {
-  const { address, signer, isPolygon } = useWallet();
+  const static15mJsonUrl = (import.meta.env.VITE_BACKTEST_15M_STATIC_JSON || '').trim();
   const resultMode = '15m';
   const { signals, live15mMeta } = useBitcoinUpDownSignals('15m');
 
@@ -224,20 +191,22 @@ export function BitcoinUpDownStrategy() {
   const { data: botStatusData15m } = useBotStatus(DEFAULT_BOT_STATUS_URL_15M);
   const liquidityStats = botStatusData?.liquidityStats ?? null;
 
-  const [backtestWindowDays, setBacktestWindowDays] = useState(() =>
-    normalizeBacktestWindowDays(readNumberFromStorage(STORAGE_BACKTEST_15M_WINDOW_DAYS, 3))
-  );
+  const [backtestWindowDays, setBacktestWindowDays] = useState(() => {
+    const fromUrl = readWindowDaysFromUrl();
+    if (fromUrl != null) return fromUrl;
+    return normalizeBacktestWindowDays(readNumberFromStorage(STORAGE_BACKTEST_15M_WINDOW_DAYS, 3));
+  });
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
-  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 90));
-  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 91));
+  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 77));
+  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 78));
   const [backtestSlC, setBacktestSlC] = useState(() =>
     readNumberFromStorage(STORAGE_BACKTEST_15M_SL_C, Math.round(BACKTEST_STOP_LOSS_TRIGGER_PRICE_P * 100))
   );
-  const backtestReinvest = true;
   const [backtestMaxStakeEur, setBacktestMaxStakeEur] = useState(() =>
-    readNumberFromStorage(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, 0)
+    readNumberFromStorage(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, 500)
   );
+  const [backtestReinvestMaxStake, setBacktestReinvestMaxStake] = useState(readBacktestReinvestFromStorage);
   const resolvedWindowHours = backtestWindowDays * 24;
   const resolvedDaysCount = backtestWindowDays;
   const {
@@ -256,6 +225,18 @@ export function BitcoinUpDownStrategy() {
     },
   });
 
+  /** Après le 1er paint : `?windowDays=` / `?signalMin=` etc. doivent primer sur le localStorage. */
+  useLayoutEffect(() => {
+    const fromUrl = readWindowDaysFromUrl();
+    if (fromUrl != null) {
+      setBacktestWindowDays(fromUrl);
+    }
+    const sig = readBacktestSignalParamsFromUrl();
+    if (sig?.signalMinC != null) setSignalMinC(sig.signalMinC);
+    if (sig?.signalMaxC != null) setSignalMaxC(sig.signalMaxC);
+    if (sig?.backtestSlC != null) setBacktestSlC(sig.backtestSlC);
+  }, []);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, String(signalMinC));
@@ -263,10 +244,11 @@ export function BitcoinUpDownStrategy() {
       window.localStorage.setItem(STORAGE_BACKTEST_15M_SL_C, String(backtestSlC));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, String(backtestMaxStakeEur));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_WINDOW_DAYS, String(backtestWindowDays));
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_REINVEST, backtestReinvestMaxStake ? '1' : '0');
     } catch {
       /* ignore */
     }
-  }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur, backtestWindowDays]);
+  }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur, backtestWindowDays, backtestReinvestMaxStake]);
 
   /** Grille complète : un créneau 15 min par ligne (placeholders pour les trous). */
   const resolved15mDisplayRows = useMemo(
@@ -286,29 +268,6 @@ export function BitcoinUpDownStrategy() {
     });
   };
 
-  const decisionReasonCounts = useMemo(() => {
-    const stats =
-      resultMode === '15m' && DEFAULT_BOT_STATUS_URL_15M
-        ? botStatusData15m?.signalDecisionLatencyStats
-        : botStatusData?.signalDecisionLatencyStats;
-    return stats?.reasonCounts ?? null;
-  }, [resultMode, botStatusData, botStatusData15m]);
-
-  const decisionBarPercents = useMemo(() => {
-    const rc = decisionReasonCounts;
-    if (!rc) return { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, hasData: false };
-    const total =
-      (rc.no_signal ?? 0) + (rc.liquidity_ok ?? 0) + (rc.liquidity_null ?? 0) + (rc.other ?? 0);
-    if (total <= 0) return { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, hasData: false };
-    const pct = (n) => Math.round(((n ?? 0) / total) * 1000) / 10;
-    return {
-      no_signal: pct(rc.no_signal),
-      liquidity_ok: pct(rc.liquidity_ok),
-      liquidity_null: pct(rc.liquidity_null),
-      hasData: true,
-    };
-  }, [decisionReasonCounts]);
-
   const liveLastStopLoss = useMemo(() => {
     const lo = botStatusData15m?.lastOrder;
     if (!lo || lo.stopLossExit !== true) return null;
@@ -322,29 +281,7 @@ export function BitcoinUpDownStrategy() {
     };
   }, [botStatusData15m]);
 
-  const [orderSizeUsd] = useState(10);
-  const [useMarketOrder] = useState(true);
-  const [autoPlaceEnabled, setAutoPlaceEnabled] = useState(() => readAutoPlaceFromStorage());
-
-  const toggleAutoPlaceEnabled = () => {
-    setAutoPlaceEnabled((v) => {
-      const next = !v;
-      try {
-        window.localStorage.setItem(STORAGE_KEY_AUTOTRADE, next ? '1' : '0');
-      } catch {
-        /* localStorage indisponible */
-      }
-      return next;
-    });
-  };
-  const [, setPlacedOrderKeys] = useState(() => new Set());
-  const placedOrderKeysRef = useRef(new Set());
-  const [, setPlacingFor] = useState(null);
-  const [, setPlaceResult] = useState(null);
-  const autoPlaceInProgress = useRef(false);
   const [initialBalance, setInitialBalance] = useState(20);
-  const [gridUseReinvest, setGridUseReinvest] = useState(false);
-  const [gridDays, setGridDays] = useState(3);
   const [showLiquiditySuggestion, setShowLiquiditySuggestion] = useState(() => {
     if (typeof window === 'undefined') return true;
     try {
@@ -370,20 +307,64 @@ export function BitcoinUpDownStrategy() {
   };
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 90–91 %). */
+    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 77–78 %). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
+    /** Ordre **chronologique** (fin de créneau croissante) : première mise = marché le plus **ancien**, dernière = le plus **récent**.
+     *  Le tableau 15m affiche le **récent en haut** : la lecture haut→bas est l’inverse du temps ; le PnL suit le temps réel (bas→haut du tableau). */
     const sortedSimul = [...withSimul].sort(
       (a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
     );
+
+    const stakePerTradeEur =
+      Number.isFinite(backtestMaxStakeEur) && backtestMaxStakeEur > 0
+        ? Math.max(0.01, backtestMaxStakeEur)
+        : 10;
+    const liveStopLossConditionId =
+      typeof liveLastStopLoss?.conditionId === 'string' ? liveLastStopLoss.conditionId.toLowerCase() : null;
+
+    if (backtestReinvestMaxStake) {
+      const sim = simulateReinvestMaxStake(sortedSimul, {
+        initialBalance,
+        maxStakeEur: stakePerTradeEur,
+        backtestSlC,
+        includeFees,
+        liveStopLossConditionId,
+        slFixedLossFractionOfStake: BACKTEST_SL_FIXED_LOSS_FRAC,
+      });
+      const n = sim.trades;
+      return {
+        netPnlMap: new Map(),
+        capital: sim.capital,
+        feesPaid: sim.feesPaid,
+        maxDrawdown: sim.maxDrawdown,
+        stakePerTradeEur,
+        reinvestMaxStake: true,
+        tradeCountForMetrics: n,
+        withSimul,
+        withSignal,
+        wonNet: sim.wonNet,
+        won: withSimul.filter((r) => r.botWon === true).length,
+        stopLossExits: sim.slCount,
+        resolutionLossesNoSl: sim.resolutionLossNoSl,
+        expectancyPerTrade: n > 0 ? sim.pnl / n : null,
+        avgWinPerTrade: null,
+        avgLossPerTrade: null,
+      };
+    }
+
+    /**
+     * Mise **fixe** par créneau pour les agrégats (win rate net, gagnés net, capital final, frais).
+     * L’ancien mode « réinvestir 100 % du capital » à chaque trade s’arrêtait à la **première** perte résolution
+     * (capital ≈ 0), alors que le dénominateur comptait **tous** les créneaux — d’où un win rate net absurde.
+     */
     const estimateCryptoTakerFeeRate = (p) => {
       if (!includeFees) return 0;
       if (p == null) return 0;
       const x = p * (1 - p);
       return 0.25 * Math.pow(x, 2);
     };
-    const lossFracFallback = getBacktestMaxLossFractionOfStake();
     let capital = initialBalance > 0 ? initialBalance : 0;
     let peak = capital;
     let maxDrawdown = 0;
@@ -397,44 +378,23 @@ export function BitcoinUpDownStrategy() {
     let lossesCount = 0;
     const netPnlMap = new Map();
     for (const r of sortedSimul) {
-      if (capital <= 0) break;
       const p = r.botEntryPrice != null ? Number(r.botEntryPrice) : null;
       const feeRate = estimateCryptoTakerFeeRate(p);
-      let desiredStake = backtestReinvest ? capital : Math.max(0, initialBalance);
-      if (Number.isFinite(backtestMaxStakeEur) && backtestMaxStakeEur > 0) {
-        desiredStake = Math.min(desiredStake, backtestMaxStakeEur);
-      }
-      const budgetForTrade = Math.max(0, Math.min(capital, desiredStake));
-      if (!(budgetForTrade > 0)) break;
+      const budgetForTrade = stakePerTradeEur;
       const stake = feeRate > 0 ? budgetForTrade / (1 + feeRate) : budgetForTrade;
       const feeUsd = stake * feeRate;
       feesPaid += feeUsd;
       let delta = 0;
-      if (r.botStopLossExit === true) {
-        /**
-         * PnL SL backtest:
-         * - priorité au prix observé au déclenchement (proxy bid historique),
-         * - sinon seuil SL configuré dans l'UI,
-         * - puis repli worst/legacy.
-         */
-        const observed = r.botStopLossObservedPriceP != null ? Number(r.botStopLossObservedPriceP) : null;
-        const triggerP = Math.max(0.01, Math.min(0.99, Number(backtestSlC) / 100));
-        const wp = r.botStopLossExitPriceP != null ? Number(r.botStopLossExitPriceP) : null;
-        // Proxy d'exécution SL robuste: ne jamais dégrader sous le seuil configuré à cause d'un point historique sparse.
-        const slExecP =
-          Number.isFinite(observed) && observed > 0 ? Math.max(triggerP, observed) : triggerP;
-        if (Number.isFinite(p) && p > 0 && Number.isFinite(slExecP) && slExecP >= 0) {
-          delta = stake * (slExecP / p - 1) - feeUsd;
-        } else if (Number.isFinite(p) && p > 0 && Number.isFinite(wp) && wp >= 0) {
-          delta = stake * (wp / p - 1) - feeUsd;
-        } else {
-          delta = -stake * lossFracFallback - feeUsd;
-        }
+      const rowConditionId = typeof r.conditionId === 'string' ? r.conditionId.toLowerCase() : null;
+      const isStrictStopLoss =
+        r.botStopLossExit === true ||
+        (liveStopLossConditionId != null && rowConditionId != null && rowConditionId === liveStopLossConditionId);
+      if (isStrictStopLoss) {
+        delta = -stake * BACKTEST_SL_FIXED_LOSS_FRAC - feeUsd;
       } else if (p != null && r.botWon === true) {
         const odds = p > 0 ? 1 / p - 1 : 0;
         delta = stake * odds - feeUsd;
       } else if (r.botWon === false) {
-        /** Perte à la résolution (mauvais côté) : mise binaire perdue en intégralité (hors frais modèle). */
         delta = -stake - feeUsd;
         resolutionLossesNoSl += 1;
       }
@@ -458,20 +418,39 @@ export function BitcoinUpDownStrategy() {
       capital,
       feesPaid,
       maxDrawdown,
+      stakePerTradeEur,
+      reinvestMaxStake: false,
+      tradeCountForMetrics: sortedSimul.length,
       withSimul,
       withSignal,
       wonNet,
       won: withSimul.filter((r) => r.botWon === true).length,
-      stopLossExits: withSimul.filter((r) => r.botStopLossExit === true).length,
+      stopLossExits: withSimul.filter((r) => {
+        const rowConditionId = typeof r.conditionId === 'string' ? r.conditionId.toLowerCase() : null;
+        return (
+          r.botStopLossExit === true ||
+          (liveStopLossConditionId != null &&
+            rowConditionId != null &&
+            rowConditionId === liveStopLossConditionId)
+        );
+      }).length,
       resolutionLossesNoSl,
       expectancyPerTrade: withSimul.length > 0 ? sumDelta / withSimul.length : null,
       avgWinPerTrade: winsCount > 0 ? sumWinDelta / winsCount : null,
       avgLossPerTrade: lossesCount > 0 ? sumLossDelta / lossesCount : null,
     };
-  }, [resolved15m, initialBalance, includeFees, backtestSlC, backtestMaxStakeEur]);
+  }, [
+    resolved15m,
+    initialBalance,
+    includeFees,
+    backtestSlC,
+    backtestMaxStakeEur,
+    backtestReinvestMaxStake,
+    liveLastStopLoss,
+  ]);
 
   const slAnalysisSweep = useMemo(() => {
-    // Analyse : pour des entrées dans la bande signal (~90–91¢ par défaut), on regarde le plus bas prix observé après entrée.
+    // Analyse : pour des entrées dans la bande signal (~77–78¢ par défaut), on regarde le plus bas prix observé après entrée.
     // On répond à la question « quel % touche un SL à X¢ ? » via un proxy conservateur :
     // si minObservedAfterEntryP <= X, alors SL X¢ touché.
     const rows = Array.isArray(resolved15m) ? resolved15m : [];
@@ -488,95 +467,6 @@ export function BitcoinUpDownStrategy() {
     });
     return { baseN: withEntry.length, sweep };
   }, [resolved15m]);
-
-  const stopLossTradeoff = useMemo(() => {
-    const rows = Array.isArray(resolved15m) ? resolved15m : [];
-    const base = rows.filter(
-      (r) =>
-        r.botWouldTake != null &&
-        r.botEntryPrice != null &&
-        r.botMinObservedAfterEntryP != null &&
-        (r.winner === 'Up' || r.winner === 'Down')
-    );
-    if (base.length === 0) return { baseN: 0, minStats: null, sweep: [] };
-
-    const minVals = base
-      .map((r) => Number(r.botMinObservedAfterEntryP))
-      .filter((x) => Number.isFinite(x) && x > 0 && x < 1)
-      .sort((a, b) => a - b);
-    const q = (pct) => {
-      if (minVals.length === 0) return null;
-      const idx = Math.min(minVals.length - 1, Math.max(0, Math.round((pct / 100) * (minVals.length - 1))));
-      return minVals[idx];
-    };
-    const minStats = {
-      minP: minVals.length ? minVals[0] : null,
-      medianP: q(50),
-      p95P: q(95),
-    };
-
-    const lossFrac = getBacktestMaxLossFractionOfStake();
-    const estimateFee = (stakeUsd, p) => {
-      if (!includeFees) return 0;
-      if (!(stakeUsd > 0) || p == null) return 0;
-      const x = p * (1 - p);
-      return stakeUsd * 0.25 * Math.pow(x, 2);
-    };
-    const thresholdsC = SL_ANALYSIS_THRESHOLDS_C;
-    const sweep = thresholdsC.map((c) => {
-      const slP = c / 100;
-      let hit = 0;
-      let sumReturnIfHit = 0;
-      let nHit = 0;
-      let sumReturnWithSl = 0;
-
-      for (const r of base) {
-        const entryP = Number(r.botEntryPrice);
-        const minAfter = Number(r.botMinObservedAfterEntryP);
-        if (!(entryP > 0 && entryP < 1) || !(minAfter > 0 && minAfter < 1)) continue;
-
-        const stake = 1; // returns normalisées par 1 USDC
-        const feeUsd = estimateFee(stake, entryP);
-        const hitThis = minAfter <= slP;
-        if (hitThis) {
-          hit += 1;
-          nHit += 1;
-          // Return si on sort pile à SL (proxy, sans slippage): stake*(sl/entry - 1) - fee
-          const ret = stake * (slP / entryP - 1) - feeUsd;
-          sumReturnIfHit += ret;
-          sumReturnWithSl += ret;
-        } else {
-          // Sinon on hold jusqu’à résolution: gain = (1/entry - 1) si win, sinon -lossFrac
-          const win = r.winner === r.botWouldTake;
-          const ret = win ? stake * (1 / entryP - 1) - feeUsd : -stake * lossFrac - feeUsd;
-          sumReturnWithSl += ret;
-        }
-      }
-
-      const baseN = base.length;
-      const pctHit = baseN > 0 ? Math.round((hit / baseN) * 1000) / 10 : 0;
-      const avgReturnIfHit = nHit > 0 ? sumReturnIfHit / nHit : null;
-      const avgReturnWithSl = baseN > 0 ? sumReturnWithSl / baseN : null;
-      const projectionByStake = SL_ANALYSIS_STAKE_USD.map((stakeUsd) => ({
-        stakeUsd,
-        avgLossIfHitUsd: avgReturnIfHit != null ? avgReturnIfHit * stakeUsd : null,
-        avgPnlWithSlUsd: avgReturnWithSl != null ? avgReturnWithSl * stakeUsd : null,
-      }));
-      return { c, pctHit, hit, baseN, avgReturnIfHit, avgReturnWithSl, projectionByStake };
-    });
-
-    return { baseN: base.length, minStats, sweep };
-  }, [resolved15m, includeFees]);
-
-  const setupGridTop10 = useMemo(() => {
-    const days = Math.max(3, Math.min(30, Number(gridDays) || 3));
-    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-    const rows = (Array.isArray(resolved15m) ? resolved15m : []).filter((r) => {
-      const t = r?.endDate ? new Date(r.endDate).getTime() : NaN;
-      return Number.isFinite(t) && t >= cutoffMs;
-    });
-    return runFixedStakeGridSearch(rows, initialBalance, { useReinvest: gridUseReinvest }).slice(0, 10);
-  }, [resolved15m, initialBalance, gridUseReinvest, gridDays]);
 
   const activeBacktest = backtestResult15m;
 
@@ -599,104 +489,22 @@ export function BitcoinUpDownStrategy() {
     return { avgMinutes, pctFilled24, withTrade24, total24, withEntryCount: withEntry.length };
   }, [resolved15m]);
 
-  const getSignalKey = (signal) => signal.market?.conditionId ?? signal.eventSlug ?? '';
-
-  /** Règle : pas de trade si l’événement se termine dans moins d’une minute (ex. fin 18h → plus de trade à partir de 17h59). */
-  const ONE_MINUTE_MS = 60 * 1000;
-  const isInLastMinute = (signal) => {
-    const raw = signal?.endDate;
-    if (raw == null || raw === '') return false;
-    let endMs;
-    if (typeof raw === 'number') {
-      endMs = raw > 1e12 ? raw : raw * 1000;
-    } else {
-      endMs = new Date(raw).getTime();
-    }
-    if (Number.isNaN(endMs)) return false;
-    return Date.now() >= endMs - ONE_MINUTE_MS;
-  };
-
-  const placeOrderForSignal = async (signal, options = {}) => {
-    if (!signer || !signal.tokenIdToBuy) return { error: 'Pas de signer ou token.' };
-    if (isInLastMinute(signal)) {
-      return { error: "Trop tard : l'événement se termine dans moins d'une minute." };
-    }
-    let sizeUsd = Number(orderSizeUsd) || 10;
-    if (options.capUsd != null && options.capUsd > 0 && sizeUsd > options.capUsd) {
-      sizeUsd = options.capUsd;
-    }
-    const raw = signal.takeSide === 'Down' ? signal.priceDown : signal.priceUp;
-    /** Plafond signal (ex. 91¢) comme le backtest / carnet, même si le best ask live dépasse. */
-    const n = Number(raw);
-    const price = Number.isFinite(n)
-      ? Math.min(Math.max(n, ORDER_BOOK_SIGNAL_MIN_P), ORDER_BOOK_SIGNAL_MAX_P)
-      : ORDER_BOOK_SIGNAL_MAX_P;
-    return placePolymarketOrder(signer, {
-      tokenIdToBuy: signal.tokenIdToBuy,
-      price,
-      sizeUsd,
-      useMarketOrder,
-    });
-  };
-
-  const getCapUsdForSignal = (signal) => {
-    if (!showLiquiditySuggestion || liquidityAtTargetUsd == null || liquidityAtTargetUsd <= 0) return null;
-    const primary = signals?.[0] ?? (live15mMeta?.hiddenByTiming ? live15mMeta.signalsIfTimingIgnored?.[0] : null);
-    if (primary && getSignalKey(signal) === getSignalKey(primary)) return liquidityAtTargetUsd;
-    return null;
-  };
-
-  const _handlePlaceOrder = async (signal) => {
-    const key = getSignalKey(signal);
-    setPlacingFor(key);
-    setPlaceResult(null);
-    if (isInLastMinute(signal)) {
-      setPlaceResult({ key, error: "Trop tard : l'événement se termine dans moins d'une minute." });
-      setPlacingFor(null);
-      return;
-    }
-    const result = await placeOrderForSignal(signal, { capUsd: getCapUsdForSignal(signal) });
-    setPlaceResult({ key, ...result });
-    setPlacingFor(null);
-  };
-
-  // Le bot place l'ordre à ta place dès qu'un signal dans la bande (ex. 90–91 %) apparaît
-  useEffect(() => {
-    if (!autoPlaceEnabled || !signer || !address || !isPolygon || signals.length === 0 || autoPlaceInProgress.current) return;
-    const toPlace = signals.filter(
-      (s) => s.tokenIdToBuy && !placedOrderKeysRef.current.has(getSignalKey(s)) && !isInLastMinute(s)
-    );
-    if (toPlace.length === 0) return;
-    autoPlaceInProgress.current = true;
-    (async () => {
-      for (const signal of toPlace) {
-        if (isInLastMinute(signal)) continue;
-        const key = getSignalKey(signal);
-        placedOrderKeysRef.current.add(key);
-        setPlacedOrderKeys((prev) => new Set([...prev, key]));
-        setPlacingFor(key);
-        const result = await placeOrderForSignal(signal, { capUsd: getCapUsdForSignal(signal) });
-        setPlaceResult({ key, ...result });
-        setPlacingFor(null);
-        await new Promise((r) => setTimeout(r, 350));
-      }
-      autoPlaceInProgress.current = false;
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- isInLastMinute/placeOrderForSignal stables
-  }, [autoPlaceEnabled, signer, address, isPolygon, signals, orderSizeUsd, useMarketOrder]);
-
   const bt = activeBacktest;
+  const metricN =
+    typeof bt.tradeCountForMetrics === 'number' && bt.tradeCountForMetrics >= 0
+      ? bt.tradeCountForMetrics
+      : bt.withSimul.length;
   const winRateResolutionPct =
     bt.withSimul.length > 0 ? Math.round((bt.won / bt.withSimul.length) * 1000) / 10 : null;
   const winRateNetPct =
-    bt.withSimul.length > 0 ? Math.round((bt.wonNet / bt.withSimul.length) * 1000) / 10 : null;
+    metricN > 0 ? Math.round((bt.wonNet / metricN) * 1000) / 10 : null;
   const totalNetPnl = initialBalance > 0 ? bt.capital - initialBalance : null;
   const pnlPct =
     initialBalance > 0 && totalNetPnl != null
       ? ((totalNetPnl / initialBalance) * 100).toFixed(1)
       : null;
   const slHitRatePct =
-    bt.withSimul.length > 0 ? Math.round((bt.stopLossExits / bt.withSimul.length) * 1000) / 10 : null;
+    metricN > 0 ? Math.round((bt.stopLossExits / metricN) * 1000) / 10 : null;
 
   return (
     <div className="strat-page">
@@ -724,143 +532,18 @@ export function BitcoinUpDownStrategy() {
                   Créneau 15 min actuel <span className="strat-hero-link-arr">→</span>
                 </a>
               </div>
-              <ul className="strat-rule-list">
-                <li>
-                  <span className="strat-rule-chevron" aria-hidden>
-                    &gt;
-                  </span>
-                  Un seul pari par créneau (bougie 1h BTC/USDT Binance)
-                </li>
-                <li>
-                  <span className="strat-rule-chevron" aria-hidden>
-                    &gt;
-                  </span>
-                  Up ou Down selon la tendance, support/résistance ou cotes
-                </li>
-                <li>
-                  <span className="strat-rule-chevron" aria-hidden>
-                    &gt;
-                  </span>
-                  Mise 80–100 % du solde, réinvestissement total à chaque créneau
-                </li>
-                <li>
-                  <span className="strat-rule-chevron" aria-hidden>
-                    &gt;
-                  </span>
-                  Résolution → capital + gains réinvestis sur le créneau suivant
-                </li>
-                <li>
-                  <span className="strat-rule-chevron" aria-hidden>
-                    &gt;
-                  </span>
-                  Signaux {SIGNAL_BAND_PCT_LABEL} : marge plus faible qu’à des entrées plus hautes (ex. achat ~90¢ → ~10¢ brut si résolu 1 $)
-                </li>
-              </ul>
-              <div className="strat-reason-bars">
-                <p className="strat-reason-bars__hint">
-                  Répartition des décisions bot (24 h) (15 min)
-                  {!decisionBarPercents.hasData && ' — connecte le statut bot pour afficher les barres.'}
-                </p>
-                {[
-                  { key: 'no_signal', label: 'no_signal' },
-                  { key: 'liquidity_ok', label: 'liq_ok' },
-                  { key: 'liquidity_null', label: 'liq_null' },
-                ].map(({ key, label }) => (
-                  <div key={key} className="strat-reason-row">
-                    <span className="strat-reason-row__label">{label}</span>
-                    <div className="strat-reason-row__track">
-                      <div
-                        className="strat-reason-row__fill"
-                        style={{ width: `${Math.min(100, decisionBarPercents[key] ?? 0)}%` }}
-                      />
-                    </div>
-                    <span className="strat-reason-row__pct">
-                      {decisionBarPercents.hasData ? `${(decisionBarPercents[key] ?? 0).toFixed(1)}%` : '—'}
-                    </span>
-                  </div>
-                ))}
-              </div>
             </div>
 
             <div className="strat-hero-right">
-              <div className="strat-autoplace-panel">
-                <div className="strat-autoplace-panel__row">
-                  <span className="strat-autoplace-panel__label" id="autoplace-label">
-                    Ordres automatiques
-                  </span>
-                  <button
-                    type="button"
-                    onClick={toggleAutoPlaceEnabled}
-                    className={`btn btn--xs ${autoPlaceEnabled ? 'btn--toggle-on' : 'btn--toggle-off'}`}
-                    aria-pressed={autoPlaceEnabled}
-                    aria-labelledby="autoplace-label"
-                    title={
-                      autoPlaceEnabled
-                        ? 'Les ordres sont placés automatiquement au signal (tant que le wallet est connecté).'
-                        : 'Aucun ordre automatique : cliquez pour activer.'
-                    }
-                  >
-                    {autoPlaceEnabled ? 'ON — trade auto' : 'OFF — manuel'}
-                  </button>
-                </div>
-                <p className="strat-autoplace-panel__hint">
-                  <strong>ON</strong> = un ordre part tout seul dès qu’un signal {SIGNAL_BAND_PCT_LABEL} apparaît (
-                  15 min). <strong>OFF</strong> = jamais d’ordre auto (tu peux trader à la main). Wallet Polygon requis pour
-                  l’auto.
-                </p>
-                {live15mMeta?.hiddenByTiming && live15mMeta.signalsIfTimingIgnored?.[0] && (
-                  <p
-                    className="strat-autoplace-panel__hint"
-                    style={{
-                      borderLeft: '3px solid var(--amber, #f5a623)',
-                      paddingLeft: 10,
-                      marginTop: 10,
-                      color: 'var(--text-1)',
-                    }}
-                  >
-                    <strong>Prix dans {SIGNAL_BAND_PCT_LABEL}</strong> (côté{' '}
-                    {live15mMeta.signalsIfTimingIgnored[0].takeSide}) mais{' '}
-                    <strong>fenêtre d’entrée interdite</strong> (grille ET : 3 premières / 4 dernières min du quart
-                    d’heure). Le dashboard et le bot <strong>ne montrent pas</strong> de signal dans ce cas — comme un
-                    trade refusé par timing. Asks live : Up{' '}
-                    {live15mMeta.liveAskUp != null ? `${(live15mMeta.liveAskUp * 100).toFixed(1)}¢` : '—'}, Down{' '}
-                    {live15mMeta.liveAskDown != null ? `${(live15mMeta.liveAskDown * 100).toFixed(1)}¢` : '—'}.
-                  </p>
-                )}
-                {live15mMeta?.slugMismatch && (
-                  <p
-                    className="strat-autoplace-panel__hint strat-text-amber"
-                    style={{ marginTop: 10, lineHeight: 1.5 }}
-                  >
-                    <strong>Créneau 15m :</strong> l’event Gamma utilisé ne correspond pas au slug attendu du créneau
-                    UTC courant. Les prix peuvent être ceux <strong>d’un autre quart d’heure</strong>. Attendu :{' '}
-                    <code className="strat-code-inline">{live15mMeta.expectedEventSlug ?? '—'}</code> — reçu :{' '}
-                    <code className="strat-code-inline">{live15mMeta.resolvedEventSlug ?? '—'}</code>. Actualise la page
-                    après déploiement ; le hook force désormais GET <code className="strat-code-inline">/events/slug/…</code>{' '}
-                    sur le bon slug.
-                  </p>
-                )}
-                {live15mMeta?.livePriceSource &&
-                  live15mMeta.livePriceSource !== 'clob' && (
-                    <p
-                      className="strat-autoplace-panel__hint strat-text-amber"
-                      style={{ marginTop: 10, lineHeight: 1.5 }}
-                    >
-                      <strong>Source prix : Gamma (indicatif)</strong> — le carnet CLOB n’a pas renvoyé les deux best
-                      asks (réseau, CORS, proxy dev, etc.). Les pourcentages peuvent rester proches de 50/50 alors que
-                      Polymarket affiche les <strong>vrais prix d’achat</strong> (ex. 10¢ / 91¢). Compare avec l’URL
-                      officielle du même slug (
-                      <code className="strat-code-inline">{live15mMeta.expectedEventSlug ?? getCurrent15mEventSlug()}</code>
-                      ).
-                    </p>
-                  )}
-              </div>
-
               <h3 className="strat-balance-perf-heading">Solde &amp; performance</h3>
 
               <div className="strat-metric-card">
                 <p className="strat-metric-card__kicker">
                   Backtest · {resolvedDaysCount} derniers jours
+                </p>
+                <p className="strat-muted-tight" style={{ marginBottom: 8 }}>
+                  Calcul dans l’ordre chronologique (ancien → récent) ; la grille 15m liste le plus récent en haut, donc la première
+                  mise de la fenêtre correspond aux lignes du bas du tableau.
                 </p>
                 <div className="strat-metric-card__row3">
                   <div>
@@ -872,7 +555,7 @@ export function BitcoinUpDownStrategy() {
                   <div>
                     <span className="strat-metric-card__lbl">Sessions</span>
                     <span className="strat-metric-card__val">
-                      {bt.withSimul.length > 0 ? `${bt.wonNet} / ${bt.withSimul.length}` : '—'}
+                      {metricN > 0 ? `${bt.wonNet} / ${metricN}` : '—'}
                     </span>
                   </div>
                   <div>
@@ -883,17 +566,35 @@ export function BitcoinUpDownStrategy() {
                   </div>
                 </div>
                 <p className="strat-muted-tight" style={{ marginTop: 10 }}>
-                  Calcul : à chaque créneau simulé, la mise suit le mode <strong>compound jusqu’au cap</strong> (réinvestissement
-                  ON permanent, plafond <strong>{backtestMaxStakeEur > 0 ? `${backtestMaxStakeEur}€` : 'désactivé'}</strong>) ; frais
-                  taker déduits du budget avant sizing.
-                  Gain si résolution gagnante : <code>(1 / prix entrée − 1) × mise</code> (moins frais si activés). Perte si mauvais
-                  côté à la résolution : <strong>−mise</strong> (binaire). Si <strong>SL simulé</strong> : rendement{' '}
-                  <code>(prix observé au déclenchement / prix entrée − 1) × mise</code> (fallback sur seuil SL configuré).
+                  {bt.reinvestMaxStake ? (
+                    <>
+                      Agrégats : <strong>mise = min(capital, plafond)</strong> avec plafond{' '}
+                      <strong>{bt.stakePerTradeEur != null ? `${bt.stakePerTradeEur} €` : '—'}</strong> (réinvestissement) ; frais
+                      taker déduits du budget avant sizing. Gain / perte résolution comme la mise fixe ; chaque{' '}
+                      <strong>SL simulé</strong> compte une perte de <strong>{Math.round(BACKTEST_SL_FIXED_LOSS_FRAC * 100)} %</strong> du
+                      stake (+ frais), le seuil <strong>{backtestSlC}¢</strong> servant uniquement à savoir si le SL est déclenché
+                      dans l’historique.
+                    </>
+                  ) : (
+                    <>
+                      Agrégats (win rate net, gagnés net, PnL) : <strong>mise fixe {bt.stakePerTradeEur != null ? `${bt.stakePerTradeEur} €` : '—'}</strong> par créneau{' '}
+                      {backtestMaxStakeEur > 0 ? `(plafond « mise max »)` : `(défaut 10 € si mise max = 0)`} ; frais taker déduits du budget avant sizing.
+                      Gain si résolution gagnante : <code>(1 / prix entrée − 1) × mise</code> (moins frais si activés). Perte si mauvais
+                      côté à la résolution : <strong>−mise</strong> (binaire). Si <strong>SL simulé</strong> :{' '}
+                      <strong>−{Math.round(BACKTEST_SL_FIXED_LOSS_FRAC * 100)} %</strong> du stake (+ frais) — même logique que le
+                      bot en exécution (prix mid historique pour le déclenchement, pas pour le montant de perte au bilan).
+                    </>
+                  )}
                 </p>
                 <p className="strat-muted-tight">
                   Le <strong>win rate résolution</strong> (issue finale du marché) reste affiché dans le détail des lignes ; ici on
                   montre le <strong>win rate net</strong> (delta PnL positif).
                 </p>
+                {bt.reinvestMaxStake && metricN > 0 && metricN < bt.withSimul.length && (
+                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
+                    Simulation réinvest. arrêtée après <strong>{metricN}</strong> créneaux (capital insuffisant pour la mise suivante).
+                  </p>
+                )}
               </div>
 
               <div className="strat-metric-card">
@@ -950,6 +651,14 @@ export function BitcoinUpDownStrategy() {
               <div className="strat-hero-controls">
                 <button
                   type="button"
+                  onClick={() => setBacktestReinvestMaxStake((v) => !v)}
+                  className={`btn btn--xs ${backtestReinvestMaxStake ? 'btn--toggle-on' : 'btn--toggle-off'}`}
+                  title="ON : mise = min(capital, plafond). OFF : même montant à chaque créneau."
+                >
+                  {backtestReinvestMaxStake ? 'Réinvest ON' : 'Réinvest OFF'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIncludeFees((v) => !v)}
                   className={`btn btn--xs ${includeFees ? 'btn--toggle-on' : 'btn--toggle-off'}`}
                   title="Frais taker (modèle simplifié)"
@@ -968,7 +677,7 @@ export function BitcoinUpDownStrategy() {
 
               {resultMode === '15m' && slAnalysisSweep.baseN > 0 && (
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
-                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~90–91¢, proxy Data API/CLOB)</p>
+                  <p className="strat-metric-card__kicker">Analyse stop-loss (entrée ~77–78¢, proxy Data API/CLOB)</p>
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
                     Base : <strong>{slAnalysisSweep.baseN}</strong> entrées simulées avec “min après entrée” observé.
                     Le % ci-dessous = part des créneaux où le prix a touché au moins une fois le seuil.
@@ -1004,9 +713,19 @@ export function BitcoinUpDownStrategy() {
               {
                 <div className="strat-metric-card" style={{ marginTop: 14 }}>
                   <p className="strat-metric-card__kicker">Fenêtre signal backtest (15 min)</p>
+                  {static15mJsonUrl ? (
+                    <p className="strat-metric-card__sub strat-text-amber" style={{ marginTop: 6, lineHeight: 1.5 }}>
+                      <strong>Cache JSON actif</strong> ({static15mJsonUrl}) : le tableau utilise les lignes précalculées du fichier.
+                      Changer signal / SL ici ne refait pas la simu — retirez <code className="strat-code-inline">VITE_BACKTEST_15M_STATIC_JSON</code> du{' '}
+                      <code className="strat-code-inline">.env</code> pour recharger en live, ou régénérez le cache :{' '}
+                      <code className="strat-code-inline">
+                        BACKTEST_SIGNAL_MIN_C=77 BACKTEST_SIGNAL_MAX_C=78 BACKTEST_SL_C=60 npm run cache:15m
+                      </code>
+                    </p>
+                  ) : null}
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Modifie la bande d’entrée simulée (défaut 90–91¢, alignée bot) et le SL de simulation. Cela recharge les données et
-                    recalcule le tableau 15m.
+                    Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot) et le SL de simulation. Sans cache statique, cela
+                    recharge les données et recalcule le tableau 15m.
                   </p>
                   <div className="strat-hero-controls" style={{ marginTop: 10 }}>
                     <label className="strat-label-inline">
@@ -1071,13 +790,13 @@ export function BitcoinUpDownStrategy() {
                     <button
                       type="button"
                       onClick={() => {
-                        setSignalMinC(90);
-                        setSignalMaxC(91);
+                        setSignalMinC(77);
+                        setSignalMaxC(78);
                       }}
                       className="btn btn--xs btn--outline"
                       title="Revenir à 90–91¢ (aligné bot)"
                     >
-                      Reset 90–91¢
+                      Reset 77–78¢
                     </button>
                     <button
                       type="button"
@@ -1089,11 +808,11 @@ export function BitcoinUpDownStrategy() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBacktestMaxStakeEur(0)}
+                      onClick={() => setBacktestMaxStakeEur(500)}
                       className="btn btn--xs btn--outline"
-                      title="Retirer le plafond de mise"
+                      title="Plafond 500 € (aligné bot)"
                     >
-                      Reset mise max
+                      Reset 500 €
                     </button>
                     <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--xs btn--outline">
                       Recalculer
@@ -1101,164 +820,6 @@ export function BitcoinUpDownStrategy() {
                   </div>
                 </div>
               }
-
-              {stopLossTradeoff.baseN > 0 && (
-                <div className="strat-metric-card" style={{ marginTop: 14 }}>
-                  <p className="strat-metric-card__kicker">Trade-off stop-loss (proxy) — stats &amp; PnL estimé</p>
-                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Base : <strong>{stopLossTradeoff.baseN}</strong> entrées résolues. Stats sur le plus bas prix observé après entrée.
-                  </p>
-                  {stopLossTradeoff.minStats && (
-                    <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                      min :{' '}
-                      <strong>
-                        {stopLossTradeoff.minStats.minP != null ? `${(stopLossTradeoff.minStats.minP * 100).toFixed(2)}¢` : '—'}
-                      </strong>{' '}
-                      · médiane :{' '}
-                      <strong>
-                        {stopLossTradeoff.minStats.medianP != null ? `${(stopLossTradeoff.minStats.medianP * 100).toFixed(2)}¢` : '—'}
-                      </strong>{' '}
-                      · p95 :{' '}
-                      <strong>
-                        {stopLossTradeoff.minStats.p95P != null ? `${(stopLossTradeoff.minStats.p95P * 100).toFixed(2)}¢` : '—'}
-                      </strong>
-                    </p>
-                  )}
-                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
-                    <table className="strat-table">
-                      <thead>
-                        <tr>
-                          <th className="strat-th">SL (¢)</th>
-                          <th className="strat-th">% touché</th>
-                          <th className="strat-th">Perte moy. si touché (par 1$)</th>
-                          <th className="strat-th">PnL moy. si on applique SL (par 1$)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stopLossTradeoff.sweep.map((row, i) => (
-                          <tr key={row.c} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
-                            <td className="strat-td">{row.c}¢</td>
-                            <td className="strat-td strat-td--strong">{row.pctHit.toFixed(1)}%</td>
-                            <td className="strat-td">
-                              {row.avgReturnIfHit != null ? row.avgReturnIfHit.toFixed(3) : '—'}
-                            </td>
-                            <td className="strat-td">
-                              {row.avgReturnWithSl != null ? row.avgReturnWithSl.toFixed(3) : '—'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
-                    <table className="strat-table">
-                      <thead>
-                        <tr>
-                          <th className="strat-th">SL (¢)</th>
-                          {SL_ANALYSIS_STAKE_USD.map((s) => (
-                            <th key={`stake-${s}`} className="strat-th">
-                              ${s}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stopLossTradeoff.sweep.map((row, i) => (
-                          <tr key={`proj-${row.c}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
-                            <td className="strat-td">{row.c}¢</td>
-                            {row.projectionByStake.map((p) => (
-                              <td key={`sl-${row.c}-s-${p.stakeUsd}`} className="strat-td">
-                                {p.avgPnlWithSlUsd != null ? p.avgPnlWithSlUsd.toFixed(2) : '—'}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
-                    “Perte moy. si touché” = PnL moyen si la sortie se fait à SL (proxy, sans slippage). “PnL moy. avec SL” =
-                    si touché → sortie SL, sinon → hold jusqu’à résolution (win/lose), avec frais si activés. Le tableau
-                    en dessous projette ce PnL moyen pour des mises de $5 à $50 (pas de $5).
-                  </p>
-                </div>
-              )}
-
-              {setupGridTop10.length > 0 && (
-                <div className="strat-metric-card" style={{ marginTop: 14 }}>
-                  <p className="strat-metric-card__kicker">
-                    Top 10 setups ({gridDays}j, mise fixe {gridUseReinvest ? 'avec réinvestissement' : 'sans réinvestissement'})
-                  </p>
-                  <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Grid-search sur les lignes 15m résolues (signal, SL, mise fixe). Classement par PnL net.
-                  </p>
-                  <div className="strat-hero-controls" style={{ marginTop: 10 }}>
-                    <label className="strat-label-inline">
-                      <span>Fenêtre (jours)</span>
-                      <select
-                        value={gridDays}
-                        onChange={(e) => setGridDays(Number(e.target.value) || 3)}
-                        className="input-strat-compact"
-                      >
-                        <option value={3}>3</option>
-                        <option value={4}>4</option>
-                        <option value={5}>5</option>
-                        <option value={6}>6</option>
-                        <option value={7}>7</option>
-                      </select>
-                    </label>
-                    <label className="strat-15m-debug-toggle" style={{ marginTop: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={gridUseReinvest}
-                        onChange={(e) => setGridUseReinvest(e.target.checked)}
-                      />
-                      <span>Inclure réinvestissement progressif</span>
-                    </label>
-                  </div>
-                  <div className="strat-table-wrap" style={{ marginTop: 10 }}>
-                    <table className="strat-table">
-                      <thead>
-                        <tr>
-                          <th className="strat-th">#</th>
-                          <th className="strat-th">Signal</th>
-                          <th className="strat-th">SL</th>
-                          <th className="strat-th">Mise</th>
-                          <th className="strat-th">Trades</th>
-                          <th className="strat-th">PnL</th>
-                          <th className="strat-th">Capital final</th>
-                          <th className="strat-th">WR net</th>
-                          <th className="strat-th">WR résolution</th>
-                          <th className="strat-th">% SL touché</th>
-                          <th className="strat-th">Max DD</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {setupGridTop10.map((s, i) => (
-                          <tr key={`${s.signalBand}-${s.slC}-${s.stake}-${i}`} className={`strat-tbody-row ${i % 2 === 1 ? 'strat-tbody-row--stripe' : ''}`}>
-                            <td className="strat-td">{i + 1}</td>
-                            <td className="strat-td">{s.signalBand}¢</td>
-                            <td className="strat-td">{s.slC}¢</td>
-                            <td className="strat-td">{s.stake}€</td>
-                            <td className="strat-td">{s.trades}</td>
-                            <td className="strat-td">{formatMoney(s.pnl)}</td>
-                            <td className="strat-td">{formatMoney(s.finalCapital)}</td>
-                            <td className="strat-td">{s.winRateNetPct.toFixed(1)}%</td>
-                            <td className="strat-td">{s.winRateResolutionPct.toFixed(1)}%</td>
-                            <td className="strat-td">{s.slHitPct.toFixed(1)}%</td>
-                            <td className="strat-td">{s.maxDrawdownPct.toFixed(1)}%</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <p className="strat-muted-tight" style={{ marginTop: 8 }}>
-                    Règle d’évaluation : si le SL est touché après l’entrée, la ligne est comptée en sortie SL
-                    (même si la résolution finale est gagnante). Réinvestissement ON = taille de mise qui évolue
-                    proportionnellement au capital courant.
-                  </p>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1381,9 +942,10 @@ export function BitcoinUpDownStrategy() {
                         <code className="strat-code-inline">STOP_LOSS_DRAWDOWN_ENABLED</code>.
                       </li>
                       <li>
-                        <strong>SL touché</strong> : compté comme une <strong>perte</strong> dans le PnL agrégé et le{' '}
-                        <strong>win rate</strong>, même si le marché se résout ensuite en ta faveur (ligne « Stop-loss (résolution
-                        gagnante) » — tu sors avant la résolution, la discipline SL prime).
+                        <strong>SL touché</strong> : le PnL compte <strong>−{Math.round(BACKTEST_SL_FIXED_LOSS_FRAC * 100)} %</strong> du
+                        stake (+ frais), pas le rendement au prix mid de sortie — pour coller au bot réel. Comme une{' '}
+                        <strong>perte</strong> dans le win rate net, même si la résolution aurait été favorable (ligne « Stop-loss
+                        (résolution gagnante) »).
                       </li>
                       <li>
                         <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
@@ -1396,7 +958,10 @@ export function BitcoinUpDownStrategy() {
                   <p className="strat-data-window__body">
                     Période : <strong className="strat-strong">{resolvedDaysCount} derniers jours</strong>
                     {' '}({Math.min(MAX_15M_GRID_SLOTS, Math.ceil(resolvedWindowHours * 4))} créneaux 15 min).
-                    {resolved15mLoading && ' Chargement en cours…'}
+                    {resolved15mLoading &&
+                      (backtestWindowDays === 30
+                        ? ' Chargement 30 jours (plusieurs minutes, ne pas fermer l’onglet)…'
+                        : ' Chargement en cours…')}
                     {!resolved15mLoading && resolved15m.length === 0 && !resolved15mError && (
                       <span className="strat-block-msg strat-text-amber">Aucun créneau résolu récupéré pour cette période.</span>
                     )}
@@ -1417,9 +982,9 @@ export function BitcoinUpDownStrategy() {
                       Simu 15m : <code>prices-history</code> CLOB ≈ <strong>mid</strong> ; exécutions via <strong>Data API</strong>{' '}
                       (<code>asset</code> / <code>asset_id</code>). Filtre créneau ≈ <strong>fin − 30 min → fin + 45 min</strong>.
                       Fenêtre signal <strong>{SIGNAL_BAND_PCT_LABEL}</strong> (complément <strong>1 − p</strong>). PNL agrégé (carte
-                      Solde ci-dessus) : réinvestissement intégral ; SL simulé avec prix de sortie{' '}
-                      <code className="strat-code-inline">VITE_BACKTEST_STOP_LOSS_WORST_PRICE_P</code> ; perte à la résolution =
-                      mise intégrale.{' '}
+                      Solde ci-dessus) : réinvestissement intégral ; perte SL au bilan ={' '}
+                      <strong>{Math.round(BACKTEST_SL_FIXED_LOSS_FRAC * 100)} %</strong> du stake (+ frais), seuil{' '}
+                      <strong>{backtestSlC}¢</strong> pour la détection uniquement. Perte à la résolution (sans SL) = mise intégrale.{' '}
                       <strong>Win rate</strong> : une ligne avec SL simulé compte comme <strong>perdue</strong>, même si la
                       résolution aurait été gagnante. Désactiver le stop simulé :{' '}
                       <code className="trade-history-code-inline">VITE_BACKTEST_STOP_LOSS_ENABLED=false</code>. Signaux live :
@@ -1441,7 +1006,14 @@ export function BitcoinUpDownStrategy() {
                 </div>
                 {resolved15mError && <p className="strat-data-window__body strat-text-red">{resolved15mError}</p>}
                 {resolved15mLoading ? (
-                  <p className="strat-data-window__body">Chargement…</p>
+                  <p className="strat-data-window__body">
+                    Chargement…
+                    {backtestWindowDays === 30 && (
+                      <span className="strat-muted-tight" style={{ display: 'block', marginTop: 6 }}>
+                        Fenêtre 30 jours : listes Gamma paginées + prix CLOB / trades par créneau — compte plusieurs minutes.
+                      </span>
+                    )}
+                  </p>
                 ) : resolved15mError ? null : (
                   <>
                     {resolved15m.length === 0 && (
@@ -1563,11 +1135,13 @@ export function BitcoinUpDownStrategy() {
                                     )}
                                   </td>
                                   <td className="strat-td">
-                                    {r.botStopLossExit === true ? (
+                                    {r.botStopLossExit === true || isLiveLastStopLossRow ? (
                                       <span
                                         className="strat-sim-stopped"
                                         title={
-                                          r.botStopLossObservedPriceP != null && Number.isFinite(Number(r.botStopLossObservedPriceP))
+                                          r.botStopLossExit === true &&
+                                          r.botStopLossObservedPriceP != null &&
+                                          Number.isFinite(Number(r.botStopLossObservedPriceP))
                                             ? `Proxy observé ${(Number(r.botStopLossObservedPriceP) * 100).toFixed(2)}¢ · ${
                                                 r.botResolutionWouldWin === true
                                                   ? 'à la résolution ce serait un gain'
@@ -1575,12 +1149,16 @@ export function BitcoinUpDownStrategy() {
                                                     ? 'à la résolution ce serait une perte totale'
                                                     : 'résolution inconnue'
                                               }`
+                                            : isLiveLastStopLossRow
+                                              ? 'SL live détecté via bot-status: compté comme perte côté discipline SL'
                                             : undefined
                                         }
                                       >
-                                        {r.botResolutionWouldWin === true
+                                        {r.botStopLossExit === true && r.botResolutionWouldWin === true
                                           ? 'Stop-loss (résolution gagnante)'
-                                          : 'Stop-loss'}
+                                          : isLiveLastStopLossRow
+                                            ? 'Stop-loss (live détecté)'
+                                            : 'Stop-loss'}
                                       </span>
                                     ) : (
                                       <>
@@ -1627,8 +1205,15 @@ export function BitcoinUpDownStrategy() {
                             <strong>{backtestResult15m.stopLossExits}</strong> stop-loss simulé(s) ·{' '}
                           </>
                         )}
-                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) dans {SIGNAL_BAND_PCT_LABEL} (CLOB +
-                        trades + complément 1−p, stop-loss hybride aligné bot si activé).
+                        <strong>{backtestResult15m.withSignal.length}</strong> entrée(s) dans la bande backtest{' '}
+                        <strong>
+                          {signalMinC}–{signalMaxC} %
+                        </strong>{' '}
+                        (CLOB + trades + complément 1−p, stop-loss hybride si activé). SL simulé :{' '}
+                        <strong>proxy best bid</strong> (mid historique − offset, comme l’ordre de grandeur du bid vs mid côté bot ; pas d’historique bid tick par tick). Lien direct :{' '}
+                        <code className="strat-code-inline">
+                          ?windowDays=30&amp;signalMin=77&amp;signalMax=78&amp;sl=58
+                        </code>
                       </p>
                     )}
                     <div className="strat-actions-row">
@@ -1639,8 +1224,8 @@ export function BitcoinUpDownStrategy() {
                       <button
                         type="button"
                         onClick={() => setBacktestWindowDays(3)}
-                        disabled={resolved15mLoading || backtestWindowDays === 3}
-                        className="btn btn--default btn--outline"
+                        disabled={resolved15mLoading}
+                        className={`btn btn--default btn--outline strat-window-btn ${backtestWindowDays === 3 ? 'strat-window-btn--active' : ''}`}
                         title="3 derniers jours (72 h)"
                       >
                         3 jours
@@ -1648,8 +1233,8 @@ export function BitcoinUpDownStrategy() {
                       <button
                         type="button"
                         onClick={() => setBacktestWindowDays(7)}
-                        disabled={resolved15mLoading || backtestWindowDays === 7}
-                        className="btn btn--default btn--outline"
+                        disabled={resolved15mLoading}
+                        className={`btn btn--default btn--outline strat-window-btn ${backtestWindowDays === 7 ? 'strat-window-btn--active' : ''}`}
                         title="7 derniers jours (168 h)"
                       >
                         7 jours
@@ -1657,8 +1242,8 @@ export function BitcoinUpDownStrategy() {
                       <button
                         type="button"
                         onClick={() => setBacktestWindowDays(30)}
-                        disabled={resolved15mLoading || backtestWindowDays === 30}
-                        className="btn btn--default btn--outline"
+                        disabled={resolved15mLoading}
+                        className={`btn btn--default btn--outline strat-window-btn ${backtestWindowDays === 30 ? 'strat-window-btn--active' : ''}`}
                         title="30 derniers jours — chargement long, préférer cet onglet sur dev:backtest"
                       >
                         30 jours

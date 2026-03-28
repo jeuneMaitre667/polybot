@@ -1,6 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import { useBotStatus } from './useBotStatus.js';
+import { useBotStatus, normalizeBotStatusUrl, areBotStatusUrlsDuplicate } from './useBotStatus.js';
+
+describe('normalizeBotStatusUrl', () => {
+  it('trim et retire le slash final', () => {
+    expect(normalizeBotStatusUrl('  http://a:3001/  ')).toBe('http://a:3001');
+  });
+});
+
+describe('areBotStatusUrlsDuplicate', () => {
+  it('retourne faux si une URL est vide', () => {
+    expect(areBotStatusUrlsDuplicate('', 'http://x:3001')).toBe(false);
+    expect(areBotStatusUrlsDuplicate('http://x:3001', '')).toBe(false);
+  });
+  it('retourne vrai si les deux URLs normalisées sont identiques', () => {
+    expect(areBotStatusUrlsDuplicate('http://x:3001/', 'http://x:3001')).toBe(true);
+  });
+});
 
 describe('useBotStatus', () => {
   beforeEach(() => {

@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Cache backtest 15m généré localement (peut être volumineux)
+public/data/*.json
+
 # Secrets (ne jamais committer)
 .env
 .env.*
