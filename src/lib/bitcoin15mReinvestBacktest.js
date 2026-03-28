@@ -38,8 +38,12 @@ export function hourOfDayEt(isoOrDate) {
     hour12: false,
     hourCycle: 'h23',
   }).formatToParts(d);
-  const h = parts.find((p) => p.type === 'hour')?.value;
-  return h != null ? parseInt(h, 10) : null;
+  const raw = parts.find((p) => p.type === 'hour')?.value;
+  if (raw == null) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  // Certains runtimes (ex. Node en CI) renvoient 24 pour minuit au lieu de 0.
+  return n % 24;
 }
 
 /** Heure locale 0–23 dans un fuseau IANA (ex. `Europe/Paris`). */
@@ -52,8 +56,11 @@ export function hourOfDayInTimezone(isoOrDate, timeZone) {
     hour12: false,
     hourCycle: 'h23',
   }).formatToParts(d);
-  const h = parts.find((p) => p.type === 'hour')?.value;
-  return h != null ? parseInt(h, 10) : null;
+  const raw = parts.find((p) => p.type === 'hour')?.value;
+  if (raw == null) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  return n % 24;
 }
 
 function estimateCryptoTakerFeeRate(p, includeFees) {
