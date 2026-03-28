@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useBitcoinUpDownSignals } from '../hooks/useBitcoinUpDownSignals';
 import {
   useBitcoinUpDownResolved15m,
@@ -198,15 +198,27 @@ export function BitcoinUpDownStrategy() {
   });
   const [includeFees, setIncludeFees] = useState(true);
   const [backtest15mDebug, setBacktest15mDebug] = useState(readBacktest15mDebugFromStorage);
-  const [signalMinC, setSignalMinC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 77));
-  const [signalMaxC, setSignalMaxC] = useState(() => readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 78));
-  const [backtestSlC, setBacktestSlC] = useState(() =>
-    readNumberFromStorage(STORAGE_BACKTEST_15M_SL_C, Math.round(BACKTEST_STOP_LOSS_TRIGGER_PRICE_P * 100))
-  );
+  const [signalMinC, setSignalMinC] = useState(() => {
+    const sig = readBacktestSignalParamsFromUrl();
+    if (sig?.signalMinC != null) return sig.signalMinC;
+    return readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, 77);
+  });
+  const [signalMaxC, setSignalMaxC] = useState(() => {
+    const sig = readBacktestSignalParamsFromUrl();
+    if (sig?.signalMaxC != null) return sig.signalMaxC;
+    return readNumberFromStorage(STORAGE_BACKTEST_15M_SIGNAL_MAX_C, 78);
+  });
+  const [backtestSlC, setBacktestSlC] = useState(() => {
+    const sig = readBacktestSignalParamsFromUrl();
+    if (sig?.backtestSlC != null) return sig.backtestSlC;
+    return readNumberFromStorage(STORAGE_BACKTEST_15M_SL_C, Math.round(BACKTEST_STOP_LOSS_TRIGGER_PRICE_P * 100));
+  });
   const [backtestMaxStakeEur, setBacktestMaxStakeEur] = useState(() =>
     readNumberFromStorage(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, 500)
   );
   const [backtestReinvestMaxStake, setBacktestReinvestMaxStake] = useState(readBacktestReinvestFromStorage);
+  /** Horloge pour comparer aux fins de créneau sans appeler Date.now() pendant le rendu (react-hooks/purity). */
+  const [backtestNowSec, setBacktestNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const resolvedWindowHours = backtestWindowDays * 24;
   const resolvedDaysCount = backtestWindowDays;
   const {
@@ -225,18 +237,6 @@ export function BitcoinUpDownStrategy() {
     },
   });
 
-  /** Après le 1er paint : `?windowDays=` / `?signalMin=` etc. doivent primer sur le localStorage. */
-  useLayoutEffect(() => {
-    const fromUrl = readWindowDaysFromUrl();
-    if (fromUrl != null) {
-      setBacktestWindowDays(fromUrl);
-    }
-    const sig = readBacktestSignalParamsFromUrl();
-    if (sig?.signalMinC != null) setSignalMinC(sig.signalMinC);
-    if (sig?.signalMaxC != null) setSignalMaxC(sig.signalMaxC);
-    if (sig?.backtestSlC != null) setBacktestSlC(sig.backtestSlC);
-  }, []);
-
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_BACKTEST_15M_SIGNAL_MIN_C, String(signalMinC));
@@ -249,6 +249,13 @@ export function BitcoinUpDownStrategy() {
       /* ignore */
     }
   }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur, backtestWindowDays, backtestReinvestMaxStake]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setBacktestNowSec(Math.floor(Date.now() / 1000));
+    }, 15000);
+    return () => clearInterval(id);
+  }, []);
 
   /** Grille complète : un créneau 15 min par ligne (placeholders pour les trous). */
   const resolved15mDisplayRows = useMemo(
@@ -473,8 +480,9 @@ export function BitcoinUpDownStrategy() {
   const entryTiming = useMemo(() => {
     const rows = resolved15m;
     const sessionDurationSec = 15 * 60;
+    const cutoffMs = backtestNowSec * 1000 - 24 * 60 * 60 * 1000;
     const last24h = rows.filter(
-      (r) => r.endDate && new Date(r.endDate).getTime() >= Date.now() - 24 * 60 * 60 * 1000
+      (r) => r.endDate && new Date(r.endDate).getTime() >= cutoffMs
     );
     const total24 = last24h.length;
     const withTrade24 = last24h.filter((r) => r.botEntryTimestamp != null).length;
@@ -487,7 +495,7 @@ export function BitcoinUpDownStrategy() {
     });
     const avgMinutes = minutesList.length > 0 ? minutesList.reduce((a, b) => a + b, 0) / minutesList.length : 0;
     return { avgMinutes, pctFilled24, withTrade24, total24, withEntryCount: withEntry.length };
-  }, [resolved15m]);
+  }, [resolved15m, backtestNowSec]);
 
   const bt = activeBacktest;
   const metricN =
@@ -1079,8 +1087,8 @@ export function BitcoinUpDownStrategy() {
                             const slotEndSec = Number(r.slotEndSec);
                             const isRecentSlotPendingApi =
                               Number.isFinite(slotEndSec) &&
-                              Date.now() / 1000 - slotEndSec >= 0 &&
-                              Date.now() / 1000 - slotEndSec <= 90 * 60;
+                              backtestNowSec - slotEndSec >= 0 &&
+                              backtestNowSec - slotEndSec <= 90 * 60;
                             const unavailableLabel = isRecentSlotPendingApi
                               ? 'En attente de consolidation API (créneau récent)'
                               : 'Données indisponibles';
