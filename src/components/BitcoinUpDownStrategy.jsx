@@ -1031,12 +1031,30 @@ export function BitcoinUpDownStrategy() {
                         marché résolu ou de données dans la fenêtre chargée.
                       </p>
                     )}
+                    <p className="strat-table-legend strat-muted-tight" style={{ marginBottom: 10, lineHeight: 1.55 }}>
+                      <strong>Lecture des pastilles</strong> : vert = issue <strong>Up</strong>, rouge = issue{' '}
+                      <strong>Down</strong> à la résolution (même code couleur pour « Résultat » et « Bot aurait pris »). Ce
+                      n’est <strong>pas</strong> un indicateur gain/perte. Le gain ou la perte simulés sont dans la colonne{' '}
+                      <strong>Simul.</strong> (Gagné / Perdu / Stop-loss). Un SL simulé n’apparaît que si l’historique prix
+                      après entrée franchit le seuil (proxy bid, après délai min-hold) — sinon la ligne reste Gagné/Perdu selon
+                      la résolution seule.
+                    </p>
                     <div className="strat-table-wrap strat-table-wrap--scroll">
                       <table className="strat-table">
                         <thead>
                           <tr>
-                            <th className="strat-th">Résultat</th>
-                            <th className="strat-th">Bot aurait pris</th>
+                            <th
+                              className="strat-th"
+                              title="Issue du marché à la résolution : vert = Up gagne, rouge = Down gagne — pas le P&amp;L."
+                            >
+                              Résultat
+                            </th>
+                            <th
+                              className="strat-th"
+                              title="Côté que le backtest aurait pris (Up ou Down) si signal dans la bande — couleurs = même convention que Résultat."
+                            >
+                              Bot aurait pris
+                            </th>
                             <th className="strat-th">Prix d&apos;entrée</th>
                             <th className="strat-th">Signal</th>
                             <th
@@ -1046,7 +1064,12 @@ export function BitcoinUpDownStrategy() {
                               Heure trade (ET)
                             </th>
                             <th className="strat-th">Type</th>
-                            <th className="strat-th">Simul.</th>
+                            <th
+                              className="strat-th"
+                              title="P&amp;L simulé : Gagné / Perdu selon résolution, ou Stop-loss si le SL backtest (seuil sl=…) est touché sur l’historique."
+                            >
+                              Simul.
+                            </th>
                             {backtest15mDebug && <th className="strat-th strat-th--debug">Debug</th>}
                           </tr>
                         </thead>
@@ -1223,6 +1246,26 @@ export function BitcoinUpDownStrategy() {
                         <code className="strat-code-inline">
                           ?windowDays=30&amp;signalMin=77&amp;signalMax=78&amp;sl=58
                         </code>
+                        {(import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED === 'false' ||
+                          import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED === '0') &&
+                          backtestResult15m.withSimul.length > 0 && (
+                          <>
+                            {' '}
+                            · <span className="strat-muted">SL simulé désactivé dans </span>
+                            <code className="strat-code-inline">.env</code>
+                            <span className="strat-muted"> — la colonne Simul. ne peut pas afficher « Stop-loss ».</span>
+                          </>
+                        )}
+                        {import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED !== 'false' &&
+                          import.meta.env.VITE_BACKTEST_STOP_LOSS_ENABLED !== '0' &&
+                          backtestResult15m.stopLossExits === 0 &&
+                          backtestResult15m.withSimul.length > 0 && (
+                          <>
+                            {' '}
+                            · <span className="strat-muted">Aucun SL simulé sur cette fenêtre : le prix proxy n’a pas franchi le
+                            seuil {backtestSlC}¢ après min-hold sur les lignes concernées, ou l’historique est trop clairsemé.</span>
+                          </>
+                        )}
                       </p>
                     )}
                     <div className="strat-actions-row">
