@@ -1,6 +1,7 @@
 import { POLYMARKET_DISPLAY_TZ } from './polymarketDisplayTime.js';
 
-const QUARTER_SEC = 15 * 60;
+export const QUARTER_SEC_15M = 15 * 60;
+const QUARTER_SEC = QUARTER_SEC_15M;
 
 /** Pas d’entrée pendant les 6 premières minutes de chaque quart d’heure **affiché ET** (:00–:05). */
 export const SLOT_15M_ENTRY_FORBID_FIRST_SEC = 6 * 60;
@@ -44,12 +45,38 @@ export function offsetSecondsInEtQuarterHour(tsSec) {
  *
  * @param {number} tsSec
  */
-export function is15mSlotEntryTimeForbidden(tsSec) {
+/**
+ * Fenêtres interdites en début / fin de quart (secondes). Si first+last ≥ 15 min, tout le quart est interdit.
+ * Minutes clampées 0–14 chacune (un quart = 15 min).
+ */
+export function normalizeForbidWindowMinutes(firstMin, lastMin) {
+  let f = firstMin === undefined || firstMin === null ? NaN : Math.round(Number(firstMin));
+  let l = lastMin === undefined || lastMin === null ? NaN : Math.round(Number(lastMin));
+  if (!Number.isFinite(f)) f = SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60;
+  if (!Number.isFinite(l)) l = SLOT_15M_ENTRY_FORBID_LAST_SEC / 60;
+  f = Math.max(0, Math.min(14, f));
+  l = Math.max(0, Math.min(14, l));
+  return { forbidFirstSec: f * 60, forbidLastSec: l * 60 };
+}
+
+/** Backtest / overrides : mêmes règles géométriques que la grille bot, paramètres en secondes. */
+export function is15mSlotEntryTimeForbiddenWithWindows(tsSec, forbidFirstSec, forbidLastSec) {
   const o = offsetSecondsInEtQuarterHour(tsSec);
   if (o == null) return false;
-  if (o < SLOT_15M_ENTRY_FORBID_FIRST_SEC) return true;
-  if (o >= QUARTER_SEC - SLOT_15M_ENTRY_FORBID_LAST_SEC) return true;
+  const f = Math.max(0, Number(forbidFirstSec) || 0);
+  const l = Math.max(0, Number(forbidLastSec) || 0);
+  if (f + l >= QUARTER_SEC) return true;
+  if (o < f) return true;
+  if (o >= QUARTER_SEC - l) return true;
   return false;
+}
+
+export function is15mSlotEntryTimeForbidden(tsSec) {
+  return is15mSlotEntryTimeForbiddenWithWindows(
+    tsSec,
+    SLOT_15M_ENTRY_FORBID_FIRST_SEC,
+    SLOT_15M_ENTRY_FORBID_LAST_SEC,
+  );
 }
 
 /**

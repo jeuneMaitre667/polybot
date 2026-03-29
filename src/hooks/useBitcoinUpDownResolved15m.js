@@ -32,10 +32,15 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
       options?.simulation?.entryMinP,
       options?.simulation?.entryMaxP,
       options?.simulation?.stopLossTriggerPriceP,
+      options?.simulation?.entryForbiddenFirstMin,
+      options?.simulation?.entryForbiddenLastMin,
       options?.simConfig?.detectMinP,
       options?.simConfig?.entryMinP,
       options?.simConfig?.entryMaxP,
       options?.simConfig?.stopLossTriggerPriceP,
+      options?.simConfig?.entryForbiddenFirstMin,
+      options?.simConfig?.entryForbiddenLastMin,
+      options?.simConfig?.signalMinDwellSec,
     ]
   );
   /* eslint-enable react-hooks/exhaustive-deps */

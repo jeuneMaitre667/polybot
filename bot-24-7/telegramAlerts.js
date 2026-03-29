@@ -26,7 +26,7 @@ export function telegramBalanceDigestMs() {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Résumé quotidien minuit → midi (ordres, WR, séries). Désactivable : ALERT_TELEGRAM_MIDDAY_DIGEST=false */
+/** Résumés performance Telegram (demi-journées + journée). Désactivable : ALERT_TELEGRAM_MIDDAY_DIGEST=false */
 export function telegramMiddayDigestEnabled() {
   return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_MIDDAY_DIGEST === 'true';
 }

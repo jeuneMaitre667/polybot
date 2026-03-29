@@ -1,5 +1,5 @@
 /**
- * Résumé Telegram minuit → midi : entrées, SL, redeems (victoires), WR, séries.
+ * Résumés Telegram performance : entrées, SL, redeems, WR, séries (fenêtres minuit→midi, midi→minuit, journée complète).
  * Fuseau : TELEGRAM_MIDDAY_DIGEST_TZ (défaut Europe/Paris).
  */
 import fs from 'fs';
@@ -40,6 +40,78 @@ export function getMidnightToNoonWindowMs(timeZone, dateStr) {
   }
   if (startMs == null || endMs == null) return null;
   return { startMs, endMs };
+}
+
+/**
+ * [startMs, endMs) pour le jour calendaire `dateStr` dans `timeZone`, de 12:00 local au lendemain 00:00 (fin exclusive).
+ */
+export function getNoonToMidnightWindowMs(timeZone, dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  const targetDate = `${y}-${pad(m)}-${pad(d)}`;
+  const lo = Date.UTC(y, m - 1, d - 1, 0, 0, 0);
+  const hi = Date.UTC(y, m - 1, d + 2, 0, 0, 0);
+  let startMs = null;
+  for (let t = lo; t <= hi; t += 1000) {
+    const s = formatInTimeZone(t, timeZone);
+    if (s.startsWith(`${targetDate} 12:00:00`)) {
+      startMs = t;
+      break;
+    }
+  }
+  if (startMs == null) return null;
+  let endMs = null;
+  for (let t = startMs + 1000; t <= startMs + 36 * 3600 * 1000; t += 1000) {
+    const s = formatInTimeZone(t, timeZone);
+    if (s.endsWith(' 00:00:00') && !s.startsWith(targetDate)) {
+      endMs = t;
+      break;
+    }
+  }
+  if (endMs == null) return null;
+  return { startMs, endMs };
+}
+
+/**
+ * [startMs, endMs) pour le jour calendaire `dateStr` dans `timeZone`, de 00:00 au lendemain 00:00 local (journée complète).
+ */
+export function getFullDayWindowMs(timeZone, dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  const targetDate = `${y}-${pad(m)}-${pad(d)}`;
+  const lo = Date.UTC(y, m - 1, d - 1, 0, 0, 0);
+  const hi = Date.UTC(y, m - 1, d + 2, 0, 0, 0);
+  let startMs = null;
+  for (let t = lo; t <= hi; t += 1000) {
+    const s = formatInTimeZone(t, timeZone);
+    if (s.startsWith(`${targetDate} 00:00:00`)) {
+      startMs = t;
+      break;
+    }
+  }
+  if (startMs == null) return null;
+  let endMs = null;
+  for (let t = startMs + 1000; t <= startMs + 36 * 3600 * 1000; t += 1000) {
+    const s = formatInTimeZone(t, timeZone);
+    if (s.endsWith(' 00:00:00') && !s.startsWith(targetDate)) {
+      endMs = t;
+      break;
+    }
+  }
+  if (endMs == null) return null;
+  return { startMs, endMs };
+}
+
+/** Jour calendaire « hier » dans le fuseau (pour digests à minuit). */
+export function getYesterdayYmdInTz(timeZone) {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(Date.now() - 12 * 3600 * 1000));
 }
 
 /** Entrée d'achat (pas ligne SL). */
@@ -154,7 +226,11 @@ export function streaksFromOutcomes(outcomes) {
   return { maxWinStreak, maxLossStreak, currentWinStreak, currentLossStreak };
 }
 
-export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabel }) {
+/**
+ * @param {object} opts
+ * @param {'midi'|'minuit'|'fin'} [opts.streakContextLabel] — libellé pour la ligne « série » (défaut : midi).
+ */
+export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabel, streakContextLabel = 'midi' }) {
   const wrLine =
     stats.decided > 0
       ? `📈 WR (${windowLabel}) : ${stats.wrPct}% (${stats.winCount} V / ${stats.decided} décisions — 🏆 ${stats.winCount} redeem gagnant${stats.winCount > 1 ? 's' : ''}, 🛑 ${stats.slCount} SL)`
@@ -166,6 +242,13 @@ export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabe
       : stats.currentLossStreak > 0
         ? `📉 ${stats.currentLossStreak} défaite${stats.currentLossStreak > 1 ? 's' : ''} d’affilée`
         : '➖ —';
+
+  const streakPhrase =
+    streakContextLabel === 'minuit'
+      ? 'à minuit (fin de fenêtre)'
+      : streakContextLabel === 'fin'
+        ? 'fin de journée'
+        : 'à midi';
 
   return (
     `📊 Résumé bot · ${windowLabel}\n` +
@@ -179,7 +262,7 @@ export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabe
     `📌 Séries (🛑 SL + 🏆 redeem gagnant, ordre chrono)\n` +
     `🔥 Max victoires d’affilée : ${stats.maxWinStreak}\n` +
     `📉 Max défaites d’affilée : ${stats.maxLossStreak}\n` +
-    `⚡ Série à midi : ${streakNow}\n` +
+    `⚡ Série ${streakPhrase} : ${streakNow}\n` +
     (stats.outcomesStr ? `🧩 Séquence : ${stats.outcomesStr}\n` : '')
   ).trim();
 }

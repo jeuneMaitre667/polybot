@@ -39,6 +39,9 @@ import {
   computeMiddayDigestStats,
   formatMiddayDigestMessage,
   getMidnightToNoonWindowMs,
+  getNoonToMidnightWindowMs,
+  getFullDayWindowMs,
+  getYesterdayYmdInTz,
   readOrdersLogSafe,
   getCalendarDateYmd,
   getLocalHourMinute,
@@ -78,10 +81,14 @@ const SIGNAL_DECISION_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'signal-decision
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
 /** `conditionId` déjà redeemés avec succès (évite de retenter indéfiniment ; remplit le bot au fil des trades). */
 const REDEEMED_CONDITION_IDS_FILE = path.join(BOT_DIR, 'redeemed-condition-ids.json');
+/** État des 3 digests (matin / après-midi / journée) ; migre depuis midday-digest-last.json si besoin. */
+const TELEGRAM_DIGEST_STATE_FILE = path.join(BOT_DIR, 'telegram-digest-state.json');
 const MIDDAY_DIGEST_LAST_FILE = path.join(BOT_DIR, 'midday-digest-last.json');
 const TELEGRAM_MIDDAY_DIGEST_TZ = (process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris').trim();
 const TELEGRAM_MIDDAY_DIGEST_HOUR = Math.max(0, Math.min(23, Number(process.env.TELEGRAM_MIDDAY_DIGEST_HOUR) || 12));
 const TELEGRAM_MIDDAY_DIGEST_MINUTE = Math.max(0, Math.min(59, Number(process.env.TELEGRAM_MIDDAY_DIGEST_MINUTE) || 0));
+const TELEGRAM_MIDNIGHT_DIGEST_HOUR = Math.max(0, Math.min(23, Number(process.env.TELEGRAM_MIDNIGHT_DIGEST_HOUR) || 0));
+const TELEGRAM_MIDNIGHT_DIGEST_MINUTE = Math.max(0, Math.min(59, Number(process.env.TELEGRAM_MIDNIGHT_DIGEST_MINUTE) || 0));
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
 const TRADE_LATENCY_HISTORY_DAYS = 7;
@@ -1894,37 +1901,116 @@ async function maybeTelegramBalanceDigest(balanceAfter) {
   await sendTelegramAlert(body);
 }
 
-/** Résumé Telegram minuit → midi (entrées, SL, redeems, WR, séries). */
-async function tryMiddayDigest() {
+function loadTelegramDigestState() {
+  try {
+    const j = JSON.parse(fs.readFileSync(TELEGRAM_DIGEST_STATE_FILE, 'utf8'));
+    return {
+      morningSentFor: String(j?.morningSentFor || '').trim(),
+      afternoonSentFor: String(j?.afternoonSentFor || '').trim(),
+      fullDaySentFor: String(j?.fullDaySentFor || '').trim(),
+    };
+  } catch (_) {
+    try {
+      const j = JSON.parse(fs.readFileSync(MIDDAY_DIGEST_LAST_FILE, 'utf8'));
+      const d = String(j?.date || '').trim();
+      return { morningSentFor: d, afternoonSentFor: '', fullDaySentFor: '' };
+    } catch (_) {
+      return { morningSentFor: '', afternoonSentFor: '', fullDaySentFor: '' };
+    }
+  }
+}
+
+function saveTelegramDigestState(state) {
+  fs.writeFileSync(
+    TELEGRAM_DIGEST_STATE_FILE,
+    JSON.stringify(
+      {
+        ...state,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      0,
+    ) + '\n',
+    'utf8',
+  );
+}
+
+/**
+ * Résumés Telegram : 00h–12h (à l’heure midi), 12h–00h + journée complète (à minuit, jour écoulé).
+ */
+async function tryTelegramPerformanceDigests() {
   if (!telegramMiddayDigestEnabled()) return;
   const tz = TELEGRAM_MIDDAY_DIGEST_TZ;
   const { hour, minute } = getLocalHourMinute(tz);
-  if (hour !== TELEGRAM_MIDDAY_DIGEST_HOUR || minute !== TELEGRAM_MIDDAY_DIGEST_MINUTE) return;
   const todayYmd = getCalendarDateYmd(tz);
-  let lastSent = '';
-  try {
-    const j = JSON.parse(fs.readFileSync(MIDDAY_DIGEST_LAST_FILE, 'utf8'));
-    lastSent = String(j?.date || '').trim();
-  } catch (_) {}
-  if (lastSent === todayYmd) return;
-  const win = getMidnightToNoonWindowMs(tz, todayYmd);
-  if (!win) return;
+  const yesterdayYmd = getYesterdayYmdInTz(tz);
+
+  const isNoonSlot =
+    hour === TELEGRAM_MIDDAY_DIGEST_HOUR && minute === TELEGRAM_MIDDAY_DIGEST_MINUTE;
+  const isMidnightSlot =
+    hour === TELEGRAM_MIDNIGHT_DIGEST_HOUR && minute === TELEGRAM_MIDNIGHT_DIGEST_MINUTE;
+
+  if (!isNoonSlot && !isMidnightSlot) return;
+
+  let state = loadTelegramDigestState();
+  let changed = false;
   const raw = readOrdersLogSafe(ORDERS_LOG_FILE);
-  const stats = computeMiddayDigestStats(raw, win.startMs, win.endMs);
-  const msg = formatMiddayDigestMessage(stats, {
-    timeZone: tz,
-    dateStr: todayYmd,
-    windowLabel: '00h00–12h00',
-  });
-  await sendTelegramAlert(msg);
-  try {
-    fs.writeFileSync(
-      MIDDAY_DIGEST_LAST_FILE,
-      JSON.stringify({ date: todayYmd, sentAt: new Date().toISOString() }, null, 0) + '\n',
-      'utf8',
-    );
-  } catch (e) {
-    console.warn('[midday-digest] écriture état impossible:', e?.message || e);
+
+  if (isNoonSlot && state.morningSentFor !== todayYmd) {
+    const win = getMidnightToNoonWindowMs(tz, todayYmd);
+    if (win) {
+      const stats = computeMiddayDigestStats(raw, win.startMs, win.endMs);
+      const msg = formatMiddayDigestMessage(stats, {
+        timeZone: tz,
+        dateStr: todayYmd,
+        windowLabel: '00h00–12h00',
+        streakContextLabel: 'midi',
+      });
+      await sendTelegramAlert(msg);
+      state.morningSentFor = todayYmd;
+      changed = true;
+    }
+  }
+
+  if (isMidnightSlot && yesterdayYmd) {
+    if (state.afternoonSentFor !== yesterdayYmd) {
+      const winPm = getNoonToMidnightWindowMs(tz, yesterdayYmd);
+      if (winPm) {
+        const stats = computeMiddayDigestStats(raw, winPm.startMs, winPm.endMs);
+        const msg = formatMiddayDigestMessage(stats, {
+          timeZone: tz,
+          dateStr: yesterdayYmd,
+          windowLabel: '12h00–24h00',
+          streakContextLabel: 'minuit',
+        });
+        await sendTelegramAlert(msg);
+        state.afternoonSentFor = yesterdayYmd;
+        changed = true;
+      }
+    }
+    if (state.fullDaySentFor !== yesterdayYmd) {
+      const winDay = getFullDayWindowMs(tz, yesterdayYmd);
+      if (winDay) {
+        const stats = computeMiddayDigestStats(raw, winDay.startMs, winDay.endMs);
+        const msg = formatMiddayDigestMessage(stats, {
+          timeZone: tz,
+          dateStr: yesterdayYmd,
+          windowLabel: 'journée complète 00h00–24h00',
+          streakContextLabel: 'fin',
+        });
+        await sendTelegramAlert(msg);
+        state.fullDaySentFor = yesterdayYmd;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    try {
+      saveTelegramDigestState(state);
+    } catch (e) {
+      console.warn('[telegram-digest] écriture état impossible:', e?.message || e);
+    }
   }
 }
 
@@ -5239,10 +5325,10 @@ async function main() {
   }
   if (telegramMiddayDigestEnabled()) {
     setInterval(() => {
-      void tryMiddayDigest();
+      void tryTelegramPerformanceDigests();
     }, 25_000);
     console.log(
-      `Résumé Telegram midi : activé (${TELEGRAM_MIDDAY_DIGEST_TZ}, ${String(TELEGRAM_MIDDAY_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDDAY_DIGEST_MINUTE).padStart(2, '0')} — ALERT_TELEGRAM_MIDDAY_DIGEST=true).`
+      `Résumés Telegram performance : activés (${TELEGRAM_MIDDAY_DIGEST_TZ} — demi-journée ${String(TELEGRAM_MIDDAY_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDDAY_DIGEST_MINUTE).padStart(2, '0')} + minuit ${String(TELEGRAM_MIDNIGHT_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDNIGHT_DIGEST_MINUTE).padStart(2, '0')} — ALERT_TELEGRAM_MIDDAY_DIGEST=true).`
     );
   }
   for (;;) {

@@ -12,9 +12,8 @@ import {
 } from '@/lib/bitcoin15mBacktestDedupe.js';
 import { formatBitcoin15mSlotRangeEt } from '@/lib/polymarketDisplayTime.js';
 import {
-  is15mSlotEntryTimeForbidden,
-  SLOT_15M_ENTRY_FORBID_FIRST_SEC,
-  SLOT_15M_ENTRY_FORBID_LAST_SEC,
+  is15mSlotEntryTimeForbiddenWithWindows,
+  normalizeForbidWindowMinutes,
   ENTRY_TIMING_ET_TIMEZONE,
 } from '@/lib/bitcoin15mSlotEntryTiming.js';
 import { applyManualStopLossOverride } from '@/lib/bitcoin15mManualSlOverrides.js';
@@ -73,6 +72,25 @@ export function resolve15mSimConfig(options) {
     dwellRaw === undefined || dwellRaw === '' || dwellRaw === null
       ? 0
       : Math.max(0, Number(dwellRaw) || 0);
+  const efMin = cfg?.entryForbiddenFirstMin;
+  const elMin = cfg?.entryForbiddenLastMin;
+  let forbidFirstSec;
+  let forbidLastSec;
+  if (
+    cfg != null &&
+    Number.isFinite(Number(cfg.forbidFirstSec)) &&
+    Number.isFinite(Number(cfg.forbidLastSec))
+  ) {
+    forbidFirstSec = Math.max(0, Number(cfg.forbidFirstSec));
+    forbidLastSec = Math.max(0, Number(cfg.forbidLastSec));
+  } else {
+    const w = normalizeForbidWindowMinutes(
+      efMin !== undefined && efMin !== null ? efMin : undefined,
+      elMin !== undefined && elMin !== null ? elMin : undefined,
+    );
+    forbidFirstSec = w.forbidFirstSec;
+    forbidLastSec = w.forbidLastSec;
+  }
   const out = {
     detectMinP:
       Number.isFinite(detectMinP) && detectMinP > 0 && detectMinP < 1 ? detectMinP : DEFAULT_DETECT_MIN_P,
@@ -84,6 +102,9 @@ export function resolve15mSimConfig(options) {
         : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
     /** Secondes : le prix du token choisi doit rester ≥ detectMinP sur [ts entrée, ts + dwell] (alignement poll bot). */
     signalMinDwellSec,
+    /** Backtest uniquement : fenêtres interdites début/fin de quart (ET), en secondes. */
+    forbidFirstSec,
+    forbidLastSec,
   };
   if (out.entryMaxP < out.entryMinP) {
     const tmp = out.entryMaxP;
@@ -886,23 +907,27 @@ function summarizeSeriesForDebug(series) {
 }
 
 /** Export debug / UI (clé historique `forbiddenMinuteWindowsUtc` conservée pour le JSON de debug). */
-const BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC = {
-  basis: 'et_quarter_hour',
-  displayTimezone: ENTRY_TIMING_ET_TIMEZONE,
-  appliedInSimulation: true,
-  slotDurationSec: SLOT_15M_SEC,
-  forbidFirstSecondsFromSlotStart: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
-  forbidLastSecondsBeforeSlotEnd: SLOT_15M_ENTRY_FORBID_LAST_SEC,
-  label:
-    `Pas d’entrée : dans chaque quart d’heure local ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45), interdit les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières minutes et les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières — aligné sur l’heure ET du trade (comme le tableau).`,
-};
+function buildForbiddenMinuteRuleEt(forbidFirstSec, forbidLastSec) {
+  const f = Math.round(Number(forbidFirstSec) || 0);
+  const l = Math.round(Number(forbidLastSec) || 0);
+  return {
+    basis: 'et_quarter_hour',
+    displayTimezone: ENTRY_TIMING_ET_TIMEZONE,
+    appliedInSimulation: true,
+    slotDurationSec: SLOT_15M_SEC,
+    forbidFirstSecondsFromSlotStart: f,
+    forbidLastSecondsBeforeSlotEnd: l,
+    label: `Pas d’entrée : dans chaque quart d’heure local ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45), interdit les ${f / 60} premières minutes et les ${l / 60} dernières — aligné sur l’heure ET du trade (comme le tableau).`,
+  };
+}
 
 /**
  * Candidats d’entrée (événements triés, interpolation, exclusion début / fin de quart d’heure **en heure ET**).
- * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: typeof BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC }}
+ * @returns {{ candidates: Array<{side:string,price:number,ts:number}>, endTsSec: number|null, forbiddenMinuteRule: ReturnType<typeof buildForbiddenMinuteRuleEt> }}
  */
 function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
-  const { detectMinP, entryMinP, entryMaxP, signalMinDwellSec = 0 } = simCfg || resolve15mSimConfig(null);
+  const cfg = resolve15mSimConfig({ simConfig: simCfg });
+  const { detectMinP, entryMinP, entryMaxP, signalMinDwellSec = 0, forbidFirstSec, forbidLastSec } = cfg;
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   let endTsSec = null;
@@ -950,7 +975,7 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
         lastBySide[side] = { t, price };
         continue;
       }
-      if (is15mSlotEntryTimeForbidden(tsUsed)) {
+      if (is15mSlotEntryTimeForbiddenWithWindows(tsUsed, forbidFirstSec, forbidLastSec)) {
         lastBySide[side] = { t, price };
         continue;
       }
@@ -965,11 +990,16 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
     candidates.push({ side, price: clampEntryPrice(price, entryMinP, entryMaxP), ts: tsUsed });
     lastBySide[side] = { t, price };
   }
-  return { candidates, endTsSec, forbiddenMinuteRule: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC };
+  return {
+    candidates,
+    endTsSec,
+    forbiddenMinuteRule: buildForbiddenMinuteRuleEt(forbidFirstSec, forbidLastSec),
+  };
 }
 
 function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
-  const { detectMinP, entryMinP, entryMaxP } = simCfg || resolve15mSimConfig(null);
+  const cfg = resolve15mSimConfig({ simConfig: simCfg });
+  const { detectMinP, entryMinP, entryMaxP, forbidFirstSec, forbidLastSec } = cfg;
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   if (up.length === 0 && down.length === 0) {
@@ -998,7 +1028,7 @@ function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndS
   if (hadHigh) {
     return {
       code: 'excluded_by_15m_slot_forbidden_window',
-      detail: `Franchissement ≥ ${detectMinP} présent, mais ts (ou interpolé) dans les ${SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60} premières min ou les ${SLOT_15M_ENTRY_FORBID_LAST_SEC / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
+      detail: `Franchissement ≥ ${detectMinP} présent, mais ts (ou interpolé) dans les ${forbidFirstSec / 60} premières min ou les ${forbidLastSec / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
       forbiddenMinuteRule,
       endTsSec,
       maxBinaryConvictionUpToken: maxU,
@@ -1069,6 +1099,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
  * Utilisable depuis le hook React ou un script Node (`vite-node`) pour générer un cache JSON.
  */
 export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
+  const simResolved = resolve15mSimConfig({ simConfig: simCfg });
   const seen = new Set();
       const results = [];
 
@@ -1292,13 +1323,17 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
         const emptySim = { ...EMPTY_BOT_SIM_15M };
         let sim =
           historyUp.length > 0 || historyDown.length > 0
-            ? computeBotSimulationWithConfig(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec, simCfg)
+            ? computeBotSimulationWithConfig(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec, simResolved)
             : emptySim;
         if (
           sim.botWouldTake != null &&
           r.slotEndSec != null &&
           Number.isFinite(r.slotEndSec) &&
-          is15mSlotEntryTimeForbidden(sim.botEntryTimestamp)
+          is15mSlotEntryTimeForbiddenWithWindows(
+            sim.botEntryTimestamp,
+            simResolved.forbidFirstSec,
+            simResolved.forbidLastSec,
+          )
         ) {
           sim = emptySim;
         }
@@ -1309,7 +1344,7 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
         if (debug) {
           const why =
             sim.botWouldTake == null
-              ? debugWhyNoSignalWithConfig(historyUp, historyDown, historyEndIso, r.slotEndSec, simCfg)
+              ? debugWhyNoSignalWithConfig(historyUp, historyDown, historyEndIso, r.slotEndSec, simResolved)
               : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
           simDebug = {
             slug: r.eventSlug,
@@ -1341,20 +1376,23 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
             maxBinaryAfterSlot: maxBinaryAcrossBothSeries(historyUp, historyDown),
             why,
             rule: {
-              detectMinP: simCfg.detectMinP,
-              simEntryMinP: simCfg.entryMinP,
-              simEntryMaxP: simCfg.entryMaxP,
-              signalMinDwellSec: simCfg.signalMinDwellSec ?? 0,
-              forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
+              detectMinP: simResolved.detectMinP,
+              simEntryMinP: simResolved.entryMinP,
+              simEntryMaxP: simResolved.entryMaxP,
+              signalMinDwellSec: simResolved.signalMinDwellSec ?? 0,
+              forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+                simResolved.forbidFirstSec,
+                simResolved.forbidLastSec,
+              ),
               entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
               seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
               dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
               marginBeforeSec: SLOT_15M_MARGIN_SEC,
-              entryForbiddenSlotFirstSec: SLOT_15M_ENTRY_FORBID_FIRST_SEC,
-              entryForbiddenSlotLastSec: SLOT_15M_ENTRY_FORBID_LAST_SEC,
+              entryForbiddenSlotFirstSec: simResolved.forbidFirstSec,
+              entryForbiddenSlotLastSec: simResolved.forbidLastSec,
               stopLoss: {
                 enabled: BACKTEST_STOP_LOSS_ENABLED,
-                triggerPriceP: simCfg.stopLossTriggerPriceP,
+                triggerPriceP: simResolved.stopLossTriggerPriceP,
                 drawdownEnabled: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
                 maxDrawdownPct: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED ? BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT : null,
                 worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
@@ -1383,7 +1421,7 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
       const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
       let debugSummaryOut = null;
       if (debug) {
-        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simCfg.detectMinP;
+        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simResolved.detectMinP;
         const highConvBefore = (e) => geMinBinary(e.simDebug?.maxBinaryBeforeSlot);
         const highConvAfter = (e) => geMinBinary(e.simDebug?.maxBinaryAfterSlot);
         const strippedBySlot = enrichedFinal.filter(
@@ -1425,7 +1463,10 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
             dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
             simSeriesWindowSec: SLOT_15M_SEC + SLOT_15M_MARGIN_SEC + SLOT_END_PADDING_SEC,
           },
-          forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
+          forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+            simResolved.forbidFirstSec,
+            simResolved.forbidLastSec,
+          ),
           urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
         };
         console.info('[15m résolus] mode DEBUG — résumé', debugSummaryOut);
@@ -1447,7 +1488,10 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
           sansTokenUp: noToken,
           clobUrl: CLOB_PRICES_HISTORY_URL,
           dataUrl: DATA_API_TRADES_URL,
-          forbiddenMinuteWindowsUtc: BACKTEST_15M_FORBIDDEN_MINUTE_WINDOWS_UTC,
+          forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+            simResolved.forbidFirstSec,
+            simResolved.forbidLastSec,
+          ),
           exempleErreurFetch:
             sampleErr != null
               ? [sampleErr.debugClobFetchError, sampleErr.debugDataFetchError].filter(Boolean).join(' | ') || '200 vide ?'

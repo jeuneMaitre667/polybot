@@ -20,6 +20,10 @@ import {
   formatTimestampUtcTooltip,
 } from '../lib/polymarketDisplayTime.js';
 import { simulateReinvestMaxStake } from '../lib/bitcoin15mReinvestBacktest.js';
+import {
+  SLOT_15M_ENTRY_FORBID_FIRST_SEC,
+  SLOT_15M_ENTRY_FORBID_LAST_SEC,
+} from '../lib/bitcoin15mSlotEntryTiming.js';
 
 function formatMoney(value) {
   if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
@@ -40,6 +44,17 @@ const STORAGE_BACKTEST_15M_SL_C = 'polymarket-dashboard.backtest15mSlC';
 const STORAGE_BACKTEST_15M_MAX_STAKE_EUR = 'polymarket-dashboard.backtest15mMaxStakeEur';
 const STORAGE_BACKTEST_15M_WINDOW_DAYS = 'polymarket-dashboard.backtest15mWindowDays';
 const STORAGE_BACKTEST_15M_REINVEST = 'polymarket-dashboard.backtest15mReinvestMaxStake';
+const STORAGE_BACKTEST_15M_FORBID_FIRST_MIN = 'polymarket-dashboard.backtest15mForbidFirstMin';
+const STORAGE_BACKTEST_15M_FORBID_LAST_MIN = 'polymarket-dashboard.backtest15mForbidLastMin';
+
+const DEFAULT_FORBID_FIRST_MIN = Math.round(SLOT_15M_ENTRY_FORBID_FIRST_SEC / 60);
+const DEFAULT_FORBID_LAST_MIN = Math.round(SLOT_15M_ENTRY_FORBID_LAST_SEC / 60);
+
+function clampForbidMinuteInput(n) {
+  const x = Math.round(Number(n));
+  if (!Number.isFinite(x)) return 0;
+  return Math.max(0, Math.min(14, x));
+}
 
 /**
  * Perte comptée à chaque SL dans le PnL agrégé : fraction du stake (aligné exécution bot / scripts `recalc`).
@@ -224,6 +239,12 @@ export function BitcoinUpDownStrategy() {
     readNumberFromStorage(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, 500)
   );
   const [backtestReinvestMaxStake, setBacktestReinvestMaxStake] = useState(readBacktestReinvestFromStorage);
+  const [backtestForbidFirstMin, setBacktestForbidFirstMin] = useState(() =>
+    clampForbidMinuteInput(readNumberFromStorage(STORAGE_BACKTEST_15M_FORBID_FIRST_MIN, DEFAULT_FORBID_FIRST_MIN)),
+  );
+  const [backtestForbidLastMin, setBacktestForbidLastMin] = useState(() =>
+    clampForbidMinuteInput(readNumberFromStorage(STORAGE_BACKTEST_15M_FORBID_LAST_MIN, DEFAULT_FORBID_LAST_MIN)),
+  );
   /** Horloge pour comparer aux fins de créneau sans appeler Date.now() pendant le rendu (react-hooks/purity). */
   const [backtestNowSec, setBacktestNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const resolvedWindowHours = backtestWindowDays * 24;
@@ -242,6 +263,8 @@ export function BitcoinUpDownStrategy() {
       entryMinP: Math.max(0.5, Math.min(0.999, Number(signalMinC) / 100)),
       entryMaxP: Math.max(0.5, Math.min(0.999, Number(signalMaxC) / 100)),
       stopLossTriggerPriceP: Math.max(0.01, Math.min(0.99, Number(backtestSlC) / 100)),
+      entryForbiddenFirstMin: backtestForbidFirstMin,
+      entryForbiddenLastMin: backtestForbidLastMin,
     },
   });
 
@@ -253,10 +276,21 @@ export function BitcoinUpDownStrategy() {
       window.localStorage.setItem(STORAGE_BACKTEST_15M_MAX_STAKE_EUR, String(backtestMaxStakeEur));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_WINDOW_DAYS, String(backtestWindowDays));
       window.localStorage.setItem(STORAGE_BACKTEST_15M_REINVEST, backtestReinvestMaxStake ? '1' : '0');
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_FORBID_FIRST_MIN, String(backtestForbidFirstMin));
+      window.localStorage.setItem(STORAGE_BACKTEST_15M_FORBID_LAST_MIN, String(backtestForbidLastMin));
     } catch {
       /* ignore */
     }
-  }, [signalMinC, signalMaxC, backtestSlC, backtestMaxStakeEur, backtestWindowDays, backtestReinvestMaxStake]);
+  }, [
+    signalMinC,
+    signalMaxC,
+    backtestSlC,
+    backtestMaxStakeEur,
+    backtestWindowDays,
+    backtestReinvestMaxStake,
+    backtestForbidFirstMin,
+    backtestForbidLastMin,
+  ]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -761,8 +795,9 @@ export function BitcoinUpDownStrategy() {
                     </p>
                   ) : null}
                   <p className="strat-metric-card__sub" style={{ marginTop: 6 }}>
-                    Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot) et le SL de simulation. En mode live, cela
-                    recharge les données et recalcule le tableau 15m.
+                    Modifie la bande d’entrée simulée (défaut 77–78¢, alignée bot), le SL et les minutes interdites
+                    début/fin de quart (ET). En mode live, clique <strong>Recalculer</strong> pour recharger les données et
+                    mettre à jour le tableau 15m.
                   </p>
                   {backtestSignalDwellActive ? (
                     <p className="strat-metric-card__sub strat-muted-tight" style={{ marginTop: 4, fontSize: 12.5, lineHeight: 1.45 }}>
@@ -859,6 +894,52 @@ export function BitcoinUpDownStrategy() {
                     >
                       Reset 500 €
                     </button>
+                    <label className="strat-label-inline" title="Minutes en début de chaque quart d’heure ET (:00,:15,:30,:45) sans entrée simulée">
+                      <span>Interdit début (min)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="14"
+                        step="1"
+                        value={backtestForbidFirstMin}
+                        onChange={(e) => setBacktestForbidFirstMin(clampForbidMinuteInput(e.target.value))}
+                        className="input-strat-compact"
+                      />
+                    </label>
+                    <label className="strat-label-inline" title="Minutes en fin de chaque quart d’heure ET sans entrée simulée">
+                      <span>Interdit fin (min)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="14"
+                        step="1"
+                        value={backtestForbidLastMin}
+                        onChange={(e) => setBacktestForbidLastMin(clampForbidMinuteInput(e.target.value))}
+                        className="input-strat-compact"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBacktestForbidFirstMin(DEFAULT_FORBID_FIRST_MIN);
+                        setBacktestForbidLastMin(DEFAULT_FORBID_LAST_MIN);
+                      }}
+                      className="btn btn--xs btn--outline"
+                      title="Même grille que le bot déployé (début + fin de quart, ET)"
+                    >
+                      Grille bot ({DEFAULT_FORBID_FIRST_MIN}+{DEFAULT_FORBID_LAST_MIN} min)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBacktestForbidFirstMin(0);
+                        setBacktestForbidLastMin(0);
+                      }}
+                      className="btn btn--xs btn--outline"
+                      title="Aucune exclusion horaire (test de stratégie)"
+                    >
+                      Sans fenêtre ET (0+0)
+                    </button>
                     <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--xs btn--outline">
                       Recalculer
                     </button>
@@ -945,8 +1026,9 @@ export function BitcoinUpDownStrategy() {
             </span>
           </div>
           <p className="strat-results-desc">
-            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les 6 premières
-            minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).{' '}
+            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les{' '}
+            <strong>{backtestForbidFirstMin}</strong> premières minutes ET de chaque quart (:00–:15–:30–:45) ni les{' '}
+            <strong>{backtestForbidLastMin}</strong> dernières (réglables ci-dessus ; défaut = grille bot).{' '}
             Données historiques CLOB. Même moteur que les scripts{' '}
             <code className="strat-code-inline">npm run recalc:day-16h</code> /{' '}
             <code className="strat-code-inline">recalc-today-15m-pnl.mjs</code> (fonction{' '}
@@ -997,7 +1079,8 @@ export function BitcoinUpDownStrategy() {
                       </li>
                       <li>
                         <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
-                        les <strong>6 premières</strong> et les <strong>4 dernières</strong> minutes de chaque quart d’heure
+                        les <strong>{backtestForbidFirstMin} premières</strong> et les{' '}
+                        <strong>{backtestForbidLastMin} dernières</strong> minutes de chaque quart d’heure
                         local <strong>America/New_York</strong> (:00, :15, :30, :45). Le stop-loss, lui, n’est pas bloqué par
                         cette grille.
                       </li>
