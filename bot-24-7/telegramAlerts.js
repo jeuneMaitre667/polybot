@@ -26,6 +26,11 @@ export function telegramBalanceDigestMs() {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/** Résumé quotidien minuit → midi (ordres, WR, séries). Désactivable : ALERT_TELEGRAM_MIDDAY_DIGEST=false */
+export function telegramMiddayDigestEnabled() {
+  return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_MIDDAY_DIGEST === 'true';
+}
+
 function chunkText(text) {
   const s = String(text || '');
   if (s.length <= MAX_CHUNK) return [s];

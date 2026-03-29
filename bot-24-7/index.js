@@ -33,7 +33,16 @@ import {
   telegramRedeemAlertsEnabled,
   telegramBalanceDigestMs,
   telegramAlertsConfigured,
+  telegramMiddayDigestEnabled,
 } from './telegramAlerts.js';
+import {
+  computeMiddayDigestStats,
+  formatMiddayDigestMessage,
+  getMidnightToNoonWindowMs,
+  readOrdersLogSafe,
+  getCalendarDateYmd,
+  getLocalHourMinute,
+} from './middayDigest.js';
 import { get15mSlotEntryTimingDetail, is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
@@ -69,6 +78,10 @@ const SIGNAL_DECISION_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'signal-decision
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
 /** `conditionId` déjà redeemés avec succès (évite de retenter indéfiniment ; remplit le bot au fil des trades). */
 const REDEEMED_CONDITION_IDS_FILE = path.join(BOT_DIR, 'redeemed-condition-ids.json');
+const MIDDAY_DIGEST_LAST_FILE = path.join(BOT_DIR, 'midday-digest-last.json');
+const TELEGRAM_MIDDAY_DIGEST_TZ = (process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris').trim();
+const TELEGRAM_MIDDAY_DIGEST_HOUR = Math.max(0, Math.min(23, Number(process.env.TELEGRAM_MIDDAY_DIGEST_HOUR) || 12));
+const TELEGRAM_MIDDAY_DIGEST_MINUTE = Math.max(0, Math.min(59, Number(process.env.TELEGRAM_MIDDAY_DIGEST_MINUTE) || 0));
 const BALANCE_HISTORY_MAX = 500;
 const LIQUIDITY_HISTORY_DAYS = 3;
 const TRADE_LATENCY_HISTORY_DAYS = 7;
@@ -1881,6 +1894,40 @@ async function maybeTelegramBalanceDigest(balanceAfter) {
   await sendTelegramAlert(body);
 }
 
+/** Résumé Telegram minuit → midi (entrées, SL, redeems, WR, séries). */
+async function tryMiddayDigest() {
+  if (!telegramMiddayDigestEnabled()) return;
+  const tz = TELEGRAM_MIDDAY_DIGEST_TZ;
+  const { hour, minute } = getLocalHourMinute(tz);
+  if (hour !== TELEGRAM_MIDDAY_DIGEST_HOUR || minute !== TELEGRAM_MIDDAY_DIGEST_MINUTE) return;
+  const todayYmd = getCalendarDateYmd(tz);
+  let lastSent = '';
+  try {
+    const j = JSON.parse(fs.readFileSync(MIDDAY_DIGEST_LAST_FILE, 'utf8'));
+    lastSent = String(j?.date || '').trim();
+  } catch (_) {}
+  if (lastSent === todayYmd) return;
+  const win = getMidnightToNoonWindowMs(tz, todayYmd);
+  if (!win) return;
+  const raw = readOrdersLogSafe(ORDERS_LOG_FILE);
+  const stats = computeMiddayDigestStats(raw, win.startMs, win.endMs);
+  const msg = formatMiddayDigestMessage(stats, {
+    timeZone: tz,
+    dateStr: todayYmd,
+    windowLabel: '00h00–12h00',
+  });
+  await sendTelegramAlert(msg);
+  try {
+    fs.writeFileSync(
+      MIDDAY_DIGEST_LAST_FILE,
+      JSON.stringify({ date: todayYmd, sentAt: new Date().toISOString() }, null, 0) + '\n',
+      'utf8',
+    );
+  } catch (e) {
+    console.warn('[midday-digest] écriture état impossible:', e?.message || e);
+  }
+}
+
 /** Pas de trade si l’événement se termine dans moins d’une minute. */
 /** Normalise un conditionId en bytes32 (0x + 64 hex). Retourne null si invalide. */
 function conditionIdToBytes32(cid) {
@@ -2513,6 +2560,14 @@ async function tryRedeemResolvedPositions() {
             hash: result.transactionHash,
             viaRelayer: true,
           });
+          appendOrderLog({
+            at: new Date().toISOString(),
+            event: 'resolution_redeem',
+            outcome: 'win',
+            conditionId: cid,
+            viaRelayer: true,
+            transactionHash: result.transactionHash,
+          });
         } else {
           noteRedeemFailureBackoff(cid);
           let detail =
@@ -2550,6 +2605,14 @@ async function tryRedeemResolvedPositions() {
           logJson('info', 'Redeem positions OK', { conditionId: cid.slice(0, 18) + '…', hash: receipt.hash });
           console.log(`[${new Date().toISOString()}] Redeem OK — conditionId ${cid.slice(0, 14)}… — tx ${receipt.hash}`);
           await notifyTelegramRedeemEvent({ ok: true, conditionId: cid, hash: receipt.hash, viaRelayer: false });
+          appendOrderLog({
+            at: new Date().toISOString(),
+            event: 'resolution_redeem',
+            outcome: 'win',
+            conditionId: cid,
+            viaRelayer: false,
+            transactionHash: receipt.hash,
+          });
         } else {
           noteRedeemFailureBackoff(cid);
           await notifyTelegramRedeemFailureOnce(cid, {
@@ -5173,6 +5236,14 @@ async function main() {
       void runStopLossPass();
     }, STOP_LOSS_FAST_INTERVAL_MS);
     console.log(`Stop-loss fast loop: activée (${STOP_LOSS_FAST_INTERVAL_MS} ms, indépendante du poll).`);
+  }
+  if (telegramMiddayDigestEnabled()) {
+    setInterval(() => {
+      void tryMiddayDigest();
+    }, 25_000);
+    console.log(
+      `Résumé Telegram midi : activé (${TELEGRAM_MIDDAY_DIGEST_TZ}, ${String(TELEGRAM_MIDDAY_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDDAY_DIGEST_MINUTE).padStart(2, '0')} — ALERT_TELEGRAM_MIDDAY_DIGEST=true).`
+    );
   }
   for (;;) {
     try {
