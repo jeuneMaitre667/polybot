@@ -542,7 +542,7 @@ const FETCH_SIGNALS_CACHE_MS = Math.max(
 const stopLossFastIntervalMsRaw = Number(process.env.STOP_LOSS_FAST_INTERVAL_MS);
 const STOP_LOSS_FAST_INTERVAL_MS = Math.max(
   0,
-  Number.isFinite(stopLossFastIntervalMsRaw) ? stopLossFastIntervalMsRaw : 500
+  Number.isFinite(stopLossFastIntervalMsRaw) ? stopLossFastIntervalMsRaw : 150
 );
 /** Priorise l'entrée en position: reporte les relevés de liquidité lourds si un signal est présent. */
 const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
@@ -566,6 +566,15 @@ const stopLossRetryBackoffMsRaw = Number(process.env.STOP_LOSS_RETRY_BACKOFF_MS)
 const STOP_LOSS_RETRY_BACKOFF_MS = Math.max(
   0,
   Number.isFinite(stopLossRetryBackoffMsRaw) ? stopLossRetryBackoffMsRaw : 20_000
+);
+/** Retries FAK dans le même passage après « no match » / non rempli, avec bid rafraîchi. 0 = une seule tentative. */
+const STOP_LOSS_IMMEDIATE_RETRY_MAX = Math.max(
+  0,
+  Math.min(15, Number(process.env.STOP_LOSS_IMMEDIATE_RETRY_MAX) || 3)
+);
+const STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS = Math.max(
+  0,
+  Number(process.env.STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS) || 50
 );
 /** Retry du reliquat après un SL partiellement rempli (SELL FAK). */
 const stopLossPartialRetryEnabled = process.env.STOP_LOSS_PARTIAL_RETRY !== 'false';
@@ -2006,102 +2015,125 @@ async function tryStopLossForOpenPosition(clobClient) {
     }
 
     const minWorstPriceForValidTakerP = minRawAmount / (tokensToSell * 1e6); // makerRaw * priceRaw >= 1
-    let worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
-    // Contrainte logique : en stop-loss, le worst acceptable ne devrait pas dépasser le seuil de déclenchement.
-    worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
-    // SELL : le « worst price » est le plancher de vente. S’il reste au-dessus du best bid (ex. seuil 60¢
-    // alors que le carnet est déjà à 59¢), FAK ne trouve aucun contrepartie → « no orders found to match ».
-    // On aligne donc sur le best bid observé au moment du déclenchement pour permettre le match immédiat.
-    if (Number.isFinite(bestBid) && bestBid > 0 && bestBid < 1) {
-      const beforeFollow = worstPricePUsed;
-      worstPricePUsed = Math.min(worstPricePUsed, bestBid);
-      if (beforeFollow > bestBid + 1e-9) {
-        logJson('info', 'Stop-loss: worst price aligné sur bestBid (évite FAK sans match)', {
+
+    let bestBidLive = bestBid;
+    let drawdownPctLive = drawdownPct;
+    let worstPricePUsed = 0;
+    let exitFilledOk = false;
+    let result;
+    let fill;
+    let clobResponse;
+    let totalFilledTokens = 0;
+    let totalFilledUsdc = 0;
+    let remainingTokens = 0;
+    let lastResult;
+    let lastClobResponse;
+    let stopLossPartialFillRetries = 0;
+    /** Début de la vague de tentatives SL (logs / métriques « filled »). */
+    let stopLossTriggeredAtMs = Date.now();
+
+    for (let immediateAttempt = 0; immediateAttempt <= STOP_LOSS_IMMEDIATE_RETRY_MAX; immediateAttempt++) {
+      if (immediateAttempt > 0) {
+        if (STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS > 0) {
+          await sleep(STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS);
+        }
+        const freshBid = await getBestBid(tokenId);
+        if (!(freshBid > 0 && freshBid < 1)) {
+          logJson('warn', 'Stop-loss: retry immédiat — bestBid indisponible', {
+            conditionId: conditionId.slice(0, 18) + '…',
+            attempt: immediateAttempt + 1,
+          });
+          break;
+        }
+        bestBidLive = freshBid;
+        drawdownPctLive = ((bestBidLive - entryPriceP) / entryPriceP) * 100;
+      }
+
+      worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
+      worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
+      if (Number.isFinite(bestBidLive) && bestBidLive > 0 && bestBidLive < 1) {
+        const beforeFollow = worstPricePUsed;
+        worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
+        if (beforeFollow > bestBidLive + 1e-9) {
+          logJson('info', 'Stop-loss: worst price aligné sur bestBid (évite FAK sans match)', {
+            conditionId: conditionId.slice(0, 18) + '…',
+            attempt: immediateAttempt + 1,
+            worstBefore: Math.round(beforeFollow * 1e6) / 1e6,
+            bestBid: Math.round(bestBidLive * 1e6) / 1e6,
+            worstAfter: Math.round(worstPricePUsed * 1e6) / 1e6,
+          });
+        }
+      }
+      worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
+      const rawTakerLoop = tokensToSell * worstPricePUsed * 1e6;
+      if (!(rawTakerLoop >= minRawAmount)) {
+        logJson('warn', 'Stop-loss: impossible d’obtenir un taker > 0 raw', {
           conditionId: conditionId.slice(0, 18) + '…',
-          worstBefore: Math.round(beforeFollow * 1e6) / 1e6,
-          bestBid: Math.round(bestBid * 1e6) / 1e6,
-          worstAfter: Math.round(worstPricePUsed * 1e6) / 1e6,
+          takeSide,
+          tokensToSell,
+          worstPricePUsed,
+          attempt: immediateAttempt + 1,
+        });
+        stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+        return;
+      }
+      if (rawMaker < minRawSafe || rawTakerLoop < minRawSafe) {
+        logJson('warn', 'Stop-loss: montants raw trop faibles pour le CLOB (éviter 400 invalid amounts)', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          takeSide,
+          attempt: immediateAttempt + 1,
+        });
+        stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+        return;
+      }
+
+      if (immediateAttempt === 0) {
+        if (!stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+          stopLossFirstTriggeredAtByCondition.set(conditionId, stopLossTriggeredAtMs);
+          recordStopLossMetric('triggered', { conditionId, takeSide });
+        }
+        void notifyTelegramStopLossTriggered({
+          conditionId,
+          takeSide,
+          triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+          entryPriceP,
+          bestBidP: bestBidLive,
+          drawdownPct: drawdownPctLive,
+          stopLossTriggerPriceP,
+          stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? Math.abs(stopLossMaxDrawdownPct) : null,
+          stopLossWorstPricePUsed: worstPricePUsed,
         });
       }
-    }
-    worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
-    const rawTaker = tokensToSell * worstPricePUsed * 1e6; // taker = USDC.e reçu côté SELL
-    if (!(rawTaker >= minRawAmount)) {
-      logJson('warn', 'Stop-loss: impossible d’obtenir un taker > 0 raw', {
-        conditionId: conditionId.slice(0, 18) + '…',
-        takeSide,
-        tokensToSell,
-        worstPricePUsed,
-        rawTaker: Math.round(rawTaker * 1000) / 1000,
-        stopLossWorstPriceP,
-      });
-      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
-      return;
-    }
-    if (rawMaker < minRawSafe || rawTaker < minRawSafe) {
-      logJson('warn', 'Stop-loss: montants raw trop faibles pour le CLOB (éviter 400 invalid amounts)', {
-        conditionId: conditionId.slice(0, 18) + '…',
-        takeSide,
-        tokensToSell,
-        rawMaker: Math.round(rawMaker * 1000) / 1000,
-        rawTaker: Math.round(rawTaker * 1000) / 1000,
-        worstPricePUsed,
-      });
-      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
-      return;
-    }
 
-    const userMarketOrder = {
-      tokenID: tokenId,
-      amount: tokensToSell,
-      side: Side.SELL,
-      price: worstPricePUsed,
-    };
+      const userMarketOrder = {
+        tokenID: tokenId,
+        amount: tokensToSell,
+        side: Side.SELL,
+        price: worstPricePUsed,
+      };
 
-    // Notification dédiée : on prévient quand le stop-loss est déclenché (pas à chaque retry),
-    // avant de tenter l'ordre CLOB.
-    // Ne pas bloquer la boucle bot (Telegram peut être lent).
-    const stopLossTriggeredAtMs = Date.now();
-    if (!stopLossFirstTriggeredAtByCondition.has(conditionId)) {
-      stopLossFirstTriggeredAtByCondition.set(conditionId, stopLossTriggeredAtMs);
-      recordStopLossMetric('triggered', { conditionId, takeSide });
-    }
-    void notifyTelegramStopLossTriggered({
-      conditionId,
-      takeSide,
-      triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
-      entryPriceP,
-      bestBidP: bestBid,
-      drawdownPct,
-      stopLossTriggerPriceP,
-      stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? Math.abs(stopLossMaxDrawdownPct) : null,
-      stopLossWorstPricePUsed: worstPricePUsed,
-    });
+      const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
+      result = await clobClient.postOrder(signedOrder, marketOrderType);
+      fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+      clobResponse = serializeClobPostOrderResponseForLog(result);
+      const firstFilledTokens = Number(fill?.filledOutcomeTokens);
+      const firstFilledUsdc = Number(fill?.filledUsdc);
+      exitFilledOk =
+        Number.isFinite(firstFilledTokens) &&
+        firstFilledTokens > 0 &&
+        Number.isFinite(firstFilledUsdc) &&
+        firstFilledUsdc > 0;
 
-    const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
-    let result = await clobClient.postOrder(signedOrder, marketOrderType);
-    let fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
-    let clobResponse = serializeClobPostOrderResponseForLog(result);
-    const nowIso = new Date().toISOString();
-    const firstFilledTokens = Number(fill?.filledOutcomeTokens);
-    const firstFilledUsdc = Number(fill?.filledUsdc);
-    let exitFilledOk =
-      Number.isFinite(firstFilledTokens) &&
-      firstFilledTokens > 0 &&
-      Number.isFinite(firstFilledUsdc) &&
-      firstFilledUsdc > 0;
+      totalFilledTokens = exitFilledOk ? firstFilledTokens : 0;
+      totalFilledUsdc = exitFilledOk ? firstFilledUsdc : 0;
+      remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
+      lastResult = result;
+      lastClobResponse = clobResponse;
 
-    let totalFilledTokens = exitFilledOk ? firstFilledTokens : 0;
-    let totalFilledUsdc = exitFilledOk ? firstFilledUsdc : 0;
-    let remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
-    let lastResult = result;
-    let lastClobResponse = clobResponse;
-    let stopLossPartialFillRetries = 0;
-
-    if (!exitFilledOk && isInsufficientBalanceOrAllowanceError(fill?.clobErrorMsg || clobResponse?.error || clobResponse?.status)) {
-      const refreshedSpendable = await getOutcomeSpendableViaClob(clobClient, tokenId);
-      const retryAmount = resolveSellAmountFromSpendable(tokensToSell, refreshedSpendable, 0.00001);
-      if (Number.isFinite(retryAmount) && retryAmount > 0 && retryAmount < tokensToSell) {
+      if (!exitFilledOk && isInsufficientBalanceOrAllowanceError(fill?.clobErrorMsg || clobResponse?.error || clobResponse?.status)) {
+        const refreshedSpendable = await getOutcomeSpendableViaClob(clobClient, tokenId);
+        const retryAmount = resolveSellAmountFromSpendable(tokensToSell, refreshedSpendable, 0.00001);
+        if (Number.isFinite(retryAmount) && retryAmount > 0 && retryAmount < tokensToSell) {
           try {
             const retrySignedOrder = await createSignedMarketOrder(clobClient, {
               tokenID: tokenId,
@@ -2112,6 +2144,8 @@ async function tryStopLossForOpenPosition(clobClient) {
             result = await clobClient.postOrder(retrySignedOrder, marketOrderType);
             fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
             clobResponse = serializeClobPostOrderResponseForLog(result);
+            lastResult = result;
+            lastClobResponse = clobResponse;
             const retryFilledTokens = Number(fill?.filledOutcomeTokens);
             const retryFilledUsdc = Number(fill?.filledUsdc);
             exitFilledOk =
@@ -2128,8 +2162,30 @@ async function tryStopLossForOpenPosition(clobClient) {
           } catch (_) {
             // on laisse le flux normal logger l'échec
           }
+        }
       }
+
+      if (exitFilledOk) {
+        break;
+      }
+
+      const errHint = fill?.clobErrorMsg ?? fill?.clobStatus ?? clobResponse?.error ?? '';
+      const errStr = String(errHint || '').toLowerCase();
+      const looksLikeNoMatch = /no orders found to match|no match found/i.test(errStr);
+      if (immediateAttempt < STOP_LOSS_IMMEDIATE_RETRY_MAX && looksLikeNoMatch) {
+        logJson('info', 'Stop-loss: retry immédiat (même passe) après FAK sans match', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          attempt: immediateAttempt + 1,
+          nextAttempt: immediateAttempt + 2,
+          errorHint: String(errHint).slice(0, 120),
+          bestBidLive: Math.round(bestBidLive * 1e6) / 1e6,
+        });
+        continue;
+      }
+      break;
     }
+
+    const nowIso = new Date().toISOString();
 
     if (exitFilledOk && stopLossPartialRetryEnabled && remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) {
       const retryStartedAt = Date.now();
@@ -2180,9 +2236,9 @@ async function tryStopLossForOpenPosition(clobClient) {
       stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
       stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
       stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
-      stopLossObservedDrawdownPct: Math.round(drawdownPct * 100) / 100,
+      stopLossObservedDrawdownPct: Math.round(drawdownPctLive * 100) / 100,
       stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
-      stopLossBestBidP: Math.round(bestBid * 1e6) / 1e6,
+      stopLossBestBidP: Math.round(bestBidLive * 1e6) / 1e6,
       stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
       marketEndMs: endMs,
       clobSignerAddress: wallet?.address ?? null,
@@ -2281,12 +2337,12 @@ async function tryStopLossForOpenPosition(clobClient) {
     logJson('warn', 'Stop-loss déclenché: sortie avant résolution', {
       conditionId: conditionId.slice(0, 18) + '…',
       takeSide,
-      drawdownPct: Math.round(drawdownPct * 100) / 100,
+      drawdownPct: Math.round(drawdownPctLive * 100) / 100,
       triggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
       maxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
       triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
       entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
-      bestBidP: Math.round(bestBid * 1e6) / 1e6,
+      bestBidP: Math.round(bestBidLive * 1e6) / 1e6,
       orderID: lastResult?.orderID ?? lastResult?.id,
       worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
       stopLossPartialFillRetries,
@@ -2295,8 +2351,8 @@ async function tryStopLossForOpenPosition(clobClient) {
     console.warn(
       `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
         triggerByPrice
-          ? `bid ${(bestBid * 100).toFixed(2)}¢ < seuil ${(stopLossTriggerPriceP * 100).toFixed(2)}¢`
-          : `drawdown ${drawdownPct.toFixed(2)}% <= -${Math.abs(stopLossMaxDrawdownPct)}%`
+          ? `bid ${(bestBidLive * 100).toFixed(2)}¢ < seuil ${(stopLossTriggerPriceP * 100).toFixed(2)}¢`
+          : `drawdown ${drawdownPctLive.toFixed(2)}% <= -${Math.abs(stopLossMaxDrawdownPct)}%`
       }`
     );
   } catch (err) {
@@ -5068,6 +5124,11 @@ async function main() {
           stopLossDrawdownEnabled ? ` OU drawdown <= -${Math.abs(stopLossMaxDrawdownPct)}%` : ''
         } | worst SELL ${(stopLossWorstPriceP * 100).toFixed(2)}¢`
       );
+      if (STOP_LOSS_IMMEDIATE_RETRY_MAX > 0) {
+        console.log(
+          `Stop-loss FAK: jusqu'à ${STOP_LOSS_IMMEDIATE_RETRY_MAX + 1} tentative(s) dans la même passe si « no match », pause ${STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS} ms (STOP_LOSS_IMMEDIATE_RETRY_MAX / STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS).`
+        );
+      }
     } else {
       console.log('Stop-loss: désactivé (STOP_LOSS_ENABLED=false).');
     }
