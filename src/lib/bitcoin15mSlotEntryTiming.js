@@ -2,8 +2,8 @@ import { POLYMARKET_DISPLAY_TZ } from './polymarketDisplayTime.js';
 
 const QUARTER_SEC = 15 * 60;
 
-/** Pas d’entrée pendant les 3 premières minutes de chaque quart d’heure **affiché ET** (:00–:02). */
-export const SLOT_15M_ENTRY_FORBID_FIRST_SEC = 3 * 60;
+/** Pas d’entrée pendant les 6 premières minutes de chaque quart d’heure **affiché ET** (:00–:05). */
+export const SLOT_15M_ENTRY_FORBID_FIRST_SEC = 6 * 60;
 /** Pas d’entrée pendant les 4 dernières minutes du quart **en ET** (:11–:14 du bloc). */
 export const SLOT_15M_ENTRY_FORBID_LAST_SEC = 4 * 60;
 

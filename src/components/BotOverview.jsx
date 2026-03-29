@@ -398,7 +398,7 @@ export function BotOverview() {
       ? String(activeLastSkipDetails.timingBlock)
       : null;
   const activeLastSkipTimingSuffix =
-    activeLastSkipTimingBlock === 'first_3min'
+    activeLastSkipTimingBlock === 'first_6min'
       ? ' · début quart ET'
       : activeLastSkipTimingBlock === 'last_4min'
         ? ' · fin quart ET'
@@ -414,7 +414,7 @@ export function BotOverview() {
   const lastTfBlock =
     lastTfDetails?.timingBlock != null ? String(lastTfDetails.timingBlock) : null;
   const lastTfTimingSuffix =
-    lastTfBlock === 'first_3min'
+    lastTfBlock === 'first_6min'
       ? ' · début quart ET'
       : lastTfBlock === 'last_4min'
         ? ' · fin quart ET'
@@ -760,7 +760,7 @@ export function BotOverview() {
                     const timingBlock = e?.timingBlock ? String(e.timingBlock) : null;
                     const timingDetail =
                       e?.reason === 'timing_forbidden' && timingBlock
-                        ? ` (${timingBlock === 'first_3min' ? 'début' : timingBlock === 'last_4min' ? 'fin' : timingBlock} quart ET)`
+                        ? ` (${timingBlock === 'first_6min' ? 'début' : timingBlock === 'last_4min' ? 'fin' : timingBlock} quart ET)`
                         : '';
                     return (
                       <div
@@ -1176,7 +1176,7 @@ export function BotOverview() {
                           Fin {formatSlotEndEt(miseMaxSlotEndSec)} · {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
                           <br />
                           <span className="mise-max-meta-sub">
-                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) : 3 premières min
+                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) : 6 premières min
                             et 4 dernières min de chaque bloc :00 / :15 / :30 / :45
                           </span>
                         </>

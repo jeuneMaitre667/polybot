@@ -1363,7 +1363,7 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
                 bidProxyOffsetP: BACKTEST_SL_BID_FROM_MID_OFFSET_P,
               },
               label:
-                'Détection ≥90¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 90–91¢ · complément 1−p · pas d’entrée 3 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
+                'Détection ≥90¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 90–91¢ · complément 1−p · pas d’entrée 6 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
             },
           };
         }

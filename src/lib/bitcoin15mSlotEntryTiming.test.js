@@ -23,7 +23,7 @@ describe('offsetSecondsInEtQuarterHour (ET)', () => {
 });
 
 describe('is15mSlotEntryTimeForbidden (grille ET :00 / :15 / :30 / :45)', () => {
-  it('interdit les ~3 premières minutes du quart (ex. 3:30:05 PM ET)', () => {
+  it('interdit les ~6 premières minutes du quart (ex. 3:30:05 PM ET)', () => {
     expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:30:05Z'))).toBe(true);
   });
 
@@ -39,8 +39,8 @@ describe('is15mSlotEntryTimeForbidden (grille ET :00 / :15 / :30 / :45)', () => 
     expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:40:00Z'))).toBe(false);
   });
 
-  it('autorise juste après les 3 premières minutes (ex. 3:33:00 PM ET)', () => {
-    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:33:00Z'))).toBe(false);
+  it('autorise juste après les 6 premières minutes (ex. 3:36:00 PM ET)', () => {
+    expect(is15mSlotEntryTimeForbidden(sec('2026-03-20T19:36:00Z'))).toBe(false);
   });
 
   it('même résultat quel que soit l’ancien 2e argument (API simplifiée)', () => {

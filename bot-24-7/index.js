@@ -3235,7 +3235,7 @@ function isInLastMinute(signal) {
 
 /**
  * Skip placement selon le mode :
- * - 15m : **même règle que le dashboard** — pas les 3 premières / 4 dernières minutes de chaque quart d’heure **ET** (:00,:15,:30,:45).
+ * - 15m : **même règle que le dashboard** — pas les 6 premières / 4 dernières minutes de chaque quart d’heure **ET** (:00,:15,:30,:45).
  * - horaire : 5 dernières minutes avant fin événement Gamma.
  */
 function shouldSkipTradeTiming(signal) {
@@ -5148,7 +5148,7 @@ async function run() {
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   console.log(
-  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'grille ET : 3 premières + 4 dernières min de chaque quart (:00,:15,:30,:45)' : '5 min avant fin'}`
+  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'grille ET : 6 premières + 4 dernières min de chaque quart (:00,:15,:30,:45)' : '5 min avant fin'}`
 );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`

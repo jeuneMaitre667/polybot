@@ -945,7 +945,7 @@ export function BitcoinUpDownStrategy() {
             </span>
           </div>
           <p className="strat-results-desc">
-            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les 3 premières
+            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les 6 premières
             minutes ET de chaque quart (:00–:15–:30–:45) ni les 4 dernières (même grille que le bot).{' '}
             Données historiques CLOB. Même moteur que les scripts{' '}
             <code className="strat-code-inline">npm run recalc:day-16h</code> /{' '}
@@ -997,7 +997,7 @@ export function BitcoinUpDownStrategy() {
                       </li>
                       <li>
                         <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
-                        les <strong>3 premières</strong> et les <strong>4 dernières</strong> minutes de chaque quart d’heure
+                        les <strong>6 premières</strong> et les <strong>4 dernières</strong> minutes de chaque quart d’heure
                         local <strong>America/New_York</strong> (:00, :15, :30, :45). Le stop-loss, lui, n’est pas bloqué par
                         cette grille.
                       </li>
