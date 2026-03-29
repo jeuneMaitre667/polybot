@@ -625,6 +625,11 @@ function getBotConfig() {
     useWebSocket: true,
     marketMode: 'hourly',
     signalPriceSource: 'gamma',
+    minSignalP: null,
+    maxSignalP: null,
+    stopLossTriggerPriceP: null,
+    entryForbiddenFirstMin: null,
+    entryForbiddenLastMin: null,
   };
   try {
     const raw = fs.readFileSync(envPath, 'utf8');
@@ -633,6 +638,11 @@ function getBotConfig() {
     let useWebSocket = true;
     let marketModeRaw = 'hourly';
     let signalPriceSourceLine = '';
+    let minSignalP = null;
+    let maxSignalP = null;
+    let stopLossTriggerPriceP = null;
+    let entryForbiddenFirstMin = null;
+    let entryForbiddenLastMin = null;
     for (const line of raw.split('\n')) {
       const t = line.replace(/#.*/, '').trim();
       if (t.startsWith('USE_MARKET_ORDER=')) {
@@ -651,6 +661,26 @@ function getBotConfig() {
       if (t.startsWith('SIGNAL_PRICE_SOURCE=')) {
         signalPriceSourceLine = t.slice('SIGNAL_PRICE_SOURCE='.length).trim().toLowerCase();
       }
+      if (t.startsWith('MIN_SIGNAL_P=')) {
+        const v = parseFloat(t.slice('MIN_SIGNAL_P='.length).trim());
+        if (Number.isFinite(v)) minSignalP = v;
+      }
+      if (t.startsWith('MAX_SIGNAL_P=')) {
+        const v = parseFloat(t.slice('MAX_SIGNAL_P='.length).trim());
+        if (Number.isFinite(v)) maxSignalP = v;
+      }
+      if (t.startsWith('STOP_LOSS_TRIGGER_PRICE_P=')) {
+        const v = parseFloat(t.slice('STOP_LOSS_TRIGGER_PRICE_P='.length).trim());
+        if (Number.isFinite(v)) stopLossTriggerPriceP = v;
+      }
+      if (t.startsWith('ENTRY_FORBIDDEN_FIRST_MIN=')) {
+        const v = parseInt(t.slice('ENTRY_FORBIDDEN_FIRST_MIN='.length).trim(), 10);
+        if (Number.isFinite(v)) entryForbiddenFirstMin = v;
+      }
+      if (t.startsWith('ENTRY_FORBIDDEN_LAST_MIN=')) {
+        const v = parseInt(t.slice('ENTRY_FORBIDDEN_LAST_MIN='.length).trim(), 10);
+        if (Number.isFinite(v)) entryForbiddenLastMin = v;
+      }
     }
     const marketMode = marketModeRaw === '15m' ? '15m' : 'hourly';
     const signalPriceSource =
@@ -659,7 +689,18 @@ function getBotConfig() {
         : marketMode === '15m'
           ? 'clob'
           : 'gamma';
-    return { useMarketOrder, pollIntervalSec, useWebSocket, marketMode, signalPriceSource };
+    return {
+      useMarketOrder,
+      pollIntervalSec,
+      useWebSocket,
+      marketMode,
+      signalPriceSource,
+      minSignalP,
+      maxSignalP,
+      stopLossTriggerPriceP,
+      entryForbiddenFirstMin,
+      entryForbiddenLastMin,
+    };
   } catch {
     return { ...defaults };
   }
@@ -905,6 +946,11 @@ const server = http.createServer((req, res) => {
           useWebSocket: config.useWebSocket,
           marketMode: config.marketMode,
           signalPriceSource: config.signalPriceSource,
+          minSignalP: config.minSignalP,
+          maxSignalP: config.maxSignalP,
+          stopLossTriggerPriceP: config.stopLossTriggerPriceP,
+          entryForbiddenFirstMin: config.entryForbiddenFirstMin,
+          entryForbiddenLastMin: config.entryForbiddenLastMin,
           ordersLast24h: stats.ordersLast24h,
           winRate: stats.winRate,
           fillExecutionStats24h: stats.fillExecutionStats24h,

@@ -46,7 +46,12 @@ import {
   getCalendarDateYmd,
   getLocalHourMinute,
 } from './middayDigest.js';
-import { get15mSlotEntryTimingDetail, is15mSlotEntryTimeForbiddenNow } from './et15mEntryTiming.js';
+import {
+  get15mSlotEntryTimingDetail,
+  is15mSlotEntryTimeForbiddenNow,
+  ENTRY_FORBID_FIRST_MIN_RESOLVED,
+  ENTRY_FORBID_LAST_MIN_RESOLVED,
+} from './et15mEntryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
   getAlignedUpDownGammaPrices,
@@ -5234,8 +5239,12 @@ async function run() {
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   console.log(
-  `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${MARKET_MODE === '15m' ? 'grille ET : 6 premières + 4 dernières min de chaque quart (:00,:15,:30,:45)' : '5 min avant fin'}`
-);
+    `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${
+      MARKET_MODE === '15m'
+        ? `grille ET : ${ENTRY_FORBID_FIRST_MIN_RESOLVED} premières + ${ENTRY_FORBID_LAST_MIN_RESOLVED} dernières min du quart (ENTRY_FORBIDDEN_*_MIN)`
+        : '5 min avant fin'
+    }`
+  );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
   );

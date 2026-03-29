@@ -1,14 +1,34 @@
 /**
- * Même règle que le dashboard (`src/lib/bitcoin15mSlotEntryTiming.js`) :
- * pas d’entrée pendant les 6 premières minutes ni les 4 dernières de chaque quart d’heure **America/New_York**.
- * Copie locale pour que le bot déployé (dossier bot-24-7 seul) ne dépende pas de `src/`.
+ * Grille ET 15m alignée sur le dashboard (`src/lib/bitcoin15mSlotEntryTiming.js`).
+ * Minutes configurables via ENTRY_FORBIDDEN_FIRST_MIN / ENTRY_FORBIDDEN_LAST_MIN (défaut 6 / 4).
  */
 
 const POLYMARKET_DISPLAY_TZ = 'America/New_York';
 const QUARTER_SEC = 15 * 60;
 
-const FORBID_FIRST_SEC = 6 * 60;
-const FORBID_LAST_SEC = 4 * 60;
+function parseForbidWindowFromEnv() {
+  const rf = process.env.ENTRY_FORBIDDEN_FIRST_MIN;
+  const rl = process.env.ENTRY_FORBIDDEN_LAST_MIN;
+  let f = rf === undefined || rf === '' ? NaN : Number(rf);
+  let l = rl === undefined || rl === '' ? NaN : Number(rl);
+  if (!Number.isFinite(f)) f = 6;
+  if (!Number.isFinite(l)) l = 4;
+  f = Math.max(0, Math.min(14, Math.round(f)));
+  l = Math.max(0, Math.min(14, Math.round(l)));
+  return {
+    forbidFirstSec: f * 60,
+    forbidLastSec: l * 60,
+    entryForbidFirstMin: f,
+    entryForbidLastMin: l,
+  };
+}
+
+const { forbidFirstSec: FORBID_FIRST_SEC, forbidLastSec: FORBID_LAST_SEC, entryForbidFirstMin, entryForbidLastMin } =
+  parseForbidWindowFromEnv();
+
+/** Minutes effectives (après clamp) — pour logs / health. */
+export const ENTRY_FORBID_FIRST_MIN_RESOLVED = entryForbidFirstMin;
+export const ENTRY_FORBID_LAST_MIN_RESOLVED = entryForbidLastMin;
 
 const etHmsFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: POLYMARKET_DISPLAY_TZ,
@@ -37,14 +57,16 @@ function offsetSecondsInEtQuarterHour(tsSec) {
 }
 
 /**
- * Retourne le détail de la règle de blocage 15m pour le timestamp donné (ET).
- * @returns {{ forbidden: boolean, block: 'first_6min' | 'last_4min' | null, offsetSec: number | null }}
+ * @returns {{ forbidden: boolean, block: 'first_window' | 'last_window' | 'whole_slot' | null, offsetSec: number | null }}
  */
 export function get15mSlotEntryTimingDetail(tsSec) {
   const o = offsetSecondsInEtQuarterHour(tsSec);
   if (o == null) return { forbidden: false, block: null, offsetSec: null };
-  if (o < FORBID_FIRST_SEC) return { forbidden: true, block: 'first_6min', offsetSec: o };
-  if (o >= QUARTER_SEC - FORBID_LAST_SEC) return { forbidden: true, block: 'last_4min', offsetSec: o };
+  if (FORBID_FIRST_SEC + FORBID_LAST_SEC >= QUARTER_SEC) {
+    return { forbidden: true, block: 'whole_slot', offsetSec: o };
+  }
+  if (o < FORBID_FIRST_SEC) return { forbidden: true, block: 'first_window', offsetSec: o };
+  if (o >= QUARTER_SEC - FORBID_LAST_SEC) return { forbidden: true, block: 'last_window', offsetSec: o };
   return { forbidden: false, block: null, offsetSec: o };
 }
 
