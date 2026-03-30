@@ -148,6 +148,10 @@ export const BACKTEST_SL_SLIPPAGE_P = Math.max(
   0,
   Math.min(0.2, Number(import.meta.env.VITE_BACKTEST_SL_SLIPPAGE_P) || 0.035)
 );
+export const BACKTEST_EXECUTION_DELAY_SEC = Math.max(
+  0,
+  Number(import.meta.env.VITE_BACKTEST_EXECUTION_DELAY_MS) || 500
+) / 1000;
 
 const EMPTY_BOT_SIM_15M = {
   botWouldTake: null,
@@ -1157,7 +1161,17 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   const settled = winner === 'Up' || winner === 'Down';
   const resolutionWin = settled ? winner === first.side : null;
   const heldSeries = first.side === 'Up' ? up : down;
-  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
+  
+  const delayedEntryTs = first.ts + BACKTEST_EXECUTION_DELAY_SEC;
+  let delayedPrice = first.price;
+  for (const point of heldSeries) {
+    if (point.t >= delayedEntryTs) {
+      delayedPrice = point.p ?? point.price;
+      break;
+    }
+  }
+
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, delayedPrice, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
   const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
   if (sl.triggered) {
@@ -1166,7 +1180,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
     return {
       botWouldTake: first.side,
       botWon: null,
-      botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
+      botEntryPrice: Math.min(0.99, delayedPrice + BACKTEST_ENTRY_SLIPPAGE_P),
       botEntryTimestamp: first.ts,
       botOrderType: 'Marché',
       botStopLossExit: true,
@@ -1183,7 +1197,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   return {
     botWouldTake: first.side,
     botWon: resolutionWin,
-    botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
+    botEntryPrice: Math.min(0.99, delayedPrice + BACKTEST_ENTRY_SLIPPAGE_P),
     botEntryTimestamp: first.ts,
     botOrderType: 'Marché',
     botStopLossExit: false,
