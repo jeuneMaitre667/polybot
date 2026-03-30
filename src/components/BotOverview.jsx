@@ -4,7 +4,10 @@ import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
 import { TradeHistory } from '@/components/TradeHistory.jsx';
 import { formatBitcoin15mSlotRangeEt, formatLiveClockEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
-import { isLive15mEntryForbiddenNow } from '@/lib/bitcoin15mSlotEntryTiming.js';
+import {
+  is15mSlotEntryTimeForbiddenWithWindows,
+  normalizeForbidWindowMinutes,
+} from '@/lib/bitcoin15mSlotEntryTiming.js';
 import {
   ORDER_BOOK_MARKET_WORST_P,
   ORDER_BOOK_SIGNAL_MAX_P,
@@ -308,6 +311,8 @@ export function BotOverview() {
     bestAskDownP: miseMaxBestAskDown,
     bestAskLiveUpP: miseMaxBestAskLiveUp,
     bestAskLiveDownP: miseMaxBestAskLiveDown,
+    bestBidLiveUpP: miseMaxBestBidLiveUp,
+    bestBidLiveDownP: miseMaxBestBidLiveDown,
     levelsBandUp: miseMaxLevelsBandUp,
     levelsBandDown: miseMaxLevelsBandDown,
     liquidityToWorstUpUsd: miseMaxLiqWorstUp,
@@ -325,7 +330,36 @@ export function BotOverview() {
     miseMaxSlotEndSec != null && Number.isFinite(miseMaxSlotEndSec)
       ? miseMaxSlotEndSec - miseMaxNowSec
       : null;
-  const miseMaxEntryForbiddenEt = isLive15mEntryForbiddenNow(nowMs);
+  /** Aligné sur le bot : API bot-status puis Vite puis défaut 0/0 (même logique que `normalizeForbidWindowMinutes`). */
+  const live15mForbidWindowSec = useMemo(() => {
+    const apiF = data15m?.entryForbiddenFirstMin;
+    const apiL = data15m?.entryForbiddenLastMin;
+    const envF = import.meta.env.VITE_ENTRY_FORBIDDEN_FIRST_MIN;
+    const envL = import.meta.env.VITE_ENTRY_FORBIDDEN_LAST_MIN;
+    const f =
+      apiF != null && Number.isFinite(Number(apiF))
+        ? Number(apiF)
+        : envF !== undefined && String(envF).trim() !== '' && Number.isFinite(Number(envF))
+          ? Number(envF)
+          : NaN;
+    const l =
+      apiL != null && Number.isFinite(Number(apiL))
+        ? Number(apiL)
+        : envL !== undefined && String(envL).trim() !== '' && Number.isFinite(Number(envL))
+          ? Number(envL)
+          : NaN;
+    return normalizeForbidWindowMinutes(f, l);
+  }, [data15m?.entryForbiddenFirstMin, data15m?.entryForbiddenLastMin]);
+  const miseMaxEntryForbiddenEt = useMemo(() => {
+    if (!Number.isFinite(nowMs)) return false;
+    return is15mSlotEntryTimeForbiddenWithWindows(
+      Math.floor(nowMs / 1000),
+      live15mForbidWindowSec.forbidFirstSec,
+      live15mForbidWindowSec.forbidLastSec,
+    );
+  }, [nowMs, live15mForbidWindowSec]);
+  const miseMaxForbidFirstMinUi = Math.round(live15mForbidWindowSec.forbidFirstSec / 60);
+  const miseMaxForbidLastMinUi = Math.round(live15mForbidWindowSec.forbidLastSec / 60);
   const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt, nowMs);
   const botLiqSignalUsd =
     data15m?.liquidityStats24h?.lastUsd ?? data15m?.liquidityStats?.lastUsd ?? null;
@@ -453,6 +487,8 @@ export function BotOverview() {
     auto_place_disabled: 'Autotrade désactivé',
     kill_switch: 'Kill switch',
     wallet_not_configured: 'Wallet non configuré',
+    stop_loss_price: 'SL touché (best bid < seuil)',
+    stop_loss_drawdown: 'SL touché (drawdown max)',
   };
 
   const activePosition15m = useMemo(() => {
@@ -501,6 +537,24 @@ export function BotOverview() {
     miseMaxBestAskLiveDown,
     miseMaxBestAskDown,
   ]);
+
+  /** Seuil SL exposé par le bot (API) — même comparaison que le bot : best bid < seuil. */
+  const botSlTriggerP = useMemo(() => {
+    const p = data15m?.stopLossTriggerPriceP;
+    if (p == null || !Number.isFinite(Number(p))) return null;
+    return Number(p);
+  }, [data15m?.stopLossTriggerPriceP]);
+
+  /** Carnet navigateur : bids Up/Down vs seuil — visible même sans position (pas de ligne `stop_loss_touched_watch` dans bot.log). */
+  const slZoneCarnetLive = useMemo(() => {
+    if (!show15m || botSlTriggerP == null) return null;
+    const bu = miseMaxBestBidLiveUp;
+    const bd = miseMaxBestBidLiveDown;
+    if (bu == null && bd == null) return null;
+    const upTouch = bu != null && bu < botSlTriggerP;
+    const downTouch = bd != null && bd < botSlTriggerP;
+    return { bu, bd, upTouch, downTouch };
+  }, [show15m, botSlTriggerP, miseMaxBestBidLiveUp, miseMaxBestBidLiveDown]);
 
   const bestAskCount = activeLatencyBreakdown?.all?.bestAsk?.count ?? 0;
   const credsCount = activeLatencyBreakdown?.all?.creds?.count ?? 0;
@@ -733,20 +787,36 @@ export function BotOverview() {
             <div className="overview-watch-column">
               <div className="overview-watch-card__title">Watch no-order (live)</div>
               <p className="overview-watch-card__hint">
-                <strong>≠ Signaux live</strong> : ici ce sont les <strong>3 dernières lignes</strong> écrites dans{' '}
-                <code className="overview-watch-code">bot.log</code> sur le <strong>serveur du bot</strong> (anti-spam ~5 s par
-                marché / raison). La colonne de droite lit le carnet CLOB <strong>depuis ton navigateur</strong> : les deux ne
-                sont pas synchronisées seconde par seconde. Souvent <strong>timing ET</strong> (début/fin de quart), pas la
-                bande 97–98¢.
+                <strong>≠ Signaux live</strong> : lignes <code className="overview-watch-code">bot.log</code> côté{' '}
+                <strong>serveur</strong> (anti-spam ~5 s). Ordre <strong>chronologique</strong> : le plus récent en haut —
+                tu peux enchaîner visuellement (ex. « montant sous minimum » puis, plus tard, « SL touché » si le bot l’a
+                loggé). Le <strong>SL le plus récent</strong> reste inclus dans la fenêtre même si beaucoup de no-order
+                arrivent entre-temps. La colonne de droite lit le carnet CLOB <strong>depuis ton navigateur</strong>.
               </p>
               {activeNoOrderEvents.length > 0 ? (
                 <div className="overview-watch-list">
                   {activeNoOrderEvents.slice(0, 3).map((e, idx) => {
                     const age = formatSecondsAgo(e?.ts, nowMs);
-                    const reason = noOrderReasonLabels[e?.reason] ?? e?.reason ?? 'unknown';
+                    const reasonKey = e?.reason != null ? String(e.reason) : '';
+                    const reason =
+                      reasonKey && noOrderReasonLabels[reasonKey] != null
+                        ? noOrderReasonLabels[reasonKey]
+                        : reasonKey || 'unknown';
                     const source = e?.source ? String(e.source).toUpperCase() : '—';
                     const side = e?.takeSide ?? '—';
+                    const isSlWatch =
+                      reasonKey === 'stop_loss_price' ||
+                      reasonKey === 'stop_loss_drawdown' ||
+                      e?.kind === 'stop_loss_watch';
                     const bestAsk = e?.bestAskP != null ? `${(Number(e.bestAskP) * 100).toFixed(2)}¢` : '—';
+                    const bestBid =
+                      e?.bestBidP != null && Number.isFinite(Number(e.bestBidP))
+                        ? `${(Number(e.bestBidP) * 100).toFixed(2)}¢`
+                        : null;
+                    const slThr =
+                      e?.stopLossTriggerPriceP != null && Number.isFinite(Number(e.stopLossTriggerPriceP))
+                        ? `${(Number(e.stopLossTriggerPriceP) * 100).toFixed(0)}¢`
+                        : null;
                     const askN = e?.bestAskP != null ? Number(e.bestAskP) : null;
                     const askInSignalBand =
                       askN != null &&
@@ -760,11 +830,18 @@ export function BotOverview() {
                     const timingBlock = e?.timingBlock ? String(e.timingBlock) : null;
                     const timingDetail =
                       e?.reason === 'timing_forbidden' && timingBlock
-                        ? ` (${timingBlock === 'first_6min' ? 'début' : timingBlock === 'last_4min' ? 'fin' : timingBlock} quart ET)`
+                        ? ` (${
+                            timingBlock === 'first_6min' ||
+                            timingBlock === 'first_window'
+                              ? 'début'
+                              : timingBlock === 'last_4min' || timingBlock === 'last_window'
+                                ? 'fin'
+                                : timingBlock
+                          } quart ET)`
                         : '';
                     return (
                       <div
-                        key={`${e?.ts || 'na'}-${idx}-${e?.fromHealthSnapshot ? 'snap' : ''}${e?.fromHealthEnriched ? 'enr' : ''}`}
+                        key={`${e?.ts || 'na'}-${idx}-${e?.kind || 'no'}-${e?.fromHealthSnapshot ? 'snap' : ''}${e?.fromHealthEnriched ? 'enr' : ''}`}
                         className="overview-watch-row"
                       >
                         <span className="overview-watch-row__main">
@@ -772,7 +849,10 @@ export function BotOverview() {
                           {timingDetail}
                         </span>
                         <span className="overview-watch-row__meta">
-                          {source} · {side} · {bestAsk}
+                          {source} · {side} ·{' '}
+                          {isSlWatch && bestBid != null
+                            ? `bid ${bestBid}${slThr != null ? ` · seuil SL ${slThr}` : ''}`
+                            : bestAsk}
                           {age ? ` · il y a ${age}` : ''}
                           {timingBandHint}
                           {e?.fromHealthSnapshot ? ' · aligné health.json' : ''}
@@ -783,7 +863,29 @@ export function BotOverview() {
                   })}
                 </div>
               ) : (
-                <div className="overview-watch-empty">Aucun événement no-order récent.</div>
+                <div className="overview-watch-empty">Aucun événement watch récent (no-order / SL).</div>
+              )}
+              {show15m && slZoneCarnetLive != null && botSlTriggerP != null && (
+                <div
+                  className="overview-watch-sl-carnet card-sub"
+                  style={{ marginTop: 10, lineHeight: 1.55 }}
+                  title="Prix de vente (best bid) sur le carnet CLOB — ton navigateur, pas le serveur du bot."
+                >
+                  <span className="overview-watch-row__main">Zone SL (carnet live · navigateur)</span>
+                  <span className="overview-watch-row__meta" style={{ display: 'block', marginTop: 4 }}>
+                    Seuil bot {formatAskCents(botSlTriggerP)} · Up bid {formatAskCents(slZoneCarnetLive.bu)} · Down bid{' '}
+                    {formatAskCents(slZoneCarnetLive.bd)}
+                    {slZoneCarnetLive.upTouch || slZoneCarnetLive.downTouch
+                      ? ' · au moins un bid < seuil (prix marché)'
+                      : ' · aucun bid sous le seuil'}
+                  </span>
+                  <span className="card-sub" style={{ display: 'block', marginTop: 6, fontSize: 12, opacity: 0.92 }}>
+                    La ligne « SL touché » du panneau (bot.log) n’existe que si le bot a une{' '}
+                    <strong>position ouverte</strong>. Sans entrée (ex. montant sous min), tu peux quand même suivre ici si le
+                    <strong> bid</strong> du marché passerait le test SL.
+                    {activePosition15m ? ' Avec position, la ligne bot et ce carnet se rapprochent.' : ''}
+                  </span>
+                </div>
               )}
             </div>
             <div className="overview-watch-column overview-watch-column--signal">
@@ -1176,8 +1278,9 @@ export function BotOverview() {
                           Fin {formatSlotEndEt(miseMaxSlotEndSec)} · {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
                           <br />
                           <span className="mise-max-meta-sub">
-                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) : 6 premières min
-                            et 4 dernières min de chaque bloc :00 / :15 / :30 / :45
+                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) :{' '}
+                            {miseMaxForbidFirstMinUi} premières min et {miseMaxForbidLastMinUi} dernières min de chaque bloc
+                            :00 / :15 / :30 / :45 (aligné API bot ou VITE_ENTRY_FORBIDDEN_*)
                           </span>
                         </>
                       ) : (

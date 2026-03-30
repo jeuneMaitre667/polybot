@@ -780,11 +780,14 @@ function mergeHealthTimingIntoNoOrderRecent(out, health, limit) {
   if (!Number.isFinite(synMs)) return cap;
   const bestAskP = Number.isFinite(Number(d.bestAskP)) ? Math.round(Number(d.bestAskP) * 1e6) / 1e6 : null;
   const synthetic = {
+    kind: 'no_order',
     ts: health.lastSkipAt,
     source: health.lastSkipSource ?? null,
     reason: 'timing_forbidden',
     takeSide: d.takeSide === 'Up' || d.takeSide === 'Down' ? d.takeSide : null,
     bestAskP,
+    bestBidP: null,
+    stopLossTriggerPriceP: null,
     conditionId: d.conditionId ?? null,
     tokenId: d.tokenId != null ? String(d.tokenId).slice(0, 32) : null,
     remainingMs: Number.isFinite(Number(d.remainingMs)) ? Math.round(Number(d.remainingMs)) : null,
@@ -824,6 +827,35 @@ function mergeHealthTimingIntoNoOrderRecent(out, health, limit) {
   return cap.slice(0, limit);
 }
 
+/** SL « watch » : quelques lignes dédiées pour ne pas être noyées sous le spam no-order (ex. already_placed). */
+const WATCH_SL_EVENTS_MAX = 3;
+const WATCH_NO_ORDER_EVENTS_MAX = 12;
+
+function watchEventTsMs(e) {
+  if (!e?.ts) return 0;
+  const ms = new Date(e.ts).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function watchEventDedupeKey(e) {
+  return `${e?.kind ?? ''}|${e?.ts ?? ''}|${e?.reason ?? ''}|${String(e?.conditionId ?? '')}`;
+}
+
+function mergeWatchSlAndNoOrderChronological(slOut, noMerged, limit) {
+  const pool = [...slOut, ...noMerged];
+  pool.sort((a, b) => watchEventTsMs(b) - watchEventTsMs(a));
+  let combined = pool.slice(0, limit);
+  /** Le SL le plus récent (slOut[0]) est collecté en premier dans le fichier → le plus récent dans le temps. */
+  const headSl = slOut.length ? slOut[0] : null;
+  if (headSl) {
+    const hid = watchEventDedupeKey(headSl);
+    if (!combined.some((e) => watchEventDedupeKey(e) === hid)) {
+      combined = [headSl, ...combined.filter((e) => watchEventDedupeKey(e) !== hid)].slice(0, limit);
+    }
+  }
+  return combined;
+}
+
 function getSignalInRangeNoOrderRecent(limit = 12) {
   const filePath = path.join(BOT_DIR, 'bot.log');
   /** bot.log JSONL peut peser des dizaines de Mo — lire seulement la fin pour ne pas bloquer /api/health si /api/bot-status tourne. */
@@ -845,31 +877,65 @@ function getSignalInRangeNoOrderRecent(limit = 12) {
     if (!raw) return [];
     const lines = raw.trim().split('\n').filter(Boolean);
     if (!lines.length) return [];
-    const out = [];
-    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+    const slOut = [];
+    const noOut = [];
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (slOut.length >= WATCH_SL_EVENTS_MAX && noOut.length >= WATCH_NO_ORDER_EVENTS_MAX) break;
       try {
         const row = JSON.parse(lines[i]);
-        if (row?.message !== 'signal_in_range_but_no_order') continue;
-        out.push({
-          ts: row?.ts ?? null,
-          source: row?.source ?? null,
-          reason: row?.reason ?? null,
-          takeSide: row?.takeSide ?? null,
-          bestAskP:
-            Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
-          conditionId: row?.conditionId ?? null,
-          tokenId: row?.tokenId ?? null,
-          remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
-          amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
-          error: row?.error ?? null,
-          timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
-          timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
-            ? Math.round(Number(row.timingOffsetSec))
-            : null,
-        });
+        const msg = row?.message;
+        if (msg === 'stop_loss_touched_watch' && slOut.length < WATCH_SL_EVENTS_MAX) {
+          slOut.push({
+            kind: 'stop_loss_watch',
+            ts: row?.ts ?? null,
+            source: row?.source ?? null,
+            reason: row?.reason ?? null,
+            takeSide: row?.takeSide ?? null,
+            bestAskP: null,
+            bestBidP:
+              Number.isFinite(Number(row?.bestBidP)) ? Math.round(Number(row.bestBidP) * 1e6) / 1e6 : null,
+            stopLossTriggerPriceP: Number.isFinite(Number(row?.stopLossTriggerPriceP))
+              ? Math.round(Number(row.stopLossTriggerPriceP) * 1e6) / 1e6
+              : null,
+            conditionId: row?.conditionId ?? null,
+            tokenId: row?.tokenId != null ? String(row.tokenId).slice(0, 64) : null,
+            entryPriceP: Number.isFinite(Number(row?.entryPriceP))
+              ? Math.round(Number(row.entryPriceP) * 1e6) / 1e6
+              : null,
+            drawdownPct: Number.isFinite(Number(row?.drawdownPct)) ? Math.round(Number(row.drawdownPct) * 100) / 100 : null,
+            remainingMs: null,
+            amountUsd: null,
+            error: null,
+            timingBlock: null,
+            timingOffsetSec: null,
+          });
+        } else if (msg === 'signal_in_range_but_no_order' && noOut.length < WATCH_NO_ORDER_EVENTS_MAX) {
+          noOut.push({
+            kind: 'no_order',
+            ts: row?.ts ?? null,
+            source: row?.source ?? null,
+            reason: row?.reason ?? null,
+            takeSide: row?.takeSide ?? null,
+            bestAskP:
+              Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
+            bestBidP: null,
+            stopLossTriggerPriceP: null,
+            conditionId: row?.conditionId ?? null,
+            tokenId: row?.tokenId ?? null,
+            remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
+            amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+            error: row?.error ?? null,
+            timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
+            timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
+              ? Math.round(Number(row.timingOffsetSec))
+              : null,
+          });
+        }
       } catch (_) {}
     }
-    return mergeHealthTimingIntoNoOrderRecent(out, getHealth(), limit);
+    const noMerged = mergeHealthTimingIntoNoOrderRecent(noOut, getHealth(), WATCH_NO_ORDER_EVENTS_MAX);
+    /** Ordre chronologique (plus récent en premier) pour comparer « montant sous min » puis SL après ; épingle le SL le plus récent s’il était évincé par le spam. */
+    return mergeWatchSlAndNoOrderChronological(slOut, noMerged, limit);
   } catch {
     return [];
   }

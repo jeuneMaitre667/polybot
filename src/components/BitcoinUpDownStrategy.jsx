@@ -368,8 +368,15 @@ export function BitcoinUpDownStrategy() {
   };
 
   const backtestResult15m = useMemo(() => {
-    /** Créneaux où la simu 15m a trouvé une entrée (fenêtre signal alignée bot / carnet, ex. 77–78 %). */
+    /** Marchés avec issue connue (hors lignes « en attente » / trous de grille). */
+    const resolvedMarkets = resolved15m.filter((r) => r.winner === 'Up' || r.winner === 'Down');
+    const resolvedMarketCount = resolvedMarkets.length;
+    /** Parmi les **287** marchés Up/Down uniquement (même dénominateur que « sans entrée »). */
+    const resolvedWithBandEntry = resolvedMarkets.filter((r) => r.botWouldTake != null).length;
+    const resolvedWithoutBandEntry = resolvedMarketCount - resolvedWithBandEntry;
+    /** Toutes les lignes data avec signal (peut inclure créneaux sans issue Up/Down encore). */
     const withSignal = resolved15m.filter((r) => r.botWouldTake != null);
+    const signalRowsNotResolvedWinner = withSignal.length - resolvedWithBandEntry;
     /** PnL uniquement sur marchés résolus (winner connu). */
     const withSimul = withSignal.filter((r) => r.winner === 'Up' || r.winner === 'Down');
     /** Ordre **chronologique** (fin de créneau croissante) : première mise = marché le plus **ancien**, dernière = le plus **récent**.
@@ -403,6 +410,8 @@ export function BitcoinUpDownStrategy() {
         stakePerTradeEur,
         reinvestMaxStake: true,
         tradeCountForMetrics: n,
+        resolvedMarketCount,
+        resolvedWithoutBandEntry,
         withSimul,
         withSignal,
         wonNet: sim.wonNet,
@@ -482,6 +491,10 @@ export function BitcoinUpDownStrategy() {
       stakePerTradeEur,
       reinvestMaxStake: false,
       tradeCountForMetrics: sortedSimul.length,
+      resolvedMarketCount,
+      resolvedWithBandEntry,
+      resolvedWithoutBandEntry,
+      signalRowsNotResolvedWinner,
       withSimul,
       withSignal,
       wonNet,
@@ -894,7 +907,10 @@ export function BitcoinUpDownStrategy() {
                     >
                       Reset 500 €
                     </button>
-                    <label className="strat-label-inline" title="Minutes en début de chaque quart d’heure ET (:00,:15,:30,:45) sans entrée simulée">
+                    <label
+                      className="strat-label-inline"
+                      title="Minutes sans entrée simulée depuis le début du créneau marché 15m (UTC, fin slug − 15 min) ; repli ET si borne de créneau absente"
+                    >
                       <span>Interdit début (min)</span>
                       <input
                         type="number"
@@ -906,7 +922,10 @@ export function BitcoinUpDownStrategy() {
                         className="input-strat-compact"
                       />
                     </label>
-                    <label className="strat-label-inline" title="Minutes en fin de chaque quart d’heure ET sans entrée simulée">
+                    <label
+                      className="strat-label-inline"
+                      title="Minutes sans entrée simulée avant la fin du créneau marché 15m (UTC) ; repli ET si borne absente"
+                    >
                       <span>Interdit fin (min)</span>
                       <input
                         type="number"
@@ -936,9 +955,9 @@ export function BitcoinUpDownStrategy() {
                         setBacktestForbidLastMin(0);
                       }}
                       className="btn btn--xs btn--outline"
-                      title="Aucune exclusion horaire (test de stratégie)"
+                      title="Aucune minute interdite sur le créneau marché 15m (UTC) ; la bande signal doit quand même être touchée"
                     >
-                      Sans fenêtre ET (0+0)
+                      Sans fenêtre (0+0)
                     </button>
                     <button type="button" onClick={refreshResolved15m} disabled={resolved15mLoading} className="btn btn--xs btn--outline">
                       Recalculer
@@ -1026,9 +1045,11 @@ export function BitcoinUpDownStrategy() {
             </span>
           </div>
           <p className="strat-results-desc">
-            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée les{' '}
-            <strong>{backtestForbidFirstMin}</strong> premières minutes ET de chaque quart (:00–:15–:30–:45) ni les{' '}
-            <strong>{backtestForbidLastMin}</strong> dernières (réglables ci-dessus ; défaut = grille bot).{' '}
+            Simulation alignée sur le bot ({SIGNAL_BAND_PCT_LABEL}, marché) — 15 min : pas d’entrée pendant les{' '}
+            <strong>{backtestForbidFirstMin}</strong> premières et les <strong>{backtestForbidLastMin}</strong> dernières
+            minutes du <strong>créneau marché</strong> (voir encadré ci-dessous ; défaut = grille bot). Le compteur
+            « entrées dans la bande » compte les créneaux où le prix a <strong>réellement</strong> visité cette bande — ce
+            n’est <strong>pas</strong> le nombre de lignes du tableau.{' '}
             Données historiques CLOB. Même moteur que les scripts{' '}
             <code className="strat-code-inline">npm run recalc:day-16h</code> /{' '}
             <code className="strat-code-inline">recalc-today-15m-pnl.mjs</code> (fonction{' '}
@@ -1078,11 +1099,20 @@ export function BitcoinUpDownStrategy() {
                         (résolution gagnante) »).
                       </li>
                       <li>
-                        <strong>Grille Eastern (ET)</strong> : pas d’entrée simulée (et le live respecte la même grille) pendant
-                        les <strong>{backtestForbidFirstMin} premières</strong> et les{' '}
-                        <strong>{backtestForbidLastMin} dernières</strong> minutes de chaque quart d’heure
-                        local <strong>America/New_York</strong> (:00, :15, :30, :45). Le stop-loss, lui, n’est pas bloqué par
-                        cette grille.
+                        <strong>Fenêtres interdites (début / fin)</strong> : dans le backtest, les minutes sont appliquées
+                        sur le <strong>créneau 15m du marché</strong> (entre <em>fin de slug − 15 min</em> et <em>fin de slug</em>,
+                        UTC), pas sur l’heure affichée ET du tableau. Ex. <strong>0 + 0</strong> = aucune exclusion
+                        temporelle sur tout le créneau ; <strong>6 + 6</strong> = entrée simulée seulement dans la fenêtre
+                        centrale (~3 min) de ce créneau UTC. Si la borne de fin de créneau manque, repli sur le quart
+                        d’heure <strong>America/New_York</strong> (comme le bot live). Le stop-loss n’est pas bloqué par cette
+                        grille.
+                      </li>
+                      <li>
+                        <strong>Bande signal</strong> : entrée si l’historique contient un passage <strong>dans</strong>{' '}
+                        {signalMinC}–{signalMaxC} %, y compris par <strong>interpolation</strong> quand deux points sautent par-
+                        dessus la bande (ex. 50 % → 99 % sans tick intermédiaire). Rappel économique : le token du côté qui{' '}
+                        <strong>perd</strong> peut descendre de ~50 % vers ~0 % <strong>sans jamais</strong> atteindre 77 % ; seul
+                        le côté qui va vers 100 % traverse mécaniquement les niveaux intermédiaires si la courbe est continue.
                       </li>
                     </ul>
                   </div>
@@ -1107,6 +1137,14 @@ export function BitcoinUpDownStrategy() {
                         {' · '}
                         {resolved15mDisplayRows.length} ligne{resolved15mDisplayRows.length !== 1 ? 's' : ''} affichée
                         {resolved15mDisplayRows.length !== 1 ? 's' : ''} (grille 15 min)
+                        {backtestResult15m.resolvedMarketCount > 0 && backtestResult15m.resolvedWithoutBandEntry > 0 ? (
+                          <>
+                            {' '}
+                            — dont <strong>{backtestResult15m.resolvedWithoutBandEntry}</strong> avec issue Up/Down mais{' '}
+                            <strong>aucun</strong> passage dans la bande {signalMinC}–{signalMaxC} % sur l’historique du créneau
+                            (ce n’est <strong>pas</strong> dû aux minutes interdites ; 0+0 n’impose pas un signal par marché).
+                          </>
+                        ) : null}
                       </span>
                     )}
                     <span className="strat-muted-tight">
@@ -1348,9 +1386,31 @@ export function BitcoinUpDownStrategy() {
                         </tbody>
                       </table>
                     </div>
+                    {backtestResult15m.resolvedMarketCount > 0 && (
+                      <p className="strat-results-foot strat-muted-tight" style={{ marginBottom: 10, lineHeight: 1.55 }}>
+                        <strong>Comptage (même dénominateur)</strong> — marchés résolus Up/Down :{' '}
+                        <strong>{backtestResult15m.resolvedWithBandEntry}</strong> avec entrée dans {signalMinC}–{signalMaxC} % ·{' '}
+                        <strong>{backtestResult15m.resolvedWithoutBandEntry}</strong> sans entrée ·{' '}
+                        <strong>{backtestResult15m.resolvedMarketCount}</strong> au total (
+                        {backtestResult15m.resolvedWithBandEntry}+{backtestResult15m.resolvedWithoutBandEntry}=
+                        {backtestResult15m.resolvedMarketCount}).{' '}
+                        {backtestResult15m.signalRowsNotResolvedWinner > 0 ? (
+                          <>
+                            Les <strong>{backtestResult15m.withSignal.length}</strong> ligne(s) data listées avec signal
+                            incluent <strong>{backtestResult15m.signalRowsNotResolvedWinner}</strong> hors marché à issue Up/Down
+                            (créneau ouvert / attente) — ne pas additionner ce nombre à « sans entrée ».
+                          </>
+                        ) : (
+                          <>
+                            Toutes les entrées signal sont sur des marchés à issue Up/Down.
+                          </>
+                        )}
+                      </p>
+                    )}
                     {backtestResult15m.withSignal.length > 0 && (
                       <p className="strat-results-foot">
-                        Simulation : <strong className="strat-text-green">{backtestResult15m.wonNet}</strong> gagnés net /{' '}
+                        Simulation :{' '}
+                        <strong className="strat-text-green">{backtestResult15m.wonNet}</strong> gagnés net /{' '}
                         <strong>{backtestResult15m.withSimul.length}</strong> créneaux résolus avec entrée (un SL simulé = une
                         perte au bilan, même si résolution gagnante) ·{' '}
                         <strong>{backtestResult15m.won}</strong> gagnés à la résolution ·{' '}
@@ -1363,6 +1423,9 @@ export function BitcoinUpDownStrategy() {
                         <strong>
                           {signalMinC}–{signalMaxC} %
                         </strong>{' '}
+                        <span className="strat-muted">
+                          (≠ lignes du tableau : il faut un passage prix dans la bande pendant le créneau)
+                        </span>{' '}
                         (CLOB + trades + complément 1−p, stop-loss hybride si activé). SL simulé :{' '}
                         <strong>proxy best bid</strong> (mid historique − offset, comme l’ordre de grandeur du bid vs mid côté bot ; pas d’historique bid tick par tick). Lien direct :{' '}
                         <code className="strat-code-inline">{`?${backtestShareQuery}`}</code>
@@ -1392,6 +1455,14 @@ export function BitcoinUpDownStrategy() {
                             </span>
                           </>
                         )}
+                      </p>
+                    )}
+                    {backtestResult15m.withSignal.length === 0 && backtestResult15m.resolvedMarketCount > 0 && (
+                      <p className="strat-results-foot strat-muted">
+                        Aucune entrée dans la bande {signalMinC}–{signalMaxC} % sur les{' '}
+                        <strong>{backtestResult15m.resolvedMarketCount}</strong> marchés résolus (Up/Down) : l’historique ne
+                        montre pas de passage dans cette bande sur ces créneaux. 0+0 (minutes interdites) ne garantit pas un
+                        signal par marché.
                       </p>
                     )}
                     <div className="strat-actions-row">

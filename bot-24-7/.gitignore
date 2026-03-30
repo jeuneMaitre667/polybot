@@ -4,6 +4,7 @@ node_modules/
 # Données générées par le bot (ne pas versionner)
 balance.json
 balance-history.json
+simulation-paper.json
 orders.log
 bot.log
 liquidity-history.json

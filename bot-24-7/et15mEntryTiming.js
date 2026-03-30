@@ -1,6 +1,6 @@
 /**
  * Grille ET 15m alignée sur le dashboard (`src/lib/bitcoin15mSlotEntryTiming.js`).
- * Minutes configurables via ENTRY_FORBIDDEN_FIRST_MIN / ENTRY_FORBIDDEN_LAST_MIN (défaut 6 / 4).
+ * Minutes configurables via ENTRY_FORBIDDEN_FIRST_MIN / ENTRY_FORBIDDEN_LAST_MIN (défaut 0 / 0 = tout le créneau).
  */
 
 const POLYMARKET_DISPLAY_TZ = 'America/New_York';
@@ -11,8 +11,8 @@ function parseForbidWindowFromEnv() {
   const rl = process.env.ENTRY_FORBIDDEN_LAST_MIN;
   let f = rf === undefined || rf === '' ? NaN : Number(rf);
   let l = rl === undefined || rl === '' ? NaN : Number(rl);
-  if (!Number.isFinite(f)) f = 6;
-  if (!Number.isFinite(l)) l = 4;
+  if (!Number.isFinite(f)) f = 0;
+  if (!Number.isFinite(l)) l = 0;
   f = Math.max(0, Math.min(14, Math.round(f)));
   l = Math.max(0, Math.min(14, Math.round(l)));
   return {

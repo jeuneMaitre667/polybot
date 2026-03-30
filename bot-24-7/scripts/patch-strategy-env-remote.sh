@@ -19,7 +19,7 @@ upsert MIN_SIGNAL_P 0.77
 upsert MAX_SIGNAL_P 0.78
 upsert MAX_PRICE_LIQUIDITY 0.78
 upsert STOP_LOSS_TRIGGER_PRICE_P 0.57
-upsert ENTRY_FORBIDDEN_FIRST_MIN 10
+upsert ENTRY_FORBIDDEN_FIRST_MIN 0
 upsert ENTRY_FORBIDDEN_LAST_MIN 0
 
 echo "Stratégie appliquée (mise inchangée)."

@@ -86,6 +86,19 @@ export function getBestAskPriceFromRawAsks(asks) {
   return min === Infinity ? null : min;
 }
 
+/** Même schéma de niveaux que les asks ; meilleur **bid** (prix le plus haut avec taille > 0) — aligné bot SL (`getBestBid`). */
+export function getBestBidPriceFromRawBids(bids) {
+  if (!Array.isArray(bids)) return null;
+  let max = -Infinity;
+  for (const level of bids) {
+    const p = parseAskLevelPrice(level);
+    const s = parseAskLevelSize(level);
+    if (!Number.isFinite(p) || !Number.isFinite(s) || s <= 0) continue;
+    if (p > max) max = p;
+  }
+  return max === -Infinity ? null : max;
+}
+
 /**
  * Nombre de niveaux d’asks dans [minP, maxP] avec taille > 0.
  */

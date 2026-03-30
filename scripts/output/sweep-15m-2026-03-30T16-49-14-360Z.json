@@ -1,0 +1,1277 @@
+{
+  "generatedAt": "2026-03-30T16:49:33.505Z",
+  "windowHours": 72,
+  "fetchSeconds": 18.1,
+  "simTotalSeconds": 0.54,
+  "preSimRows": 287,
+  "initialBalance": 20,
+  "maxStakeEur": 500,
+  "minTradesFilter": 8,
+  "rankBy": "pnl",
+  "grids": {
+    "mins": [
+      77,
+      78
+    ],
+    "maxs": [
+      78,
+      79
+    ],
+    "sls": [
+      58,
+      60
+    ],
+    "forbidFirst": [
+      0,
+      6
+    ],
+    "forbidLast": [
+      0,
+      4
+    ]
+  },
+  "topRanked": [
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 202
+      },
+      "trades": 202,
+      "winRateNetPct": 70.3,
+      "winRateResolutionPct": 67.3,
+      "pnl": 5959.966133167705,
+      "capital": 5979.966133167705,
+      "slCount": 60,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 586.1139835222281
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 202
+      },
+      "trades": 202,
+      "winRateNetPct": 69.8,
+      "winRateResolutionPct": 65.3,
+      "pnl": 5776.643103629789,
+      "capital": 5796.643103629789,
+      "slCount": 64,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 586.7329685281337
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.7,
+      "winRateResolutionPct": 67.1,
+      "pnl": 5652.585014690754,
+      "capital": 5672.585014690754,
+      "slCount": 53,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 480.2282400830274
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.1,
+      "winRateResolutionPct": 65.3,
+      "pnl": 5623.82874427137,
+      "capital": 5643.82874427137,
+      "slCount": 56,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 478.619746932706
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 162
+      },
+      "trades": 162,
+      "winRateNetPct": 73.5,
+      "winRateResolutionPct": 71,
+      "pnl": 5498.93526587094,
+      "capital": 5518.93526587094,
+      "slCount": 45,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 421.8233638546566
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 194
+      },
+      "trades": 194,
+      "winRateNetPct": 73.2,
+      "winRateResolutionPct": 70.6,
+      "pnl": 5437.818386295578,
+      "capital": 5457.818386295578,
+      "slCount": 52,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 503.2282721379387
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 194
+      },
+      "trades": 194,
+      "winRateNetPct": 73.2,
+      "winRateResolutionPct": 69.1,
+      "pnl": 5391.66502935879,
+      "capital": 5411.66502935879,
+      "slCount": 55,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 506.48642779747655
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 162
+      },
+      "trades": 162,
+      "winRateNetPct": 72.8,
+      "winRateResolutionPct": 69.1,
+      "pnl": 5297.76049269541,
+      "capital": 5317.76049269541,
+      "slCount": 48,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 420.05864819457173
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.7,
+      "winRateResolutionPct": 68.3,
+      "pnl": 5294.828546565919,
+      "capital": 5314.828546565919,
+      "slCount": 51,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 463.12133081349225
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.1,
+      "winRateResolutionPct": 66.5,
+      "pnl": 5197.506320545483,
+      "capital": 5217.506320545483,
+      "slCount": 54,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 461.2520622098006
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 201
+      },
+      "trades": 201,
+      "winRateNetPct": 69.7,
+      "winRateResolutionPct": 64.7,
+      "pnl": 4144.930348605814,
+      "capital": 4164.930348605814,
+      "slCount": 64,
+      "resolutionLossNoSl": 7,
+      "maxDrawdown": 0.911071013774997,
+      "feesPaid": 558.2305881170167
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 180
+      },
+      "trades": 180,
+      "winRateNetPct": 73.9,
+      "winRateResolutionPct": 73.3,
+      "pnl": 4077.696276573113,
+      "capital": 4097.696276573113,
+      "slCount": 43,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 409.3213419188057
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 146
+      },
+      "trades": 146,
+      "winRateNetPct": 74,
+      "winRateResolutionPct": 73.3,
+      "pnl": 3955.5539452025246,
+      "capital": 3975.5539452025246,
+      "slCount": 37,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 327.5658188949418
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 180
+      },
+      "trades": 180,
+      "winRateNetPct": 73.3,
+      "winRateResolutionPct": 71.7,
+      "pnl": 3670.5155463890205,
+      "capital": 3690.5155463890205,
+      "slCount": 46,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.6618265533862011,
+      "feesPaid": 399.1067325327285
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 119
+      },
+      "trades": 119,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 63.9,
+      "pnl": 3444.130497485909,
+      "capital": 3464.130497485909,
+      "slCount": 42,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 327.32906389507116
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 146
+      },
+      "trades": 146,
+      "winRateNetPct": 72.6,
+      "winRateResolutionPct": 71.2,
+      "pnl": 3440.19276577672,
+      "capital": 3460.19276577672,
+      "slCount": 40,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5341319845832829,
+      "feesPaid": 294.1844846142325
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 119
+      },
+      "trades": 119,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 62.2,
+      "pnl": 3184.338204594315,
+      "capital": 3204.338204594315,
+      "slCount": 44,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.5931809962666512,
+      "feesPaid": 301.0494781600194
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 160
+      },
+      "trades": 160,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 62.5,
+      "pnl": 3114.819411659711,
+      "capital": 3134.819411659711,
+      "slCount": 54,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.7612995052291387,
+      "feesPaid": 449.9520029121663
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 124
+      },
+      "trades": 124,
+      "winRateNetPct": 67.7,
+      "winRateResolutionPct": 64.5,
+      "pnl": 2911.3148356877873,
+      "capital": 2931.3148356877873,
+      "slCount": 42,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 336.5484228208108
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 124
+      },
+      "trades": 124,
+      "winRateNetPct": 67.7,
+      "winRateResolutionPct": 62.9,
+      "pnl": 2738.1751052305635,
+      "capital": 2758.1751052305635,
+      "slCount": 44,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5725484983319177,
+      "feesPaid": 320.1621545788051
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 160
+      },
+      "trades": 160,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 64.4,
+      "pnl": 2497.744430963121,
+      "capital": 2517.744430963121,
+      "slCount": 51,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.9246656758569505,
+      "feesPaid": 427.0203359607506
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 154
+      },
+      "trades": 154,
+      "winRateNetPct": 69.5,
+      "winRateResolutionPct": 64.9,
+      "pnl": 2393.4310991423076,
+      "capital": 2413.4310991423076,
+      "slCount": 49,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5270595842977904,
+      "feesPaid": 382.7206319023984
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 121
+      },
+      "trades": 121,
+      "winRateNetPct": 67.8,
+      "winRateResolutionPct": 65.3,
+      "pnl": 2319.264834703011,
+      "capital": 2339.264834703011,
+      "slCount": 40,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 303.7439863739457
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 154
+      },
+      "trades": 154,
+      "winRateNetPct": 68.8,
+      "winRateResolutionPct": 66.2,
+      "pnl": 2296.278266396794,
+      "capital": 2316.278266396794,
+      "slCount": 47,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 387.01345776008543
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 121
+      },
+      "trades": 121,
+      "winRateNetPct": 67.8,
+      "winRateResolutionPct": 63.6,
+      "pnl": 1613.0090186412026,
+      "capital": 1633.0090186412026,
+      "slCount": 42,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.8267570672851916,
+      "feesPaid": 266.611754978676
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 104
+      },
+      "trades": 104,
+      "winRateNetPct": 68.3,
+      "winRateResolutionPct": 66.3,
+      "pnl": 160.73058765096278,
+      "capital": 180.73058765096278,
+      "slCount": 34,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.8442967387397969,
+      "feesPaid": 107.36910724697022
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 201
+      },
+      "trades": 28,
+      "winRateNetPct": 78.6,
+      "winRateResolutionPct": 71.4,
+      "pnl": -19.999999999999943,
+      "capital": 5.684341886080802e-14,
+      "slCount": 7,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 25.791944356796332
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 155
+      },
+      "trades": 20,
+      "winRateNetPct": 80,
+      "winRateResolutionPct": 65,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 6,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 7.907297643180293
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 155
+      },
+      "trades": 20,
+      "winRateNetPct": 75,
+      "winRateResolutionPct": 65,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 6,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 6.705647758774339
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 140
+      },
+      "trades": 45,
+      "winRateNetPct": 73.3,
+      "winRateResolutionPct": 73.3,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 11,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 20.712579076039408
+    }
+  ],
+  "all": [
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 201
+      },
+      "trades": 28,
+      "winRateNetPct": 78.6,
+      "winRateResolutionPct": 71.4,
+      "pnl": -19.999999999999943,
+      "capital": 5.684341886080802e-14,
+      "slCount": 7,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 25.791944356796332
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.7,
+      "winRateResolutionPct": 67.1,
+      "pnl": 5652.585014690754,
+      "capital": 5672.585014690754,
+      "slCount": 53,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 480.2282400830274
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 155
+      },
+      "trades": 20,
+      "winRateNetPct": 75,
+      "winRateResolutionPct": 65,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 6,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 6.705647758774339
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 119
+      },
+      "trades": 119,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 63.9,
+      "pnl": 3444.130497485909,
+      "capital": 3464.130497485909,
+      "slCount": 42,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 327.32906389507116
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 201
+      },
+      "trades": 201,
+      "winRateNetPct": 69.7,
+      "winRateResolutionPct": 64.7,
+      "pnl": 4144.930348605814,
+      "capital": 4164.930348605814,
+      "slCount": 64,
+      "resolutionLossNoSl": 7,
+      "maxDrawdown": 0.911071013774997,
+      "feesPaid": 558.2305881170167
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.1,
+      "winRateResolutionPct": 65.3,
+      "pnl": 5623.82874427137,
+      "capital": 5643.82874427137,
+      "slCount": 56,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 478.619746932706
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 155
+      },
+      "trades": 20,
+      "winRateNetPct": 80,
+      "winRateResolutionPct": 65,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 6,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 7.907297643180293
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 119
+      },
+      "trades": 119,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 62.2,
+      "pnl": 3184.338204594315,
+      "capital": 3204.338204594315,
+      "slCount": 44,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.5931809962666512,
+      "feesPaid": 301.0494781600194
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 202
+      },
+      "trades": 202,
+      "winRateNetPct": 70.3,
+      "winRateResolutionPct": 67.3,
+      "pnl": 5959.966133167705,
+      "capital": 5979.966133167705,
+      "slCount": 60,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 586.1139835222281
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.7,
+      "winRateResolutionPct": 68.3,
+      "pnl": 5294.828546565919,
+      "capital": 5314.828546565919,
+      "slCount": 51,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 463.12133081349225
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 160
+      },
+      "trades": 160,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 64.4,
+      "pnl": 2497.744430963121,
+      "capital": 2517.744430963121,
+      "slCount": 51,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.9246656758569505,
+      "feesPaid": 427.0203359607506
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 124
+      },
+      "trades": 124,
+      "winRateNetPct": 67.7,
+      "winRateResolutionPct": 64.5,
+      "pnl": 2911.3148356877873,
+      "capital": 2931.3148356877873,
+      "slCount": 42,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 336.5484228208108
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 202
+      },
+      "trades": 202,
+      "winRateNetPct": 69.8,
+      "winRateResolutionPct": 65.3,
+      "pnl": 5776.643103629789,
+      "capital": 5796.643103629789,
+      "slCount": 64,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 586.7329685281337
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 167
+      },
+      "trades": 167,
+      "winRateNetPct": 70.1,
+      "winRateResolutionPct": 66.5,
+      "pnl": 5197.506320545483,
+      "capital": 5217.506320545483,
+      "slCount": 54,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 461.2520622098006
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 160
+      },
+      "trades": 160,
+      "winRateNetPct": 68.1,
+      "winRateResolutionPct": 62.5,
+      "pnl": 3114.819411659711,
+      "capital": 3134.819411659711,
+      "slCount": 54,
+      "resolutionLossNoSl": 6,
+      "maxDrawdown": 0.7612995052291387,
+      "feesPaid": 449.9520029121663
+    },
+    {
+      "signalMinC": 77,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 124
+      },
+      "trades": 124,
+      "winRateNetPct": 67.7,
+      "winRateResolutionPct": 62.9,
+      "pnl": 2738.1751052305635,
+      "capital": 2758.1751052305635,
+      "slCount": 44,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5725484983319177,
+      "feesPaid": 320.1621545788051
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 180
+      },
+      "trades": 180,
+      "winRateNetPct": 73.9,
+      "winRateResolutionPct": 73.3,
+      "pnl": 4077.696276573113,
+      "capital": 4097.696276573113,
+      "slCount": 43,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 409.3213419188057
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 146
+      },
+      "trades": 146,
+      "winRateNetPct": 74,
+      "winRateResolutionPct": 73.3,
+      "pnl": 3955.5539452025246,
+      "capital": 3975.5539452025246,
+      "slCount": 37,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 327.5658188949418
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 140
+      },
+      "trades": 45,
+      "winRateNetPct": 73.3,
+      "winRateResolutionPct": 73.3,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 11,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 20.712579076039408
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 104
+      },
+      "trades": 81,
+      "winRateNetPct": 67.9,
+      "winRateResolutionPct": 66.7,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 26,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 72.56054963921137
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 180
+      },
+      "trades": 180,
+      "winRateNetPct": 73.3,
+      "winRateResolutionPct": 71.7,
+      "pnl": 3670.5155463890205,
+      "capital": 3690.5155463890205,
+      "slCount": 46,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.6618265533862011,
+      "feesPaid": 399.1067325327285
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 146
+      },
+      "trades": 146,
+      "winRateNetPct": 72.6,
+      "winRateResolutionPct": 71.2,
+      "pnl": 3440.19276577672,
+      "capital": 3460.19276577672,
+      "slCount": 40,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5341319845832829,
+      "feesPaid": 294.1844846142325
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 140
+      },
+      "trades": 45,
+      "winRateNetPct": 73.3,
+      "winRateResolutionPct": 71.1,
+      "pnl": -20,
+      "capital": 0,
+      "slCount": 12,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 1,
+      "feesPaid": 19.419123667408623
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 78,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 104
+      },
+      "trades": 104,
+      "winRateNetPct": 68.3,
+      "winRateResolutionPct": 66.3,
+      "pnl": 160.73058765096278,
+      "capital": 180.73058765096278,
+      "slCount": 34,
+      "resolutionLossNoSl": 1,
+      "maxDrawdown": 0.8442967387397969,
+      "feesPaid": 107.36910724697022
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 194
+      },
+      "trades": 194,
+      "winRateNetPct": 73.2,
+      "winRateResolutionPct": 70.6,
+      "pnl": 5437.818386295578,
+      "capital": 5457.818386295578,
+      "slCount": 52,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 503.2282721379387
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 162
+      },
+      "trades": 162,
+      "winRateNetPct": 73.5,
+      "winRateResolutionPct": 71,
+      "pnl": 5498.93526587094,
+      "capital": 5518.93526587094,
+      "slCount": 45,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 421.8233638546566
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 154
+      },
+      "trades": 154,
+      "winRateNetPct": 68.8,
+      "winRateResolutionPct": 66.2,
+      "pnl": 2296.278266396794,
+      "capital": 2316.278266396794,
+      "slCount": 47,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 387.01345776008543
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 58,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 121
+      },
+      "trades": 121,
+      "winRateNetPct": 67.8,
+      "winRateResolutionPct": 65.3,
+      "pnl": 2319.264834703011,
+      "capital": 2339.264834703011,
+      "slCount": 40,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5580634559938241,
+      "feesPaid": 303.7439863739457
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 194
+      },
+      "trades": 194,
+      "winRateNetPct": 73.2,
+      "winRateResolutionPct": 69.1,
+      "pnl": 5391.66502935879,
+      "capital": 5411.66502935879,
+      "slCount": 55,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 506.48642779747655
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 0,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 162
+      },
+      "trades": 162,
+      "winRateNetPct": 72.8,
+      "winRateResolutionPct": 69.1,
+      "pnl": 5297.76049269541,
+      "capital": 5317.76049269541,
+      "slCount": 48,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.5270595842977903,
+      "feesPaid": 420.05864819457173
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 0,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 154
+      },
+      "trades": 154,
+      "winRateNetPct": 69.5,
+      "winRateResolutionPct": 64.9,
+      "pnl": 2393.4310991423076,
+      "capital": 2413.4310991423076,
+      "slCount": 49,
+      "resolutionLossNoSl": 5,
+      "maxDrawdown": 0.5270595842977904,
+      "feesPaid": 382.7206319023984
+    },
+    {
+      "signalMinC": 78,
+      "signalMaxC": 79,
+      "slC": 60,
+      "forbidFirstMin": 6,
+      "forbidLastMin": 4,
+      "resolved": {
+        "totalRows": 287,
+        "tradeRows": 121
+      },
+      "trades": 121,
+      "winRateNetPct": 67.8,
+      "winRateResolutionPct": 63.6,
+      "pnl": 1613.0090186412026,
+      "capital": 1633.0090186412026,
+      "slCount": 42,
+      "resolutionLossNoSl": 2,
+      "maxDrawdown": 0.8267570672851916,
+      "feesPaid": 266.611754978676
+    }
+  ]
+}

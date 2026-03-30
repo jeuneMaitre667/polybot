@@ -13,7 +13,9 @@
     "deps:outdated": "npm outdated",
     "audit:report": "npm audit --omit=dev",
     "cache:15m": "vite-node --config vite.config.js scripts/cache-btc-15m.mjs",
+    "backtest:btc-pm": "python scripts/backtest_btc_pm/pipeline.py",
     "recalc:today-15m": "vite-node --config vite.config.js scripts/recalc-today-15m-pnl.mjs",
+    "sweep:15m": "vite-node --config vite.config.js scripts/sweep-backtest-15m-params.mjs",
     "recalc:today-by-hour": "vite-node --config vite.config.js scripts/recalc-today-pnl-by-hour.mjs",
     "recalc:day-16h": "vite-node --config vite.config.js scripts/recalc-day-midnight-to-16h.mjs",
     "recalc:session-hourly": "vite-node --config vite.config.js scripts/recalc-session-hourly.mjs"

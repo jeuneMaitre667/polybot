@@ -8,6 +8,20 @@ import {
   BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
   BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
 } from '@/lib/bitcoin15mResolvedDataFetch.js';
+import { mergeBtcPmAugment } from '@/lib/mergeBtcPmAugment.js';
+
+async function maybeMergeBtcPmAugment(rows) {
+  const url = (import.meta.env.VITE_BACKTEST_15M_AUGMENT_JSON || '').trim();
+  if (!url || !Array.isArray(rows) || rows.length === 0) return rows;
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) return rows;
+    const doc = await r.json();
+    return mergeBtcPmAugment(rows, doc);
+  } catch {
+    return rows;
+  }
+}
 
 export {
   BACKTEST_STOP_LOSS_TRIGGER_PRICE_P,
@@ -85,7 +99,9 @@ export function useBitcoinUpDownResolved15m(windowHours = DEFAULT_WINDOW_HOURS, 
     try {
       const { enrichedFinal, debugSummary: sum } = await fetchBitcoin15mResolvedData(windowHours, simCfg, debug);
       if (seq !== fetchSeqRef.current) return;
-      setResolved(enrichedFinal);
+      const merged = await maybeMergeBtcPmAugment(enrichedFinal);
+      if (seq !== fetchSeqRef.current) return;
+      setResolved(merged);
       setDebugSummary(debug ? sum : null);
       setDataSource('live');
     } catch (err) {

@@ -4,6 +4,7 @@ import {
   countAskLevelsInBand,
   getBestAskPriceFromRawAsks,
   getBestAskPriceLenientFromRawAsks,
+  getBestBidPriceFromRawBids,
   liquidityUsdFromAsks,
   ORDER_BOOK_MARKET_WORST_P,
   ORDER_BOOK_SIGNAL_MAX_P,
@@ -119,20 +120,23 @@ function computeSlotBookMetrics(asksUp, asksDown) {
   };
 }
 
-async function fetchAsks(tokenId, slotEndSecForBook = null) {
-  if (!tokenId) return [];
-  if (slotEndSecForBook != null && !slotEndSecIsStillOpen(slotEndSecForBook)) return [];
+/** GET /book : asks + bids (même requête) pour best ask / best bid (SL bot). */
+async function fetchBookAsksBids(tokenId, slotEndSecForBook = null) {
+  const empty = () => ({ asks: [], bids: [] });
+  if (!tokenId) return empty();
+  if (slotEndSecForBook != null && !slotEndSecIsStillOpen(slotEndSecForBook)) return empty();
   try {
     const { data } = await axios.get(CLOB_BOOK_URL, {
       params: { token_id: tokenId },
       timeout: 12000,
     });
     const asks = data?.asks ?? [];
-    return Array.isArray(asks) ? asks : [];
+    const bids = data?.bids ?? [];
+    return {
+      asks: Array.isArray(asks) ? asks : [],
+      bids: Array.isArray(bids) ? bids : [],
+    };
   } catch {
-    // En DEV, le proxy Vite peut parfois ne pas être pris en compte (ou nécessiter un redémarrage).
-    // En navigateur, l'appel direct à CLOB est généralement bloqué par CORS, donc on ne retente
-    // en direct que hors navigateur (ex: SSR / tests Node).
     if (
       import.meta.env.DEV &&
       String(CLOB_BOOK_URL).startsWith('/') &&
@@ -144,12 +148,16 @@ async function fetchAsks(tokenId, slotEndSecForBook = null) {
           timeout: 12000,
         });
         const asks = data?.asks ?? [];
-        return Array.isArray(asks) ? asks : [];
+        const bids = data?.bids ?? [];
+        return {
+          asks: Array.isArray(asks) ? asks : [],
+          bids: Array.isArray(bids) ? bids : [],
+        };
       } catch {
-        return [];
+        return empty();
       }
     }
-    return [];
+    return empty();
   }
 }
 
@@ -263,6 +271,9 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
   const [bestAskDownP, setBestAskDownP] = useState(null);
   const [bestAskLiveUpP, setBestAskLiveUpP] = useState(null);
   const [bestAskLiveDownP, setBestAskLiveDownP] = useState(null);
+  /** Best bid carnet (créneau courant) — même sens que le bot pour le SL. */
+  const [bestBidLiveUpP, setBestBidLiveUpP] = useState(null);
+  const [bestBidLiveDownP, setBestBidLiveDownP] = useState(null);
   const [levelsBandUp, setLevelsBandUp] = useState(0);
   const [levelsBandDown, setLevelsBandDown] = useState(0);
   const [liquidityToWorstUpUsd, setLiquidityToWorstUpUsd] = useState(null);
@@ -313,16 +324,20 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
         setBestAskDownP(null);
         setBestAskLiveUpP(null);
         setBestAskLiveDownP(null);
+        setBestBidLiveUpP(null);
+        setBestBidLiveDownP(null);
         setLevelsBandUp(0);
         setLevelsBandDown(0);
         setLiquidityToWorstUpUsd(0);
         setLiquidityToWorstDownUsd(0);
         return;
       }
-      const [asksUp, asksDown] = await Promise.all([
-        fetchAsks(tokenIdUp, end0),
-        fetchAsks(tokenIdDown, end0),
+      const [bookUp, bookDown] = await Promise.all([
+        fetchBookAsksBids(tokenIdUp, end0),
+        fetchBookAsksBids(tokenIdDown, end0),
       ]);
+      const asksUp = bookUp.asks;
+      const asksDown = bookDown.asks;
       const [liveAskUp, liveAskDown] = await Promise.all([
         bestAskFromBookThenPrice(asksUp, tokenIdUp),
         bestAskFromBookThenPrice(asksDown, tokenIdDown),
@@ -340,6 +355,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setBestAskDownP(m.bestAskDownP);
       setBestAskLiveUpP(liveAskUp);
       setBestAskLiveDownP(liveAskDown);
+      setBestBidLiveUpP(getBestBidPriceFromRawBids(bookUp.bids));
+      setBestBidLiveDownP(getBestBidPriceFromRawBids(bookDown.bids));
       setLevelsBandUp(m.levelsBandUp);
       setLevelsBandDown(m.levelsBandDown);
       setLiquidityToWorstUpUsd(m.liquidityToWorstUpUsd);
@@ -382,6 +399,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setBestAskDownP(null);
       setBestAskLiveUpP(null);
       setBestAskLiveDownP(null);
+      setBestBidLiveUpP(null);
+      setBestBidLiveDownP(null);
       setLevelsBandUp(0);
       setLevelsBandDown(0);
       setLiquidityToWorstUpUsd(null);
@@ -420,10 +439,12 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           if (staggerMs > 0) await new Promise((r) => setTimeout(r, staggerMs));
           continue;
         }
-        const [asksUp, asksDown] = await Promise.all([
-          fetchAsks(tokenIdUp, endSec),
-          fetchAsks(tokenIdDown, endSec),
+        const [bookUp, bookDown] = await Promise.all([
+          fetchBookAsksBids(tokenIdUp, endSec),
+          fetchBookAsksBids(tokenIdDown, endSec),
         ]);
+        const asksUp = bookUp.asks;
+        const asksDown = bookDown.asks;
         const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
         const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
         const mise = Math.max(liqUp, liqDown);
@@ -449,6 +470,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
           setBestAskDownP(mm.bestAskDownP);
           setBestAskLiveUpP(liveAskUp);
           setBestAskLiveDownP(liveAskDown);
+          setBestBidLiveUpP(getBestBidPriceFromRawBids(bookUp.bids));
+          setBestBidLiveDownP(getBestBidPriceFromRawBids(bookDown.bids));
           setLevelsBandUp(mm.levelsBandUp);
           setLevelsBandDown(mm.levelsBandDown);
           setLiquidityToWorstUpUsd(mm.liquidityToWorstUpUsd);
@@ -496,6 +519,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
       setCurrentSlotBookAsksDown([]);
       setBestAskLiveUpP(null);
       setBestAskLiveDownP(null);
+      setBestBidLiveUpP(null);
+      setBestBidLiveDownP(null);
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -530,6 +555,8 @@ export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs
     bestAskDownP,
     bestAskLiveUpP,
     bestAskLiveDownP,
+    bestBidLiveUpP,
+    bestBidLiveDownP,
     levelsBandUp,
     levelsBandDown,
     liquidityToWorstUpUsd,
