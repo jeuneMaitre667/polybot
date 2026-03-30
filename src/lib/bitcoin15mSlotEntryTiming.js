@@ -3,10 +3,10 @@ import { POLYMARKET_DISPLAY_TZ } from './polymarketDisplayTime.js';
 export const QUARTER_SEC_15M = 15 * 60;
 const QUARTER_SEC = QUARTER_SEC_15M;
 
-/** Pas d’entrée pendant les 6 premières minutes de chaque quart d’heure **affiché ET** (:00–:05). */
-export const SLOT_15M_ENTRY_FORBID_FIRST_SEC = 6 * 60;
-/** Pas d’entrée pendant les 4 dernières minutes du quart **en ET** (:11–:14 du bloc). */
-export const SLOT_15M_ENTRY_FORBID_LAST_SEC = 4 * 60;
+/** Défaut dashboard / backtest : pas de fenêtre interdite en début de quart (0 = désactivé). */
+export const SLOT_15M_ENTRY_FORBID_FIRST_SEC = 0;
+/** Défaut : pas de fenêtre interdite en fin de quart (0 = désactivé). */
+export const SLOT_15M_ENTRY_FORBID_LAST_SEC = 0;
 
 const etHmsFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: POLYMARKET_DISPLAY_TZ,
@@ -69,6 +69,42 @@ export function is15mSlotEntryTimeForbiddenWithWindows(tsSec, forbidFirstSec, fo
   if (o < f) return true;
   if (o >= QUARTER_SEC - l) return true;
   return false;
+}
+
+/**
+ * Même règle « N premières / M dernières minutes » mais par rapport au **créneau marché** UTC
+ * `[slotEndSec - 900, slotEndSec]` (slug `btc-updown-15m-*`), pas au quart d’heure horloge ET.
+ *
+ * À utiliser pour le **backtest** quand `slotEndSec` est connu : les points `prices-history` sont filtrés
+ * sur cette fenêtre ; utiliser le quart ET global pouvait décaler l’interdiction vs les données et fausser
+ * le nombre de signaux / le WR quand on bouge les minutes interdites.
+ *
+ * Hors `[slotStart, slotEnd]` (marges fetch) : repli sur `is15mSlotEntryTimeForbiddenWithWindows` (grille ET),
+ * aligné bot live.
+ *
+ * @param {number} tsSec
+ * @param {number|null|undefined} slotEndSec fin du créneau 15m (s UTC), ex. depuis le slug
+ * @param {number} forbidFirstSec
+ * @param {number} forbidLastSec
+ */
+export function is15mMarketSlotEntryTimeForbidden(tsSec, slotEndSec, forbidFirstSec, forbidLastSec) {
+  const f = Math.max(0, Number(forbidFirstSec) || 0);
+  const l = Math.max(0, Number(forbidLastSec) || 0);
+  if (f + l >= QUARTER_SEC) return true;
+  if (slotEndSec == null || !Number.isFinite(Number(slotEndSec))) {
+    return is15mSlotEntryTimeForbiddenWithWindows(tsSec, forbidFirstSec, forbidLastSec);
+  }
+  const end = Math.floor(Number(slotEndSec));
+  const slotStartSec = end - QUARTER_SEC;
+  const ts = Number(tsSec);
+  if (!Number.isFinite(ts)) return false;
+  const o = ts - slotStartSec;
+  if (o >= 0 && o < QUARTER_SEC) {
+    if (o < f) return true;
+    if (l > 0 && o >= QUARTER_SEC - l) return true;
+    return false;
+  }
+  return is15mSlotEntryTimeForbiddenWithWindows(tsSec, forbidFirstSec, forbidLastSec);
 }
 
 export function is15mSlotEntryTimeForbidden(tsSec) {
