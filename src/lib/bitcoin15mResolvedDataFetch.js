@@ -1162,16 +1162,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   const resolutionWin = settled ? winner === first.side : null;
   const heldSeries = first.side === 'Up' ? up : down;
   
-  const delayedEntryTs = first.ts + BACKTEST_EXECUTION_DELAY_SEC;
-  let delayedPrice = first.price;
-  for (const point of heldSeries) {
-    if (point.t >= delayedEntryTs) {
-      delayedPrice = point.p ?? point.price;
-      break;
-    }
-  }
-
-  const sl = findStopLossAfterEntry(heldSeries, first.ts, delayedPrice, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
   const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
   if (sl.triggered) {
@@ -1180,7 +1171,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
     return {
       botWouldTake: first.side,
       botWon: null,
-      botEntryPrice: Math.min(0.99, delayedPrice + BACKTEST_ENTRY_SLIPPAGE_P),
+      botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
       botEntryTimestamp: first.ts,
       botOrderType: 'Marché',
       botStopLossExit: true,
@@ -1197,7 +1188,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   return {
     botWouldTake: first.side,
     botWon: resolutionWin,
-    botEntryPrice: Math.min(0.99, delayedPrice + BACKTEST_ENTRY_SLIPPAGE_P),
+    botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
     botEntryTimestamp: first.ts,
     botOrderType: 'Marché',
     botStopLossExit: false,
