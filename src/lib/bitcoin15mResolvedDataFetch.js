@@ -12,7 +12,7 @@ import {
 } from '@/lib/bitcoin15mBacktestDedupe.js';
 import { formatBitcoin15mSlotRangeEt } from '@/lib/polymarketDisplayTime.js';
 import {
-  is15mSlotEntryTimeForbiddenWithWindows,
+  is15mMarketSlotEntryTimeForbidden,
   normalizeForbidWindowMinutes,
   ENTRY_TIMING_ET_TIMEZONE,
 } from '@/lib/bitcoin15mSlotEntryTiming.js';
@@ -53,7 +53,7 @@ function formatAxiosError(err) {
 }
 /**
  * Simu 15m : détection sur **bid / mid** prices-history (souvent ~0,5–1¢ sous le best ask live).
- * Seuil détection : ≥ 77¢ (aligné bot 15m) ; entrée simulée **77–78¢** par défaut.
+ * **Signal** : premier passage dans la bande **77–78¢** (entryMinP–entryMaxP), comme le bot (pas « ≥ 77¢ » seul).
  */
 const DEFAULT_DETECT_MIN_P = 0.77;
 const DEFAULT_SIM_ENTRY_MIN_P = 0.77;
@@ -70,7 +70,7 @@ export function resolve15mSimConfig(options) {
   const dwellRaw = dwellFromCfg !== undefined && dwellFromCfg !== null ? dwellFromCfg : dwellFromEnv;
   const signalMinDwellSec =
     dwellRaw === undefined || dwellRaw === '' || dwellRaw === null
-      ? 0
+      ? 1.5
       : Math.max(0, Number(dwellRaw) || 0);
   const efMin = cfg?.entryForbiddenFirstMin;
   const elMin = cfg?.entryForbiddenLastMin;
@@ -140,6 +140,15 @@ const BACKTEST_STOP_LOSS_WORST_PRICE_P = Math.max(
 export const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
   Math.max(0, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MIN_HOLD_MS) || 10_000) / 1000;
 
+export const BACKTEST_ENTRY_SLIPPAGE_P = Math.max(
+  0,
+  Math.min(0.1, Number(import.meta.env.VITE_BACKTEST_ENTRY_SLIPPAGE_P) || 0.01)
+);
+export const BACKTEST_SL_SLIPPAGE_P = Math.max(
+  0,
+  Math.min(0.2, Number(import.meta.env.VITE_BACKTEST_SL_SLIPPAGE_P) || 0.035)
+);
+
 const EMPTY_BOT_SIM_15M = {
   botWouldTake: null,
   botWon: null,
@@ -157,10 +166,62 @@ const EMPTY_BOT_SIM_15M = {
   botResolutionWouldWin: null,
 };
 
-/** Détection : franchissement de la zone « haute » (bid ~ sous ask) — jusqu’à 1. */
-function hasCrossedHighConviction(p, detectMinP) {
-  const d = Number.isFinite(detectMinP) ? detectMinP : DEFAULT_DETECT_MIN_P;
-  return Number.isFinite(p) && p >= d && p <= 1;
+/** Point dans la bande de signal (entrée bot). */
+function isPriceInEntryBand(p, entryMinP, entryMaxP) {
+  const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
+  const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
+  return Number.isFinite(p) && p >= lo && p <= hi;
+}
+
+/**
+ * Timestamp du premier franchissement dans [lo, hi] sur le segment prev → (t, price).
+ * Prend en charge les **sauts** (historique clairsemé) : ex. 0,50 → 0,99 entre deux points traverse 77–78¢
+ * sans échantillon dans la bande — on interpole le passage à la borne inférieure (montée) ou supérieure (descente).
+ */
+export function firstEntryTimestampIntoBand(prev, t, price, lo, hi) {
+  const p1 = price;
+  if (prev == null) {
+    return isPriceInEntryBand(p1, lo, hi) ? t : null;
+  }
+  const p0 = prev.price;
+  const t0 = prev.t;
+  const t1 = t;
+  if (t1 < t0) return null;
+  const dt = t1 - t0;
+  const dp = p1 - p0;
+  if (Math.abs(dp) < 1e-15) {
+    if (isPriceInEntryBand(p1, lo, hi) && !isPriceInEntryBand(p0, lo, hi)) return t1;
+    return null;
+  }
+
+  if (isPriceInEntryBand(p0, lo, hi)) return null;
+
+  /** Échantillon final dans la bande (avec interpolation franchissement lo/hi si besoin). */
+  if (isPriceInEntryBand(p1, lo, hi)) {
+    if (p0 < lo && p1 >= lo) {
+      const u = (lo - p0) / dp;
+      if (u >= 0 && u <= 1) return t0 + u * dt;
+    }
+    if (p0 > hi && p1 <= hi) {
+      const u = (hi - p0) / dp;
+      if (u >= 0 && u <= 1) return t0 + u * dt;
+    }
+    return t1;
+  }
+
+  /* Saut par-dessus toute la bande (aucun tick dans [lo, hi]) : premier instant dans la bande = franchissement de lo (montée) ou hi (descente). */
+  if (p0 < lo && p1 > hi) {
+    const u = (lo - p0) / dp;
+    if (u > 0 && u < 1) return t0 + u * dt;
+    return null;
+  }
+  if (p0 > hi && p1 < lo) {
+    const u = (hi - p0) / dp;
+    if (u > 0 && u < 1) return t0 + u * dt;
+    return null;
+  }
+
+  return null;
 }
 
 function evalLinearPrice(t1, p1, t2, p2, t) {
@@ -255,6 +316,14 @@ function normalizeOutcomePrice(raw) {
   if (p > 1) p = 1;
   if (p < 0) p = 0;
   return p;
+}
+
+function seriesHasPointInEntryBand(series, lo, hi) {
+  for (const pt of Array.isArray(series) ? series : []) {
+    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    if (isPriceInEntryBand(p, lo, hi)) return true;
+  }
+  return false;
 }
 
 /**
@@ -891,7 +960,7 @@ function summarizeSeriesForDebug(series) {
     if (!Number.isFinite(p) || t == null) continue;
     minP = Math.min(minP, p);
     maxP = Math.max(maxP, p);
-    if (hasCrossedHighConviction(p, DEFAULT_DETECT_MIN_P)) inBand += 1;
+    if (isPriceInEntryBand(p, DEFAULT_SIM_ENTRY_MIN_P, DEFAULT_SIM_ENTRY_MAX_P)) inBand += 1;
     const cur = { t, p };
     if (first == null) first = cur;
     last = cur;
@@ -928,6 +997,8 @@ function buildForbiddenMinuteRuleEt(forbidFirstSec, forbidLastSec) {
 function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
   const cfg = resolve15mSimConfig({ simConfig: simCfg });
   const { detectMinP, entryMinP, entryMaxP, signalMinDwellSec = 0, forbidFirstSec, forbidLastSec } = cfg;
+  const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
+  const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   let endTsSec = null;
@@ -956,26 +1027,56 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
   events.sort((a, b) => a.t - b.t);
   const lastBySide = { Up: null, Down: null };
   const candidates = [];
-  for (const ev of events) {
+  /** Fin du créneau 15m marché (UTC) — pour ignorer la marge fetch (−30 min) dans la détection d’entrée. */
+  const slotStartSec =
+    endTsSec != null && Number.isFinite(endTsSec) ? Math.floor(endTsSec) - SLOT_15M_SEC : null;
+
+  /**
+   * Points avec t < début du créneau servent seulement à initialiser `lastBySide`, sans candidat :
+   * sinon une entrée dans la bande **avant** l’ouverture du slot faisait rejeter le ts (hors fenêtre),
+   * puis le prix restait en bande **pendant** le slot sans nouveau franchissement → faux négatifs massifs.
+   */
+  if (slotStartSec != null) {
+    for (const ev of events) {
+      if (ev.t >= slotStartSec) break;
+      lastBySide[ev.side] = { t: ev.t, price: ev.price };
+    }
+    /** Déjà dans la bande à l’ouverture du créneau (dernier point avant slot dans la marge) → entrée au 1er instant du slot. */
+    for (const side of ['Up', 'Down']) {
+      const last = lastBySide[side];
+      if (last == null || last.t >= slotStartSec) continue;
+      if (!isPriceInEntryBand(last.price, lo, hi)) continue;
+      let tsUsed = slotStartSec;
+      if (tsUsed > endTsSec + SLOT_ENTRY_MAX_AFTER_END_SEC || tsUsed < slotStartSec) continue;
+      if (is15mMarketSlotEntryTimeForbidden(tsUsed, endTsSec, forbidFirstSec, forbidLastSec)) continue;
+      if (
+        signalMinDwellSec > 0 &&
+        !passesSignalMinDwell(side, historyUp, historyDown, detectMinP, tsUsed, signalMinDwellSec)
+      ) {
+        continue;
+      }
+      candidates.push({ side, price: clampEntryPrice(last.price, entryMinP, entryMaxP), ts: tsUsed });
+      break;
+    }
+  }
+
+  const eventsFromSlotOpen = slotStartSec == null ? events : events.filter((ev) => ev.t >= slotStartSec);
+  for (const ev of eventsFromSlotOpen) {
     const { t, side, price } = ev;
-    if (!hasCrossedHighConviction(price, detectMinP)) {
+    const prev = lastBySide[side];
+    const tsEntry = firstEntryTimestampIntoBand(prev, t, price, lo, hi);
+    if (tsEntry == null) {
       lastBySide[side] = { t, price };
       continue;
     }
-    const prev = lastBySide[side];
-    let tsUsed = t;
-    if (prev != null && prev.price < detectMinP && price > prev.price) {
-      const numer = detectMinP - prev.price;
-      const denom = price - prev.price;
-      if (denom > 0) tsUsed = prev.t + (t - prev.t) * (numer / denom);
-    }
+    let tsUsed = tsEntry;
     if (endTsSec != null && Number.isFinite(endTsSec)) {
       const slotStartSec = endTsSec - SLOT_15M_SEC;
       if (tsUsed > endTsSec + SLOT_ENTRY_MAX_AFTER_END_SEC || tsUsed < slotStartSec) {
         lastBySide[side] = { t, price };
         continue;
       }
-      if (is15mSlotEntryTimeForbiddenWithWindows(tsUsed, forbidFirstSec, forbidLastSec)) {
+      if (is15mMarketSlotEntryTimeForbidden(tsUsed, endTsSec, forbidFirstSec, forbidLastSec)) {
         lastBySide[side] = { t, price };
         continue;
       }
@@ -1000,6 +1101,8 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
 function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndSecExplicit, simCfg) {
   const cfg = resolve15mSimConfig({ simConfig: simCfg });
   const { detectMinP, entryMinP, entryMaxP, forbidFirstSec, forbidLastSec } = cfg;
+  const lo = Number.isFinite(entryMinP) ? entryMinP : DEFAULT_SIM_ENTRY_MIN_P;
+  const hi = Number.isFinite(entryMaxP) ? entryMaxP : DEFAULT_SIM_ENTRY_MAX_P;
   const up = Array.isArray(historyUp) ? historyUp : [];
   const down = Array.isArray(historyDown) ? historyDown : [];
   if (up.length === 0 && down.length === 0) {
@@ -1022,13 +1125,11 @@ function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndS
   }
   const maxU = maxBinaryConvictionInSeries(up);
   const maxD = maxBinaryConvictionInSeries(down);
-  const maxBin = [maxU, maxD].filter((x) => x != null && Number.isFinite(x));
-  const peak = maxBin.length ? Math.max(...maxBin) : null;
-  const hadHigh = peak != null && peak >= detectMinP;
-  if (hadHigh) {
+  const hadBandTouch = seriesHasPointInEntryBand(up, lo, hi) || seriesHasPointInEntryBand(down, lo, hi);
+  if (hadBandTouch) {
     return {
       code: 'excluded_by_15m_slot_forbidden_window',
-      detail: `Franchissement ≥ ${detectMinP} présent, mais ts (ou interpolé) dans les ${forbidFirstSec / 60} premières min ou les ${forbidLastSec / 60} dernières d’un quart d’heure ${ENTRY_TIMING_ET_TIMEZONE} (:00,:15,:30,:45).`,
+      detail: `Prix dans la bande ${lo}–${hi} présent, mais ts (ou interpolé) dans les ${forbidFirstSec / 60} premières min ou les ${forbidLastSec / 60} dernières **du créneau marché 15m** (UTC, aligné slug / slotEndSec) ; hors fenêtre stricte du slot, repli sur la grille ET.`,
       forbiddenMinuteRule,
       endTsSec,
       maxBinaryConvictionUpToken: maxU,
@@ -1037,7 +1138,7 @@ function debugWhyNoSignalWithConfig(historyUp, historyDown, endDateStr, slotEndS
   }
   return {
     code: 'no_price_in_band',
-    detail: `Aucun franchissement ≥ ${detectMinP} après filtre créneau (entrée simulée ${entryMinP}–${entryMaxP}).`,
+    detail: `Aucun passage dans la bande signal ${lo}–${hi} après filtre créneau (détection alignée bot, pas « ≥ ${detectMinP} » seul).`,
     maxBinaryConvictionUpToken: maxU,
     maxBinaryConvictionDownToken: maxD,
   };
@@ -1060,15 +1161,17 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
   if (sl.triggered) {
+    let rawSlExit = sl.observedP != null ? Number(sl.observedP) - BACKTEST_SL_SLIPPAGE_P : BACKTEST_STOP_LOSS_WORST_PRICE_P;
+    rawSlExit = Math.max(0.001, rawSlExit);
     return {
       botWouldTake: first.side,
       botWon: null,
-      botEntryPrice: first.price,
+      botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
       botEntryTimestamp: first.ts,
       botOrderType: 'Marché',
       botStopLossExit: true,
       botStopLossReason: sl.reason,
-      botStopLossExitPriceP: Math.round(BACKTEST_STOP_LOSS_WORST_PRICE_P * 1e6) / 1e6,
+      botStopLossExitPriceP: Math.round(rawSlExit * 1e6) / 1e6,
       botStopLossObservedPriceP: sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
       botStopLossObservedDrawdownPct: sl.drawdownPct,
       botStopLossAtTimestamp: sl.t,
@@ -1080,7 +1183,7 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   return {
     botWouldTake: first.side,
     botWon: resolutionWin,
-    botEntryPrice: first.price,
+    botEntryPrice: Math.min(0.99, first.price + BACKTEST_ENTRY_SLIPPAGE_P),
     botEntryTimestamp: first.ts,
     botOrderType: 'Marché',
     botStopLossExit: false,
@@ -1095,11 +1198,315 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
 }
 
 /**
- * Charge et enrichit les marchés Bitcoin Up or Down 15 min résolus (slug btc-updown-15m-*).
- * Utilisable depuis le hook React ou un script Node (`vite-node`) pour générer un cache JSON.
+ * Une ligne « pré-simulation » : prix + métadonnées fetch ; la simu bot (`computeBotSimulationWithConfig`) n’est pas encore appliquée.
+ * Permet de balayer plusieurs `simCfg` sans refaire Gamma/CLOB/trades.
  */
-export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
+async function buildBitcoin15mPreSimRow(r) {
+  const historyEndIso =
+    r.slotEndSec != null && Number.isFinite(r.slotEndSec)
+      ? new Date(r.slotEndSec * 1000).toISOString()
+      : r.endDate;
+  let upBeforeSlot = [];
+  let downBeforeSlot = [];
+  let historySource = 'none';
+  let debugClobFetchError = null;
+  let debugClobDownFetchError = null;
+  let debugDataFetchError = null;
+  let clobUpMeta = null;
+  let clobDownMeta = null;
+  let tradesMeta = null;
+  const cidForTrades = r.normalizedConditionId ?? normalizeConditionId(r.conditionId);
+  const [clobResUp, clobResDown, trRes] = await Promise.all([
+    r.tokenIdUp ? fetchPriceHistory(r.tokenIdUp, historyEndIso) : Promise.resolve(null),
+    r.tokenIdDown ? fetchPriceHistory(r.tokenIdDown, historyEndIso) : Promise.resolve(null),
+    cidForTrades
+      ? fetchDataApiTradePointsByToken(
+          cidForTrades,
+          r.tokenIdUp,
+          r.tokenIdDown,
+          historyEndIso,
+          r.gammaEventId
+        )
+      : Promise.resolve(null),
+  ]);
+
+  debugDataFetchError = trRes?.error ?? null;
+  tradesMeta = trRes?.meta ?? null;
+  const tradePointsUp = Array.isArray(trRes?.pointsUp) ? trRes.pointsUp : [];
+  const tradePointsDown = Array.isArray(trRes?.pointsDown) ? trRes.pointsDown : [];
+
+  if (clobResUp) {
+    upBeforeSlot = clobResUp.history;
+    debugClobFetchError = clobResUp.error;
+    clobUpMeta = clobResUp.meta;
+    if (upBeforeSlot.length > 0) historySource = 'clob';
+  }
+  if (clobResDown) {
+    downBeforeSlot = clobResDown.history;
+    debugClobDownFetchError = clobResDown.error;
+    clobDownMeta = clobResDown.meta;
+    if (downBeforeSlot.length > 0 && historySource === 'none') historySource = 'clob';
+  }
+  const hadClobUpBeforeTrades = upBeforeSlot.length > 0;
+  const hadClobDownBeforeTrades = downBeforeSlot.length > 0;
+  if (tradePointsUp.length > 0) {
+    upBeforeSlot = mergePriceSeriesSorted(upBeforeSlot, tradePointsUp);
+  }
+  if (tradePointsDown.length > 0) {
+    downBeforeSlot = mergePriceSeriesSorted(downBeforeSlot, tradePointsDown);
+  }
+  const hadTradePoints = tradePointsUp.length + tradePointsDown.length > 0;
+  if (upBeforeSlot.length > 0) {
+    const hadAnyClob = hadClobUpBeforeTrades || hadClobDownBeforeTrades;
+    if (hadAnyClob && hadTradePoints) historySource = 'clob+trades';
+    else if (hadTradePoints && !hadClobUpBeforeTrades && !hadClobDownBeforeTrades) historySource = 'trades';
+    else historySource = 'clob';
+  } else if (downBeforeSlot.length > 0) {
+    if (hadTradePoints) historySource = 'clob+trades';
+    else if (historySource === 'none') historySource = 'clob';
+  } else {
+    historySource = 'none';
+  }
+  upBeforeSlot = normalizeHistorySeriesPoints(upBeforeSlot);
+  downBeforeSlot = normalizeHistorySeriesPoints(downBeforeSlot);
+  const historyUp = filterSeriesTo15mSlot(upBeforeSlot, r.slotEndSec);
+  const historyDown = filterSeriesTo15mSlot(downBeforeSlot, r.slotEndSec);
+  const historyPointCount = historyUp.length + historyDown.length;
+
+  return {
+    base: { ...r },
+    historyUp,
+    historyDown,
+    historyEndIso,
+    upBeforeSlot,
+    downBeforeSlot,
+    historyPointCount,
+    historySource,
+    debugClobFetchError,
+    debugClobDownFetchError,
+    debugDataFetchError,
+    clobUpMeta,
+    clobDownMeta,
+    tradesMeta,
+    cidForTrades,
+  };
+}
+
+function applyResolvedSimToPreSimRow(pre, simResolved, debug) {
+  const r = pre.base;
+  const {
+    historyUp,
+    historyDown,
+    historyEndIso,
+    upBeforeSlot,
+    downBeforeSlot,
+    historyPointCount,
+    historySource,
+    debugClobFetchError,
+    debugClobDownFetchError,
+    debugDataFetchError,
+    clobUpMeta,
+    clobDownMeta,
+    tradesMeta,
+    cidForTrades,
+  } = pre;
+
+  const emptySim = { ...EMPTY_BOT_SIM_15M };
+  let sim =
+    historyUp.length > 0 || historyDown.length > 0
+      ? computeBotSimulationWithConfig(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec, simResolved)
+      : emptySim;
+  if (
+    sim.botWouldTake != null &&
+    r.slotEndSec != null &&
+    Number.isFinite(r.slotEndSec) &&
+    is15mMarketSlotEntryTimeForbidden(
+      sim.botEntryTimestamp,
+      r.slotEndSec,
+      simResolved.forbidFirstSec,
+      simResolved.forbidLastSec,
+    )
+  ) {
+    sim = emptySim;
+  }
+
+  sim = applyManualStopLossOverride(sim, r);
+
+  let simDebug = null;
+  if (debug) {
+    const why =
+      sim.botWouldTake == null
+        ? debugWhyNoSignalWithConfig(historyUp, historyDown, historyEndIso, r.slotEndSec, simResolved)
+        : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
+    simDebug = {
+      slug: r.eventSlug,
+      historyEndIso,
+      slotBounds: slotFilterBounds(r.slotEndSec),
+      conditionIdRaw: r.conditionId,
+      normalizedConditionId: r.normalizedConditionId ?? null,
+      cidForTrades: cidForTrades ?? null,
+      gammaEventId: r.gammaEventId ?? null,
+      historySource,
+      urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
+      clobUp: {
+        error: debugClobFetchError,
+        meta: clobUpMeta,
+        beforeSlot: summarizeSeriesForDebug(upBeforeSlot),
+        afterSlot: summarizeSeriesForDebug(historyUp),
+      },
+      clobDown: {
+        error: debugClobDownFetchError,
+        meta: clobDownMeta,
+        beforeSlot: summarizeSeriesForDebug(downBeforeSlot),
+        afterSlot: summarizeSeriesForDebug(historyDown),
+      },
+      tradesFallback: tradesMeta,
+      tradesError: debugDataFetchError,
+      pointsAfterSlotFilter: historyPointCount,
+      /** Aligné sur la simu (inclut complément 1−p par point). */
+      maxBinaryBeforeSlot: maxBinaryAcrossBothSeries(upBeforeSlot, downBeforeSlot),
+      maxBinaryAfterSlot: maxBinaryAcrossBothSeries(historyUp, historyDown),
+      why,
+      rule: {
+        detectMinP: simResolved.detectMinP,
+        simEntryMinP: simResolved.entryMinP,
+        simEntryMaxP: simResolved.entryMaxP,
+        signalMinDwellSec: simResolved.signalMinDwellSec ?? 0,
+        forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+          simResolved.forbidFirstSec,
+          simResolved.forbidLastSec,
+        ),
+        entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
+        seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
+        dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
+        marginBeforeSec: SLOT_15M_MARGIN_SEC,
+        entryForbiddenSlotFirstSec: simResolved.forbidFirstSec,
+        entryForbiddenSlotLastSec: simResolved.forbidLastSec,
+        stopLoss: {
+          enabled: BACKTEST_STOP_LOSS_ENABLED,
+          triggerPriceP: simResolved.stopLossTriggerPriceP,
+          drawdownEnabled: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
+          maxDrawdownPct: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED ? BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT : null,
+          worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
+          minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
+          bidProxyFromMid: BACKTEST_SL_USE_BID_PROXY_FROM_MID,
+          bidProxyOffsetP: BACKTEST_SL_BID_FROM_MID_OFFSET_P,
+        },
+        label:
+          'Détection ≥90¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 90–91¢ · complément 1−p · pas d’entrée 6 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
+      },
+    };
+  }
+
+  return {
+    ...r,
+    ...sim,
+    debugHistoryPoints: historyPointCount,
+    debugHistorySource: historySource,
+    debugHasTokenUp: Boolean(r.tokenIdUp),
+    debugClobFetchError,
+    debugDataFetchError,
+    ...(simDebug ? { simDebug } : {}),
+  };
+}
+
+/**
+ * Applique une config de simu à des lignes pré-fetch (voir `fetchBitcoin15mPreSimRows`).
+ * @param {{ quiet?: boolean }} [options] — si `quiet: true`, pas de `console.info` dev à chaque appel (ex. balayage de grille).
+ * @returns {{ enrichedFinal: object[], debugSummary: object|null }}
+ */
+export function applySimConfigToPreSimRows(preSimRows, simCfg, debug, windowHours, stats, options = {}) {
+  const quiet = options.quiet === true;
   const simResolved = resolve15mSimConfig({ simConfig: simCfg });
+  const enriched = preSimRows.map((pre) => applyResolvedSimToPreSimRow(pre, simResolved, debug));
+  const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
+  let debugSummaryOut = null;
+  if (debug) {
+    const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simResolved.detectMinP;
+    const highConvBefore = (e) => geMinBinary(e.simDebug?.maxBinaryBeforeSlot);
+    const highConvAfter = (e) => geMinBinary(e.simDebug?.maxBinaryAfterSlot);
+    const strippedBySlot = enrichedFinal.filter(
+      (e) =>
+        highConvBefore(e) &&
+        !highConvAfter(e) &&
+        e.simDebug?.why?.code === 'no_price_in_band'
+    );
+    debugSummaryOut = {
+      at: new Date().toISOString(),
+      windowHours,
+      rowsBefore15mSlotDedupe: stats.rowsBefore15mSlotDedupe,
+      rowsAfter15mSlotDedupe: stats.rowsAfter15mSlotDedupe,
+      rowsBefore15mTradeWindowDedupe: enriched.length,
+      rowsAfter15mTradeWindowDedupe: enrichedFinal.length,
+      rows: enrichedFinal.length,
+      withBotSignal: enrichedFinal.filter((e) => e.botWouldTake != null).length,
+      sourceClob: enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length,
+      sourceClobTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'clob+trades').length,
+      sourceTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length,
+      sourceNone: enrichedFinal.filter((e) => e.debugHistorySource === 'none').length,
+      noTokenUp: enrichedFinal.filter((e) => !e.debugHasTokenUp).length,
+      /** Conviction max (avec 1−p) avant / après filtre créneau — si « before » haut et « after » bas, le créneau exclut les bons trades. */
+      rowsMaxBinaryGeMinBeforeSlotFilter: enrichedFinal.filter(highConvBefore).length,
+      rowsMaxBinaryGeMinAfterSlotFilter: enrichedFinal.filter(highConvAfter).length,
+      rowsLikelyHighConvictionStrippedBySlotFilter: strippedBySlot.length,
+      slugFetchCount: stats.slugWalkSlots,
+      slugBatchSize: stats.slugBatchSize,
+      slugPauseMs: stats.slugPauseMs,
+      whyNoSignalCounts: enrichedFinal.reduce((acc, e) => {
+        const c = e.simDebug?.why?.code;
+        if (c) acc[c] = (acc[c] ?? 0) + 1;
+        return acc;
+      }, {}),
+      slotFilter: {
+        marginBeforeSec: SLOT_15M_MARGIN_SEC,
+        seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
+        entryMaxAfterSlotSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
+        dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
+        simSeriesWindowSec: SLOT_15M_SEC + SLOT_15M_MARGIN_SEC + SLOT_END_PADDING_SEC,
+      },
+      forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+        simResolved.forbidFirstSec,
+        simResolved.forbidLastSec,
+      ),
+      urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
+    };
+    console.info('[15m résolus] mode DEBUG — résumé', debugSummaryOut);
+  }
+
+  if (!quiet && typeof import.meta !== 'undefined' && import.meta.env?.DEV && !debug) {
+    const clob = enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length;
+    const trades = enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length;
+    const none = enrichedFinal.filter((e) => e.debugHistorySource === 'none').length;
+    const noToken = enrichedFinal.filter((e) => !e.debugHasTokenUp).length;
+    const sampleErr = enrichedFinal.find(
+      (e) => e.debugHistorySource === 'none' && (e.debugClobFetchError || e.debugDataFetchError)
+    );
+    console.info('[15m résolus] historique prix (aligné hook 1h + filtre créneau)', {
+      créneaux: enrichedFinal.length,
+      sourceClob: clob,
+      sourceDataApiTrades: trades,
+      sansHistorique: none,
+      sansTokenUp: noToken,
+      clobUrl: CLOB_PRICES_HISTORY_URL,
+      dataUrl: DATA_API_TRADES_URL,
+      forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
+        simResolved.forbidFirstSec,
+        simResolved.forbidLastSec,
+      ),
+      exempleErreurFetch:
+        sampleErr != null
+          ? [sampleErr.debugClobFetchError, sampleErr.debugDataFetchError].filter(Boolean).join(' | ') || '200 vide ?'
+          : null,
+    });
+  }
+  return { enrichedFinal, debugSummary: debugSummaryOut };
+}
+
+/**
+ * Fetch uniquement : marchés résolus + historiques CLOB/Data API par créneau, **sans** appliquer une config de simu.
+ * Enchaîner avec `applySimConfigToPreSimRows` pour chaque grille de paramètres (évite N× appels réseau).
+ */
+export async function fetchBitcoin15mPreSimRows(windowHours) {
   const seen = new Set();
       const results = [];
 
@@ -1249,254 +1656,26 @@ export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
         }
       });
 
-      const enrichedRows = await mapWithConcurrency(resultsOnePerSlot, ENRICH_ROWS_CONCURRENCY, async (r) => {
-        const historyEndIso =
-          r.slotEndSec != null && Number.isFinite(r.slotEndSec)
-            ? new Date(r.slotEndSec * 1000).toISOString()
-            : r.endDate;
-        let upBeforeSlot = [];
-        let downBeforeSlot = [];
-        let historySource = 'none';
-        let debugClobFetchError = null;
-        let debugClobDownFetchError = null;
-        let debugDataFetchError = null;
-        let clobUpMeta = null;
-        let clobDownMeta = null;
-        let tradesMeta = null;
-        const cidForTrades = r.normalizedConditionId ?? normalizeConditionId(r.conditionId);
-        const [clobResUp, clobResDown, trRes] = await Promise.all([
-          r.tokenIdUp ? fetchPriceHistory(r.tokenIdUp, historyEndIso) : Promise.resolve(null),
-          r.tokenIdDown ? fetchPriceHistory(r.tokenIdDown, historyEndIso) : Promise.resolve(null),
-          cidForTrades
-            ? fetchDataApiTradePointsByToken(
-                cidForTrades,
-                r.tokenIdUp,
-                r.tokenIdDown,
-                historyEndIso,
-                r.gammaEventId
-              )
-            : Promise.resolve(null),
-        ]);
-
-        debugDataFetchError = trRes?.error ?? null;
-        tradesMeta = trRes?.meta ?? null;
-        const tradePointsUp = Array.isArray(trRes?.pointsUp) ? trRes.pointsUp : [];
-        const tradePointsDown = Array.isArray(trRes?.pointsDown) ? trRes.pointsDown : [];
-
-        if (clobResUp) {
-          upBeforeSlot = clobResUp.history;
-          debugClobFetchError = clobResUp.error;
-          clobUpMeta = clobResUp.meta;
-          if (upBeforeSlot.length > 0) historySource = 'clob';
-        }
-        if (clobResDown) {
-          downBeforeSlot = clobResDown.history;
-          debugClobDownFetchError = clobResDown.error;
-          clobDownMeta = clobResDown.meta;
-          if (downBeforeSlot.length > 0 && historySource === 'none') historySource = 'clob';
-        }
-        const hadClobUpBeforeTrades = upBeforeSlot.length > 0;
-        const hadClobDownBeforeTrades = downBeforeSlot.length > 0;
-        if (tradePointsUp.length > 0) {
-          upBeforeSlot = mergePriceSeriesSorted(upBeforeSlot, tradePointsUp);
-        }
-        if (tradePointsDown.length > 0) {
-          downBeforeSlot = mergePriceSeriesSorted(downBeforeSlot, tradePointsDown);
-        }
-        const hadTradePoints = tradePointsUp.length + tradePointsDown.length > 0;
-        if (upBeforeSlot.length > 0) {
-          const hadAnyClob = hadClobUpBeforeTrades || hadClobDownBeforeTrades;
-          if (hadAnyClob && hadTradePoints) historySource = 'clob+trades';
-          else if (hadTradePoints && !hadClobUpBeforeTrades && !hadClobDownBeforeTrades) historySource = 'trades';
-          else historySource = 'clob';
-        } else if (downBeforeSlot.length > 0) {
-          if (hadTradePoints) historySource = 'clob+trades';
-          else if (historySource === 'none') historySource = 'clob';
-        } else {
-          historySource = 'none';
-        }
-        upBeforeSlot = normalizeHistorySeriesPoints(upBeforeSlot);
-        downBeforeSlot = normalizeHistorySeriesPoints(downBeforeSlot);
-        const historyUp = filterSeriesTo15mSlot(upBeforeSlot, r.slotEndSec);
-        const historyDown = filterSeriesTo15mSlot(downBeforeSlot, r.slotEndSec);
-        const historyPointCount = historyUp.length + historyDown.length;
-        const emptySim = { ...EMPTY_BOT_SIM_15M };
-        let sim =
-          historyUp.length > 0 || historyDown.length > 0
-            ? computeBotSimulationWithConfig(historyUp, historyDown, r.winner, historyEndIso, r.slotEndSec, simResolved)
-            : emptySim;
-        if (
-          sim.botWouldTake != null &&
-          r.slotEndSec != null &&
-          Number.isFinite(r.slotEndSec) &&
-          is15mSlotEntryTimeForbiddenWithWindows(
-            sim.botEntryTimestamp,
-            simResolved.forbidFirstSec,
-            simResolved.forbidLastSec,
-          )
-        ) {
-          sim = emptySim;
-        }
-
-        sim = applyManualStopLossOverride(sim, r);
-
-        let simDebug = null;
-        if (debug) {
-          const why =
-            sim.botWouldTake == null
-              ? debugWhyNoSignalWithConfig(historyUp, historyDown, historyEndIso, r.slotEndSec, simResolved)
-              : { code: 'signal', side: sim.botWouldTake, p: sim.botEntryPrice, ts: sim.botEntryTimestamp };
-          simDebug = {
-            slug: r.eventSlug,
-            historyEndIso,
-            slotBounds: slotFilterBounds(r.slotEndSec),
-            conditionIdRaw: r.conditionId,
-            normalizedConditionId: r.normalizedConditionId ?? null,
-            cidForTrades: cidForTrades ?? null,
-            gammaEventId: r.gammaEventId ?? null,
-            historySource,
-            urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
-            clobUp: {
-              error: debugClobFetchError,
-              meta: clobUpMeta,
-              beforeSlot: summarizeSeriesForDebug(upBeforeSlot),
-              afterSlot: summarizeSeriesForDebug(historyUp),
-            },
-            clobDown: {
-              error: debugClobDownFetchError,
-              meta: clobDownMeta,
-              beforeSlot: summarizeSeriesForDebug(downBeforeSlot),
-              afterSlot: summarizeSeriesForDebug(historyDown),
-            },
-            tradesFallback: tradesMeta,
-            tradesError: debugDataFetchError,
-            pointsAfterSlotFilter: historyPointCount,
-            /** Aligné sur la simu (inclut complément 1−p par point). */
-            maxBinaryBeforeSlot: maxBinaryAcrossBothSeries(upBeforeSlot, downBeforeSlot),
-            maxBinaryAfterSlot: maxBinaryAcrossBothSeries(historyUp, historyDown),
-            why,
-            rule: {
-              detectMinP: simResolved.detectMinP,
-              simEntryMinP: simResolved.entryMinP,
-              simEntryMaxP: simResolved.entryMaxP,
-              signalMinDwellSec: simResolved.signalMinDwellSec ?? 0,
-              forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
-                simResolved.forbidFirstSec,
-                simResolved.forbidLastSec,
-              ),
-              entryMaxAfterEndSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
-              seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
-              dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
-              marginBeforeSec: SLOT_15M_MARGIN_SEC,
-              entryForbiddenSlotFirstSec: simResolved.forbidFirstSec,
-              entryForbiddenSlotLastSec: simResolved.forbidLastSec,
-              stopLoss: {
-                enabled: BACKTEST_STOP_LOSS_ENABLED,
-                triggerPriceP: simResolved.stopLossTriggerPriceP,
-                drawdownEnabled: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED,
-                maxDrawdownPct: BACKTEST_STOP_LOSS_DRAWDOWN_ENABLED ? BACKTEST_STOP_LOSS_MAX_DRAWDOWN_PCT : null,
-                worstExitPriceP: BACKTEST_STOP_LOSS_WORST_PRICE_P,
-                minHoldSec: BACKTEST_STOP_LOSS_MIN_HOLD_SEC,
-                bidProxyFromMid: BACKTEST_SL_USE_BID_PROXY_FROM_MID,
-                bidProxyOffsetP: BACKTEST_SL_BID_FROM_MID_OFFSET_P,
-              },
-              label:
-                'Détection ≥90¢ · séries = fetch trades (fin slug +45 min) · entrée ≤ fin slug +30 s · 90–91¢ · complément 1−p · pas d’entrée 6 premières / 4 dernières min du créneau slug · stop-loss hybride (proxy prix &lt; seuil OU drawdown ≤ −X %) puis sortie worst FAK ~ worstExitPriceP',
-            },
-          };
-        }
-
-        return {
-          ...r,
-          ...sim,
-          debugHistoryPoints: historyPointCount,
-          debugHistorySource: historySource,
-          debugHasTokenUp: Boolean(r.tokenIdUp),
-          debugClobFetchError,
-          debugDataFetchError,
-          ...(simDebug ? { simDebug } : {}),
-        };
-      });
-      const enriched = enrichedRows.filter(Boolean);
-      const enrichedFinal = dedupeEnrichedOnePer15mTradeWindow(enriched);
-      let debugSummaryOut = null;
-      if (debug) {
-        const geMinBinary = (v) => v != null && Number.isFinite(v) && v >= simResolved.detectMinP;
-        const highConvBefore = (e) => geMinBinary(e.simDebug?.maxBinaryBeforeSlot);
-        const highConvAfter = (e) => geMinBinary(e.simDebug?.maxBinaryAfterSlot);
-        const strippedBySlot = enrichedFinal.filter(
-          (e) =>
-            highConvBefore(e) &&
-            !highConvAfter(e) &&
-            e.simDebug?.why?.code === 'no_price_in_band'
-        );
-        debugSummaryOut = {
-          at: new Date().toISOString(),
-          windowHours,
+      const enrichedRows = await mapWithConcurrency(resultsOnePerSlot, ENRICH_ROWS_CONCURRENCY, buildBitcoin15mPreSimRow);
+      const preSimRows = enrichedRows.filter(Boolean);
+      return {
+        preSimRows,
+        windowHours,
+        stats: {
           rowsBefore15mSlotDedupe: results.length,
           rowsAfter15mSlotDedupe: resultsOnePerSlot.length,
-          rowsBefore15mTradeWindowDedupe: enriched.length,
-          rowsAfter15mTradeWindowDedupe: enrichedFinal.length,
-          rows: enrichedFinal.length,
-          withBotSignal: enrichedFinal.filter((e) => e.botWouldTake != null).length,
-          sourceClob: enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length,
-          sourceClobTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'clob+trades').length,
-          sourceTrades: enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length,
-          sourceNone: enrichedFinal.filter((e) => e.debugHistorySource === 'none').length,
-          noTokenUp: enrichedFinal.filter((e) => !e.debugHasTokenUp).length,
-          /** Conviction max (avec 1−p) avant / après filtre créneau — si « before » haut et « after » bas, le créneau exclut les bons trades. */
-          rowsMaxBinaryGeMinBeforeSlotFilter: enrichedFinal.filter(highConvBefore).length,
-          rowsMaxBinaryGeMinAfterSlotFilter: enrichedFinal.filter(highConvAfter).length,
-          rowsLikelyHighConvictionStrippedBySlotFilter: strippedBySlot.length,
-          slugFetchCount: slugWalkSlots,
+          slugWalkSlots,
           slugBatchSize,
           slugPauseMs,
-          whyNoSignalCounts: enrichedFinal.reduce((acc, e) => {
-            const c = e.simDebug?.why?.code;
-            if (c) acc[c] = (acc[c] ?? 0) + 1;
-            return acc;
-          }, {}),
-          slotFilter: {
-            marginBeforeSec: SLOT_15M_MARGIN_SEC,
-            seriesHiPaddingSec: SLOT_SERIES_HI_PADDING_SEC,
-            entryMaxAfterSlotSec: SLOT_ENTRY_MAX_AFTER_END_SEC,
-            dataApiTradeFetchPaddingAfterSec: SLOT_END_PADDING_SEC,
-            simSeriesWindowSec: SLOT_15M_SEC + SLOT_15M_MARGIN_SEC + SLOT_END_PADDING_SEC,
-          },
-          forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
-            simResolved.forbidFirstSec,
-            simResolved.forbidLastSec,
-          ),
-          urls: { clob: CLOB_PRICES_HISTORY_URL, trades: DATA_API_TRADES_URL },
-        };
-        console.info('[15m résolus] mode DEBUG — résumé', debugSummaryOut);
-      }
+        },
+      };
+}
 
-      if (typeof import.meta !== 'undefined' && import.meta.env?.DEV && !debug) {
-        const clob = enrichedFinal.filter((e) => e.debugHistorySource === 'clob').length;
-        const trades = enrichedFinal.filter((e) => e.debugHistorySource === 'trades').length;
-        const none = enrichedFinal.filter((e) => e.debugHistorySource === 'none').length;
-        const noToken = enrichedFinal.filter((e) => !e.debugHasTokenUp).length;
-        const sampleErr = enrichedFinal.find(
-          (e) => e.debugHistorySource === 'none' && (e.debugClobFetchError || e.debugDataFetchError)
-        );
-        console.info('[15m résolus] historique prix (aligné hook 1h + filtre créneau)', {
-          créneaux: enrichedFinal.length,
-          sourceClob: clob,
-          sourceDataApiTrades: trades,
-          sansHistorique: none,
-          sansTokenUp: noToken,
-          clobUrl: CLOB_PRICES_HISTORY_URL,
-          dataUrl: DATA_API_TRADES_URL,
-          forbiddenMinuteWindowsUtc: buildForbiddenMinuteRuleEt(
-            simResolved.forbidFirstSec,
-            simResolved.forbidLastSec,
-          ),
-          exempleErreurFetch:
-            sampleErr != null
-              ? [sampleErr.debugClobFetchError, sampleErr.debugDataFetchError].filter(Boolean).join(' | ') || '200 vide ?'
-              : null,
-        });
-      }
-      return { enrichedFinal, debugSummary: debugSummaryOut };
+/**
+ * Charge et enrichit les marchés Bitcoin Up or Down 15 min résolus (slug btc-updown-15m-*).
+ * Utilisable depuis le hook React ou un script Node (`vite-node`) pour générer un cache JSON.
+ */
+export async function fetchBitcoin15mResolvedData(windowHours, simCfg, debug) {
+  const pack = await fetchBitcoin15mPreSimRows(windowHours);
+  return applySimConfigToPreSimRows(pack.preSimRows, simCfg, debug, pack.windowHours, pack.stats);
 }

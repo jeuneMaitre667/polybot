@@ -59,6 +59,7 @@ import {
   getTokenIdForSide,
 } from './gammaUpDownOrder.js';
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
+import * as simulationTrade from './simulationTrade.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -361,6 +362,8 @@ const CHAIN_ID = 137;
 // Fenêtre de prix pour signaux et mise max : 77 % – 78 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
 const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.77;
 const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.78;
+const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1500);
+const signalEntryTimes = new Map(); // tokenId -> premier instant vu en ms
 const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.78;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
@@ -574,6 +577,8 @@ const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
 /** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
+/** Simulation : solde virtuel (fichier simulation-paper.json), mêmes signaux / sizing / Telegram [PAPER], aucun ordre CLOB réel. */
+const simulationTradeEnabled = simulationTrade.isSimulationTradeEnabled();
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
 const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.6));
@@ -886,8 +891,9 @@ async function notifyTelegramStopLossTriggered(p) {
     const entryCents = Number.isFinite(p?.entryPriceP) ? p.entryPriceP * 100 : null;
     const bestBidCents = Number.isFinite(p?.bestBidP) ? p.bestBidP * 100 : null;
     const triggerCents = Number.isFinite(p?.stopLossTriggerPriceP) ? p.stopLossTriggerPriceP * 100 : null;
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `⚠️ Stop-loss déclenché (${reason})`,
+      `${pre}⚠️ Stop-loss déclenché (${reason})`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `entry : ${entryCents != null ? `${entryCents.toFixed(2)}¢` : '—'}`,
@@ -912,8 +918,9 @@ async function notifyTelegramStopLossFilled(p) {
   stopLossTelegramFilledNotified.add(cid);
 
   try {
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `✅ Stop-loss vente remplie`,
+      `${pre}✅ Stop-loss vente remplie`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `filled : ${p?.filledUsdc != null && Number.isFinite(p.filledUsdc) ? p.filledUsdc.toFixed(2) : '?'} USDC`,
@@ -933,8 +940,9 @@ async function notifyTelegramStopLossExitFailed(p) {
   if (!cid || stopLossTelegramExitFailedNotified.has(cid)) return;
   stopLossTelegramExitFailedNotified.add(cid);
   try {
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `❌ Stop-loss déclenché mais vente refusée`,
+      `${pre}❌ Stop-loss déclenché mais vente refusée`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       p?.errorHint ? `raison : ${String(p.errorHint).slice(0, 180)}` : '',
@@ -954,8 +962,9 @@ async function notifyTelegramStopLossEscalation(p) {
   if (!cid || stopLossTelegramEscalatedNotified.has(cid)) return;
   stopLossTelegramEscalatedNotified.add(cid);
   try {
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `🚨 Escalade SL: position non clôturée`,
+      `${pre}🚨 Escalade SL: position non clôturée`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       Number.isFinite(p?.openSinceMs) ? `ouvert depuis : ${Math.round(Number(p.openSinceMs) / 1000)}s` : '',
@@ -973,8 +982,9 @@ async function notifyTelegramStopLossRecoveredLater(p) {
   if (!cid || stopLossTelegramRecoveredNotified.has(cid)) return;
   stopLossTelegramRecoveredNotified.add(cid);
   try {
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `ℹ️ SL rattrapé: sortie détectée a posteriori`,
+      `${pre}ℹ️ SL rattrapé: sortie détectée a posteriori`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       p?.detail ? `détail : ${String(p.detail).slice(0, 180)}` : '',
@@ -1247,6 +1257,48 @@ function logSignalInRangeButNoOrder(source, reason, signal, fields = {}) {
   logJson('info', 'signal_in_range_but_no_order', payload);
   try {
     console.log(`[signal_in_range_but_no_order] ${JSON.stringify(payload)}`);
+  } catch (_) {}
+}
+
+const STOP_LOSS_TOUCHED_WATCH_LOG_MS = Math.max(1000, Number(process.env.STOP_LOSS_TOUCHED_WATCH_LOG_MS) || 5000);
+const stopLossTouchedWatchThrottle = new Map();
+
+/**
+ * Ligne JSONL pour le panneau dashboard « Watch no-order (live) » : seuil SL atteint (best bid ou drawdown).
+ * Throttle par (conditionId, type prix vs drawdown), comme signal_in_range_but_no_order.
+ */
+function logStopLossTouchedWatch({
+  conditionId,
+  tokenId,
+  takeSide,
+  bestBid,
+  entryPriceP,
+  drawdownPct,
+  triggerByPrice,
+  triggerByDrawdown,
+}) {
+  const cond = String(conditionId || 'na').slice(0, 120);
+  const kind = triggerByPrice ? 'price' : triggerByDrawdown ? 'drawdown' : 'na';
+  const throttleKey = `${cond}|${kind}`;
+  const now = Date.now();
+  const prev = stopLossTouchedWatchThrottle.get(throttleKey);
+  if (prev && now - prev < STOP_LOSS_TOUCHED_WATCH_LOG_MS) return;
+  stopLossTouchedWatchThrottle.set(throttleKey, now);
+  const reason = triggerByPrice ? 'stop_loss_price' : 'stop_loss_drawdown';
+  const payload = {
+    source: 'stop_loss',
+    reason,
+    bestBidP: Math.round(Number(bestBid) * 1e6) / 1e6,
+    stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+    takeSide: takeSide === 'Up' || takeSide === 'Down' ? takeSide : null,
+    conditionId: cond,
+    tokenId: tokenId ? String(tokenId).slice(0, 32) : null,
+    entryPriceP: entryPriceP != null && Number.isFinite(Number(entryPriceP)) ? Math.round(Number(entryPriceP) * 1e6) / 1e6 : null,
+    drawdownPct: drawdownPct != null && Number.isFinite(Number(drawdownPct)) ? Math.round(Number(drawdownPct) * 100) / 100 : null,
+  };
+  logJson('info', 'stop_loss_touched_watch', payload);
+  try {
+    console.log(`[stop_loss_touched_watch] ${JSON.stringify(payload)}`);
   } catch (_) {}
 }
 
@@ -1710,11 +1762,15 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
   if (!telegramTradeAlertsEnabled()) return;
   try {
     let balanceAfter = null;
-    if (clobClient) {
-      balanceAfter = await getUsdcSpendableViaClob(clobClient);
-    }
-    if (balanceAfter == null) {
-      balanceAfter = await getUsdcBalanceRpc();
+    if (orderData?.simulationTrade) {
+      balanceAfter = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+    } else {
+      if (clobClient) {
+        balanceAfter = await getUsdcSpendableViaClob(clobClient);
+      }
+      if (balanceAfter == null) {
+        balanceAfter = await getUsdcBalanceRpc();
+      }
     }
     noteSessionBaselineIfNeeded(balanceAfter);
 
@@ -1762,8 +1818,11 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       Number.isFinite(totalLatencyMs) && totalLatencyMs > 0 && Number.isFinite(placeOrderMs) && placeOrderMs >= 0
         ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
         : null;
+    const paperPre = orderData?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      hasFilled ? `✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})` : `⚠️ Trade accepté (remplissage immédiat nul)`,
+      hasFilled
+        ? `${paperPre}✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`
+        : `${paperPre}⚠️ Trade accepté (remplissage immédiat nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
       `Montant demandé : ${amtStr} USDC`,
       `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
@@ -1785,7 +1844,11 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
     if (latencyRatio != null) {
       lines.push(`ratio placeOrder/total : ${(latencyRatio * 100).toFixed(1)}%`);
     }
-    lines.push(`Solde CLOB (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`);
+    lines.push(
+      orderData?.simulationTrade
+        ? `Solde paper (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`
+        : `Solde CLOB (après trade) : ${balanceAfter != null ? balanceAfter.toFixed(2) : '?'} USDC`,
+    );
     if (deltaLine) lines.push(deltaLine);
 
     await sendTelegramAlert(lines.filter(Boolean).join('\n'));
@@ -1809,6 +1872,23 @@ async function notifyTelegramRedeemFailureOnce(cid, fields) {
 async function notifyTelegramRedeemEvent(p) {
   if (!telegramRedeemAlertsEnabled()) return;
   try {
+    if (p?.simulationTrade) {
+      const bal = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+      const cid = String(p.conditionId || '').slice(0, 22);
+      const payout = Number(p.paperPayoutUsd);
+      const payoutStr = Number.isFinite(payout) ? `${payout.toFixed(2)} USDC` : '?';
+      const winner = p.winnerGamma != null ? String(p.winnerGamma) : '?';
+      const side = p.takeSide != null ? String(p.takeSide) : '?';
+      const msg = [
+        `[PAPER] ✅ Résolution marché (simulation)`,
+        `conditionId : ${cid}…`,
+        `gagnant Gamma : ${winner} · ta position : ${side}`,
+        `crédit paper : ${payoutStr}`,
+        `Solde paper après : ${bal.toFixed(2)} USDC`,
+      ].join('\n');
+      await sendTelegramAlert(msg);
+      return;
+    }
     const beforeSnap = await getUsdcBalanceForTelegramAlerts();
     const balBefore = beforeSnap.balance;
     noteSessionBaselineIfNeeded(balBefore);
@@ -2062,11 +2142,153 @@ function parseMarketEndDateToMs(endDate) {
   return Number.isFinite(t) && t > 0 ? t : null;
 }
 
+/**
+ * Sortie stop-loss en simulation : crédit USDC paper au prix worst (même logique de prix que le CLOB, sans POST).
+ */
+async function executePaperStopLossExit(p) {
+  const {
+    conditionId,
+    tokenId,
+    takeSide,
+    endMs,
+    entryPriceP,
+    bestBid,
+    drawdownPct,
+    triggerByPrice,
+    triggerByDrawdown,
+    tokensToSell,
+  } = p;
+  const minRawAmount = 1;
+  const minRawSafe = 2;
+  const rawMaker = tokensToSell * 1e6;
+  if (!(rawMaker >= minRawAmount)) {
+    logJson('warn', 'Stop-loss PAPER: tokens trop petits', { conditionId: conditionId.slice(0, 18) + '…', takeSide, tokensToSell });
+    return;
+  }
+  const minWorstPriceForValidTakerP = minRawAmount / (tokensToSell * 1e6);
+  let bestBidLive = bestBid;
+  let drawdownPctLive = drawdownPct;
+  
+  // Calcul du prix de sortie pour limiter la perte à 25% du stake initial
+  let worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
+  
+  // Si on connait le stake initial, calculer le prix pour réaliser 25% de perte
+  const originalStakeUsd = Number(p.originalStakeUsd);
+  if (Number.isFinite(originalStakeUsd) && originalStakeUsd > 0) {
+    const maxLossPct = 0.25; // 25% de perte
+    const targetRevenue = originalStakeUsd * (1 - maxLossPct); // 75% du stake
+    const targetExitPrice = Math.max(minWorstPriceForValidTakerP, targetRevenue / tokensToSell);
+    worstPricePUsed = Math.min(targetExitPrice, stopLossTriggerPriceP);
+  } else {
+    worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
+  }
+  
+  if (Number.isFinite(bestBidLive) && bestBidLive > 0 && bestBidLive < 1) {
+    worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
+  }
+  worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
+  const rawTakerLoop = tokensToSell * worstPricePUsed * 1e6;
+  if (!(rawTakerLoop >= minRawAmount) || rawMaker < minRawSafe || rawTakerLoop < minRawSafe) {
+    stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+    return;
+  }
+
+  const stopLossTriggeredAtMs = Date.now();
+  if (!stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+    stopLossFirstTriggeredAtByCondition.set(conditionId, stopLossTriggeredAtMs);
+    recordStopLossMetric('triggered', { conditionId, takeSide });
+  }
+  void notifyTelegramStopLossTriggered({
+    conditionId,
+    takeSide,
+    triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+    entryPriceP,
+    bestBidP: bestBidLive,
+    drawdownPct: drawdownPctLive,
+    stopLossTriggerPriceP,
+    stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? Math.abs(stopLossMaxDrawdownPct) : null,
+    stopLossWorstPricePUsed: worstPricePUsed,
+    simulationTrade: true,
+  });
+
+  const totalFilledTokens = tokensToSell;
+  const totalFilledUsdc = Math.round(tokensToSell * worstPricePUsed * 1e6) / 1e6;
+  simulationTrade.adjustPaperBalance(BOT_DIR, totalFilledUsdc);
+  simulationTrade.markPaperRedeemed(BOT_DIR, conditionId);
+
+  const nowIso = new Date().toISOString();
+  const exitOrder = {
+    at: nowIso,
+    conditionId,
+    tokenId,
+    takeSide,
+    orderID: `sim-sl-${Date.now()}`,
+    stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+    stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
+    stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+    stopLossObservedDrawdownPct: Math.round(drawdownPctLive * 100) / 100,
+    stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
+    stopLossBestBidP: Math.round(bestBidLive * 1e6) / 1e6,
+    stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+    marketEndMs: endMs,
+    clobSignerAddress: wallet?.address ?? null,
+    clobSignatureType: CLOB_SIGNATURE_TYPE,
+    clobFunderAddress: clobFunderAddress ?? null,
+    stopLossPartialFillRetries: 0,
+    stopLossRemainingOutcomeTokens: 0,
+    stopLossExit: true,
+    simulationTrade: true,
+    filledOutcomeTokens: totalFilledTokens,
+    filledUsdc: totalFilledUsdc,
+    fillRatio: 1,
+    averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+    clobStatus: 'simulated',
+    clobSuccess: true,
+  };
+
+  recordStopLossMetric('filled', {
+    conditionId,
+    fillRatio: 1,
+    retries: 0,
+    remainingTokens: 0,
+    triggeredAtMs: stopLossTriggeredAtMs,
+    triggerPriceP: stopLossTriggerPriceP,
+    averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+  });
+
+  writeLastOrder(exitOrder);
+  appendOrderLog(exitOrder);
+  stopLossTelegramExitFailedNotified.delete(conditionId);
+  stopLossTelegramEscalatedNotified.delete(conditionId);
+  stopLossTelegramRecoveredNotified.delete(conditionId);
+  stopLossFirstTriggeredAtByCondition.delete(conditionId);
+  stopLossNextAttemptByCondition.delete(conditionId);
+  executionCooldownByCondition.set(conditionId, (endMs != null && Number.isFinite(endMs) ? endMs : Date.now()) + 60_000);
+
+  void notifyTelegramStopLossFilled({
+    conditionId,
+    takeSide,
+    filledUsdc: totalFilledUsdc,
+    filledOutcomeTokens: totalFilledTokens,
+    fillRatio: 1,
+    orderID: exitOrder.orderID,
+    simulationTrade: true,
+  });
+
+  logJson('warn', 'Stop-loss PAPER: sortie simulée', {
+    conditionId: conditionId.slice(0, 18) + '…',
+    takeSide,
+    worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+    filledUsdc: totalFilledUsdc,
+  });
+}
+
 async function tryStopLossForOpenPosition(clobClient) {
-  if (!stopLossEnabled || !walletConfigured || !wallet || !clobClient) return;
+  if (!stopLossEnabled || !walletConfigured || !wallet) return;
   const last = readLastOrder();
   if (!last || typeof last !== 'object') return;
   if (last.stopLossExit === true) return;
+  if (!last.simulationTrade && !clobClient) return;
   const conditionId = String(last.conditionId || '').trim();
   const tokenId = String(last.tokenId || '').trim();
   const takeSide = last.takeSide === 'Up' || last.takeSide === 'Down' ? last.takeSide : null;
@@ -2095,6 +2317,17 @@ async function tryStopLossForOpenPosition(clobClient) {
   const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
   if (!triggerByPrice && !triggerByDrawdown) return;
 
+  logStopLossTouchedWatch({
+    conditionId,
+    tokenId,
+    takeSide,
+    bestBid,
+    entryPriceP,
+    drawdownPct,
+    triggerByPrice,
+    triggerByDrawdown,
+  });
+
   let tokensToSell = Number(last.filledOutcomeTokens);
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
     const stakeUsd = Number(last.filledUsdc ?? last.amountUsd);
@@ -2103,6 +2336,33 @@ async function tryStopLossForOpenPosition(clobClient) {
     }
   }
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
+
+  if (last.simulationTrade === true) {
+    const filledUsdForDustSim = Number(last.filledUsdc);
+    if (Number.isFinite(filledUsdForDustSim) && filledUsdForDustSim >= 0 && filledUsdForDustSim < 0.05) {
+      logJson('warn', 'Stop-loss PAPER: entrée négligeable', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        filledUsdc: filledUsdForDustSim,
+      });
+      return;
+    }
+    await executePaperStopLossExit({
+      conditionId,
+      tokenId,
+      takeSide,
+      endMs,
+      entryPriceP,
+      bestBid,
+      drawdownPct,
+      triggerByPrice,
+      triggerByDrawdown,
+      tokensToSell,
+      originalStakeUsd: Number(last.filledUsdc ?? last.amountUsd),
+    });
+    return;
+  }
+
   const spendableTokensFromClob = await getOutcomeSpendableViaClob(clobClient, tokenId);
   const adjustedSellAmount = resolveSellAmountFromSpendable(tokensToSell, spendableTokensFromClob, 0.00001);
   if (adjustedSellAmount != null) tokensToSell = adjustedSellAmount;
@@ -2527,7 +2787,21 @@ async function runStopLossPass() {
   if (stopLossPassBusy) return null;
   stopLossPassBusy = true;
   try {
-    const clobClient = await buildClobClientCachedCreds();
+    let clobClient = null;
+    try {
+      clobClient = await buildClobClientCachedCreds();
+    } catch (err) {
+      try {
+        const lo = readLastOrder();
+        if (lo?.simulationTrade === true) {
+          console.warn('[stop_loss_pass] CLOB indisponible — tentative SL PAPER sans client.');
+        } else {
+          throw err;
+        }
+      } catch {
+        throw err;
+      }
+    }
     await tryStopLossForOpenPosition(clobClient);
     return clobClient;
   } catch (err) {
@@ -2577,6 +2851,88 @@ function getLatestMarketEndMsByConditionId() {
 }
 
 /**
+ * Résolution marché en mode paper : crédit USDC si le côté acheté gagne (Gamma), sans tx chain.
+ */
+async function trySimulationPaperRedeem() {
+  if (!simulationTradeEnabled) return;
+  const tradedIds = getTradedConditionIds();
+  const marketEndByCid =
+    REDEEM_AFTER_MARKET_END_MS > 0 ? getLatestMarketEndMsByConditionId() : null;
+  const nowMs = Date.now();
+  for (const cid of tradedIds) {
+    if (!simulationTrade.conditionHasSimulationTrade(ORDERS_LOG_FILE, cid)) continue;
+    if (simulationTrade.isPaperRedeemed(BOT_DIR, cid)) continue;
+    const lastEv = simulationTrade.ordersLogLastEntryForCondition(ORDERS_LOG_FILE, cid);
+    if (!lastEv || lastEv.simulationTrade !== true) continue;
+    if (lastEv.paperResolution === true || lastEv.event === 'resolution_redeem_paper') {
+      if (!simulationTrade.isPaperRedeemed(BOT_DIR, cid)) simulationTrade.markPaperRedeemed(BOT_DIR, cid);
+      continue;
+    }
+    if (lastEv.stopLossExit === true) {
+      simulationTrade.markPaperRedeemed(BOT_DIR, cid);
+      continue;
+    }
+    if (marketEndByCid) {
+      const endMs = marketEndByCid.get(String(cid).trim());
+      if (endMs == null || !Number.isFinite(endMs)) {
+        if (!REDEEM_ALLOW_UNKNOWN_MARKET_END_MS) continue;
+      } else if (nowMs < endMs + REDEEM_AFTER_MARKET_END_MS) {
+        continue;
+      }
+    }
+    let market;
+    try {
+      market = await simulationTrade.fetchGammaMarketForCondition(cid);
+    } catch (e) {
+      logJson('warn', 'PAPER redeem: Gamma indisponible', {
+        cid: cid.slice(0, 14),
+        err: String(e?.message || e).slice(0, 120),
+      });
+      continue;
+    }
+    if (!simulationTrade.isGammaMarketClosed(market)) continue;
+    const winner = simulationTrade.winnerFromGammaMarket(market);
+    const takeSide = lastEv.takeSide === 'Up' || lastEv.takeSide === 'Down' ? lastEv.takeSide : null;
+    const tokens = Number(lastEv.filledOutcomeTokens);
+    const tok = Number.isFinite(tokens) && tokens > 0 ? tokens : null;
+    let payoutUsd = 0;
+    if (winner && takeSide && tok != null) {
+      payoutUsd = winner === takeSide ? tok * 1 : 0;
+    }
+    payoutUsd = Math.round(payoutUsd * 1e6) / 1e6;
+    simulationTrade.adjustPaperBalance(BOT_DIR, payoutUsd);
+    simulationTrade.markPaperRedeemed(BOT_DIR, cid);
+    const at = new Date().toISOString();
+    const resolutionLog = {
+      at,
+      conditionId: cid,
+      simulationTrade: true,
+      event: 'resolution_redeem_paper',
+      outcome: payoutUsd > 0 ? 'win' : 'lose',
+      winnerGamma: winner,
+      takeSide,
+      payoutUsd,
+      filledOutcomeTokens: tok,
+    };
+    appendOrderLog(resolutionLog);
+    writeLastOrder({
+      ...resolutionLog,
+      paperResolution: true,
+      stopLossExit: false,
+    });
+    await notifyTelegramRedeemEvent({
+      ok: true,
+      conditionId: cid,
+      simulationTrade: true,
+      paperPayoutUsd: payoutUsd,
+      winnerGamma: winner,
+      takeSide,
+    });
+    logJson('info', 'PAPER redeem résolution', { conditionId: cid.slice(0, 18), payoutUsd, winner });
+  }
+}
+
+/**
  * Redeem positions (tokens gagnants → USDC) pour les conditionIds tradés (marchés résolus).
  * - EOA (CLOB_SIGNATURE_TYPE=0) : tx directe depuis le wallet.
  * - Proxy / Safe : même appel CTF mais via le relayer Polymarket (gasless) — doc builders ; nécessite POLY_BUILDER_*.
@@ -2606,6 +2962,7 @@ async function tryRedeemResolvedPositions() {
     REDEEM_AFTER_MARKET_END_MS > 0 ? getLatestMarketEndMsByConditionId() : null;
   const nowMs = Date.now();
   for (const cid of tradedIds) {
+    if (simulationTrade.conditionHasSimulationTrade(ORDERS_LOG_FILE, cid)) continue;
     const conditionIdBytes32 = conditionIdToBytes32(cid);
     if (!conditionIdBytes32) continue;
     if (getRedeemedConditionIdsSet().has(String(cid).trim())) continue;
@@ -3586,6 +3943,26 @@ async function fetchSignalsFresh() {
       const upInRange = priceUp >= MIN_P && priceUp <= MAX_P;
       const downInRange = priceDown >= MIN_P && priceDown <= MAX_P;
       const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+
+      const nowMs = Date.now();
+      const applyDwell = (inRange, tokenId) => {
+        if (!tokenId) return false;
+        if (inRange) {
+          if (!signalEntryTimes.has(tokenId)) signalEntryTimes.set(tokenId, nowMs);
+          const elapsed = nowMs - signalEntryTimes.get(tokenId);
+          return elapsed >= SIGNAL_MIN_DWELL_MS;
+        } else {
+          signalEntryTimes.delete(tokenId);
+          return false;
+        }
+      };
+
+      const tokenIdUp = getTokenIdToBuy(merged, 'Up');
+      const tokenIdDown = getTokenIdToBuy(merged, 'Down');
+      
+      const upPassedDwell = applyDwell(upInRange, tokenIdUp);
+      const downPassedDwell = applyDwell(downInRange, tokenIdDown);
+
       if (signalVisibilityLog) {
         const gammaPair = getAlignedUpDownGammaPrices(merged);
         const timingSignal = { endDate: marketEndDate };
@@ -3611,24 +3988,24 @@ async function fetchSignalsFresh() {
             : {}),
         });
       }
-      if (upInRange) {
+      if (upPassedDwell) {
         results.push({
           market: merged,
           eventSlug: ev.slug ?? eventSlug,
           takeSide: 'Up',
           priceUp,
           priceDown,
-          tokenIdToBuy: getTokenIdToBuy(merged, 'Up'),
+          tokenIdToBuy: tokenIdUp,
           endDate: marketEndDate,
         });
-      } else if (downInRange) {
+      } else if (downPassedDwell) {
         results.push({
           market: merged,
           eventSlug: ev.slug ?? eventSlug,
           takeSide: 'Down',
           priceUp,
           priceDown,
-          tokenIdToBuy: getTokenIdToBuy(merged, 'Down'),
+          tokenIdToBuy: tokenIdDown,
           endDate: marketEndDate,
         });
       }
@@ -4348,9 +4725,15 @@ async function tryPlaceOrderForSignal(signal) {
     return;
   }
   const tBal0 = Date.now();
-  const spendableBalance = await getUsdcSpendableViaClob(clobClient);
-  const rpcBalance = spendableBalance == null ? await getUsdcBalanceRpc() : null;
-  const balance = spendableBalance ?? rpcBalance;
+  let balance;
+  if (simulationTradeEnabled) {
+    simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+    balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+  } else {
+    const spendableBalance = await getUsdcSpendableViaClob(clobClient);
+    const rpcBalance = spendableBalance == null ? await getUsdcBalanceRpc() : null;
+    balance = spendableBalance ?? rpcBalance;
+  }
   timingsMs.balance = Math.max(1, Date.now() - tBal0);
   const balanceForSizing =
     useBalanceAsSize && budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
@@ -4417,7 +4800,7 @@ async function tryPlaceOrderForSignal(signal) {
     return;
   }
   // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
-  if (useMarketOrder && clobClient) {
+  if (useMarketOrder && clobClient && !simulationTradeEnabled) {
     try {
       const worstPrice = marketWorstPriceP;
       const userMarketOrder = { tokenID: signalWithPrice.tokenIdToBuy, amount: amountUsd, side: Side.BUY, price: worstPrice };
@@ -4430,11 +4813,32 @@ async function tryPlaceOrderForSignal(signal) {
   }
   placedKeys.add(key);
   const tPlace0 = Date.now();
-  const result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, {
-    allowBelowMin,
-    forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
-    maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
-  });
+  let result;
+  if (simulationTradeEnabled) {
+    const simFill = simulationTrade.buildSimulatedBuyFill({
+      amountUsd,
+      bestAskP: bestAskLive,
+      conditionId: key,
+    });
+    if (!simFill.ok) {
+      placedKeys.delete(key);
+      timingsMs.placeOrder = Date.now() - tPlace0;
+      logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
+        bestAskP: bestAskLive,
+        amountUsd: Math.round(amountUsd * 100) / 100,
+        error: String(simFill.error || '').slice(0, 240),
+      });
+      return;
+    }
+    simulationTrade.adjustPaperBalance(BOT_DIR, -simFill.filledUsdc);
+    result = simFill;
+  } else {
+    result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, {
+      allowBelowMin,
+      forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+      maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+    });
+  }
   timingsMs.placeOrder = Date.now() - tPlace0;
   const time = new Date().toISOString();
   if (result.ok) {
@@ -4466,10 +4870,11 @@ async function tryPlaceOrderForSignal(signal) {
       latencyMs,
       timingsMs,
       ...fillLog,
+      ...(result.simulationTrade ? { simulationTrade: true } : {}),
     };
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    void notifyTelegramTradeSuccess('ws', orderData, clobClient);
+    void notifyTelegramTradeSuccess('ws', orderData, simulationTradeEnabled ? null : clobClient);
     void notifyTelegramLatencyAbnormal({
       source: 'ws',
       conditionId: key,
@@ -4887,6 +5292,7 @@ async function run() {
 
     // Redeem avant le garde-fou place_orders : doit tourner même si AUTO_PLACE_ENABLED=false ou kill switch
     // (récupération USDC), tant que wallet + REDEEM_ENABLED. tryRedeemResolvedPositions() no-op sinon.
+    await profiler.measure('redeem_paper', () => trySimulationPaperRedeem());
     await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
     // Stop-loss déjà évalué en fast-path en début de cycle.
@@ -4918,7 +5324,21 @@ async function run() {
     let amountUsd = orderSizeUsd;
     let balanceForDigest = null;
     await profiler.measure('balance', async () => {
-      if (useBalanceAsSize) {
+      if (simulationTradeEnabled) {
+        simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+        const balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+        const balanceForSizing =
+          budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+        amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
+        const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+        if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+          amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+        }
+        console.log(`Solde PAPER: ${balance.toFixed(2)} USDC (SIMULATION_TRADE_ENABLED)`);
+        writeBalance(balance);
+        balanceForDigest = balance;
+        if (amountUsd < orderSizeMinUsd) return;
+      } else if (useBalanceAsSize) {
         const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
         const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
         const balanceForSizing =
@@ -4984,9 +5404,11 @@ async function run() {
       });
       logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, { ...timingDetails });
       let attemptAmountUsd = amountUsd;
-      if (useBalanceAsSize) {
+      if (useBalanceAsSize || simulationTradeEnabled) {
         const tBal0 = Date.now();
-        const balance = await getBalance();
+        const balance = simulationTradeEnabled
+          ? simulationTrade.getPaperBalanceUsd(BOT_DIR)
+          : await getBalance();
         timingsMs.balance = Math.max(1, Date.now() - tBal0);
         attemptAmountUsd = balance != null ? balance : orderSizeUsd;
       }
@@ -5016,9 +5438,11 @@ async function run() {
       continue;
     }
 
-    if (useBalanceAsSize) {
+    if (useBalanceAsSize || simulationTradeEnabled) {
       const tBal0 = Date.now();
-      const balance = await getBalance();
+      const balance = simulationTradeEnabled
+        ? simulationTrade.getPaperBalanceUsd(BOT_DIR)
+        : await getBalance();
       timingsMs.balance = Math.max(1, Date.now() - tBal0);
       const balanceForSizing =
         budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
@@ -5121,11 +5545,33 @@ async function run() {
 
     placedKeys.add(key);
     const tPlace0 = Date.now();
-    const result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, {
-      allowBelowMin,
-      forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
-      maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
-    });
+    const bestAskPoll = pickSignalBestAskP(s);
+    let result;
+    if (simulationTradeEnabled) {
+      const simFill = simulationTrade.buildSimulatedBuyFill({
+        amountUsd,
+        bestAskP: bestAskPoll,
+        conditionId: key,
+      });
+      if (!simFill.ok) {
+        placedKeys.delete(key);
+        timingsMs.placeOrder = Date.now() - tPlace0;
+        logSignalInRangeButNoOrder('poll', 'place_order_failed', s, {
+          bestAskP: bestAskPoll,
+          amountUsd: Math.round(amountUsd * 100) / 100,
+          error: String(simFill.error || '').slice(0, 240),
+        });
+        continue;
+      }
+      simulationTrade.adjustPaperBalance(BOT_DIR, -simFill.filledUsdc);
+      result = simFill;
+    } else {
+      result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, {
+        allowBelowMin,
+        forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+        maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+      });
+    }
     timingsMs.placeOrder = Date.now() - tPlace0;
     const time = new Date().toISOString();
     if (result.ok) {
@@ -5157,10 +5603,11 @@ async function run() {
         latencyMs,
         timingsMs,
         ...fillLog,
+        ...(result.simulationTrade ? { simulationTrade: true } : {}),
       };
       writeLastOrder(orderData);
       appendOrderLog(orderData);
-      void notifyTelegramTradeSuccess('poll', orderData, clobClient);
+      void notifyTelegramTradeSuccess('poll', orderData, simulationTradeEnabled ? null : clobClient);
       void notifyTelegramLatencyAbnormal({
         source: 'poll',
         conditionId: key,
@@ -5238,6 +5685,12 @@ async function run() {
 
 async function main() {
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
+  simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+  if (simulationTradeEnabled) {
+    console.warn(
+      `⚠️ SIMULATION_TRADE_ENABLED=true — aucun ordre réel sur le CLOB ; solde virtuel (départ ${simulationTrade.getSimulationStartUsd()} USDC, fichier simulation-paper.json). Les alertes Telegram sont préfixées [PAPER].`,
+    );
+  }
   console.log(
     `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${
       MARKET_MODE === '15m'
@@ -5316,6 +5769,7 @@ async function main() {
   logJson('info', 'Bot démarré — boucle poll', {
     pid: process.pid,
     mode: MARKET_MODE,
+    simulationTradeEnabled,
     autoPlaceEnabled,
     recordLiquidityHistory,
     signalVisibilityLog,
