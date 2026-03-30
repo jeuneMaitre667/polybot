@@ -362,7 +362,7 @@ const CHAIN_ID = 137;
 // Fenêtre de prix pour signaux et mise max : 77 % – 78 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
 const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.77;
 const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.78;
-const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1500);
+const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1000);
 const signalEntryTimes = new Map(); // tokenId -> premier instant vu en ms
 const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.78;
 /**

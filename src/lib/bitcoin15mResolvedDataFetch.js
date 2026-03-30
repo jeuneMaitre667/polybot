@@ -70,7 +70,7 @@ export function resolve15mSimConfig(options) {
   const dwellRaw = dwellFromCfg !== undefined && dwellFromCfg !== null ? dwellFromCfg : dwellFromEnv;
   const signalMinDwellSec =
     dwellRaw === undefined || dwellRaw === '' || dwellRaw === null
-      ? 1.5
+      ? 1.0
       : Math.max(0, Number(dwellRaw) || 0);
   const efMin = cfg?.entryForbiddenFirstMin;
   const elMin = cfg?.entryForbiddenLastMin;
@@ -142,7 +142,7 @@ export const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
 
 export const BACKTEST_ENTRY_SLIPPAGE_P = Math.max(
   0,
-  Math.min(0.1, Number(import.meta.env.VITE_BACKTEST_ENTRY_SLIPPAGE_P) || 0.01)
+  Math.min(0.1, Number(import.meta.env.VITE_BACKTEST_ENTRY_SLIPPAGE_P) || 0.00)
 );
 export const BACKTEST_SL_SLIPPAGE_P = Math.max(
   0,
