@@ -618,13 +618,6 @@ const STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS = Math.max(
 /** Escalade Telegram si la position reste ouverte après déclenchement SL. */
 const STOP_LOSS_ESCALATION_MS = Math.max(10_000, Number(process.env.STOP_LOSS_ESCALATION_MS) || 60_000);
 
-/** 
- * Take-Profit (Early Exit) automatique juste avant la fin du marché.
- * Libère le capital instantanément pour le réinvestir au créneau suivant.
- */
-const earlyExitEnabled = process.env.EARLY_EXIT_ENABLED === 'true';
-const earlyExitSecondsBeforeEnd = Math.max(1, Number(process.env.EARLY_EXIT_SECONDS_BEFORE_END) || 15);
-const earlyExitMinBidsP = Math.max(0.5, Math.min(0.99, Number(process.env.EARLY_EXIT_MIN_BIDS_P) || 0.95));
 
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
@@ -2343,8 +2336,7 @@ async function tryStopLossForOpenPosition(clobClient) {
   const drawdownPct = ((bestBid - entryPriceP) / entryPriceP) * 100;
   const triggerByPrice = bestBid < stopLossTriggerPriceP;
   const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
-  const triggerByEarlyExit = last.earlyExitTriggeredByUs === true;
-  if (!triggerByPrice && !triggerByDrawdown && !triggerByEarlyExit) return;
+  if (!triggerByPrice && !triggerByDrawdown) return;
 
   logStopLossTouchedWatch({
     conditionId,
@@ -2776,10 +2768,8 @@ async function tryStopLossForOpenPosition(clobClient) {
       stopLossRemainingOutcomeTokens: Math.round(Math.max(0, remainingTokens) * 1e6) / 1e6,
     });
     console.warn(
-      `[${nowIso}] [STOP-LOSS/EARLY-EXIT] Sortie ${takeSide} avant résolution — ${
-        triggerByEarlyExit
-          ? `Early Exit manuel bid ${(bestBidLive * 100).toFixed(2)}¢ >= ${earlyExitMinBidsP}`
-          : triggerByPrice
+      `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
+        triggerByPrice
           ? `bid ${(bestBidLive * 100).toFixed(2)}¢ < seuil ${(stopLossTriggerPriceP * 100).toFixed(2)}¢`
           : `drawdown ${drawdownPctLive.toFixed(2)}% <= -${Math.abs(stopLossMaxDrawdownPct)}%`
       }`
@@ -2812,95 +2802,6 @@ async function tryStopLossForOpenPosition(clobClient) {
   }
 }
 
-async function tryEarlyExitForOpenPosition(clobClient) {
-  if (!earlyExitEnabled || !walletConfigured || !wallet) return;
-  const last = readLastOrder();
-  if (!last || typeof last !== 'object') return;
-  if (last.stopLossExit === true || last.earlyExit === true) return;
-  if (!last.simulationTrade && !clobClient) return;
-
-  const conditionId = String(last.conditionId || '').trim();
-  const tokenId = String(last.tokenId || '').trim();
-  const takeSide = last.takeSide === 'Up' || last.takeSide === 'Down' ? last.takeSide : null;
-  if (!conditionId || !tokenId || !takeSide) return;
-
-  const endMsStr = last.marketEndMs ?? last.endDate;
-  if (!endMsStr) return;
-  const endMs = parseMarketEndDateToMs(endMsStr);
-  if (!Number.isFinite(endMs)) return;
-
-  const now = Date.now();
-  // Ne vérifier que dans la fenêtre finale (ex: les 15 dernières secondes avant la cloche)
-  const windowStartMs = endMs - (earlyExitSecondsBeforeEnd * 1000);
-  if (now < windowStartMs || now >= endMs) return;
-
-  // Anti-saturation (throttle) : éviter des spams si le bid fluctue (on utilise le stopLossNextAttemptByCondition pour bloquer)
-  const nextAllowed = stopLossNextAttemptByCondition.get(conditionId) || 0;
-  if (now < nextAllowed) return;
-
-  const bestBid = await getBestBid(tokenId);
-  if (!(bestBid > 0 && bestBid < 1)) return;
-
-  if (bestBid >= earlyExitMinBidsP) {
-    let tokensToSell = Number(last.filledOutcomeTokens);
-    if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
-      const entryPriceRaw = Number(last.averageFillPriceP);
-      const entryPriceP = Number.isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null;
-      if (!entryPriceP) return;
-      const stakeUsd = Number(last.filledUsdc ?? last.amountUsd);
-      if (Number.isFinite(stakeUsd) && stakeUsd > 0) {
-        tokensToSell = stakeUsd / entryPriceP;
-      }
-    }
-    if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
-
-    if (last.simulationTrade === true) {
-      await executePaperStopLossExit({
-        conditionId,
-        tokenId,
-        takeSide,
-        endMs,
-        entryPriceP: Number(last.averageFillPriceP) || 0.5,
-        bestBid,
-        drawdownPct: 0,
-        triggerByPrice: false,
-        triggerByDrawdown: false,
-        tokensToSell,
-        originalStakeUsd: Number(last.filledUsdc ?? last.amountUsd),
-      });
-      // Marquer l'ordre spécifique earlyExit pour éviter de le refaire
-      const updated = readLastOrder();
-      if (updated && updated.conditionId === conditionId) {
-        updated.earlyExit = true;
-        writeLastOrder(updated);
-      }
-      logJson('info', 'Early exit PAPER réussi', { conditionId: conditionId.slice(0, 18), bestBid, tokensToSell });
-      return;
-    }
-
-    // Réel : On réutilise la mécanique StopLoss, mais en modifiant le log "triggerReason"
-    // C'est de fait une vente partielle ou totale au marché FAK.
-    const spendableTokensFromClob = await getOutcomeSpendableViaClob(clobClient, tokenId);
-    const adjustedSellAmount = resolveSellAmountFromSpendable(tokensToSell, spendableTokensFromClob, 0.00001);
-    if (adjustedSellAmount != null) tokensToSell = adjustedSellAmount;
-    if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
-      stopLossNextAttemptByCondition.set(conditionId, now + STOP_LOSS_RETRY_BACKOFF_MS);
-      return;
-    }
-
-    // Trigger de la fonction de vente réelle (même que le stop loss)
-    // Pour simplifier, on appelle handleRealStopLossExit (on doit l'extraire ou dupliquer un appel)
-    // Mais on peut utiliser stopLossTriggerPriceP virtuellement à 1, justifiant le sell.
-    // Pour éviter de réimplémenter ici 150 lignes, on va utiliser une astuce (déjà intégrée à runStopLossPass).
-    // => Non, il vaut mieux déléguer. C'est plus propre d'intégrer ça avant tryStopLossForVirtualWatchEntries
-    console.warn(`[${new Date().toISOString()}] EARLY EXIT trigger: Bid ${bestBid} >= ${earlyExitMinBidsP} juste avant ${new Date(endMs).toLocaleTimeString()}`);
-    // Fake the reason so the main SL block processes it
-    last.earlyExitTriggeredByUs = true;
-    writeLastOrder(last); // Ne changera rien au fait que le prochain tick pourrait ne pas le repérer
-    // On appellera le "Execute Real Stop Loss" ici.
-    // L'idéal est de placer le code ici mais tryStopLossForOpenPosition le gère si on le configure
-  }
-}
 
 /**
  * Surveille les signaux vus en mode "Watch" (sans ordre) pour tracker s'ils auraient touché un SL virtuel.
@@ -2969,7 +2870,6 @@ async function runStopLossPass() {
       }
     }
     await tryStopLossForOpenPosition(clobClient);
-    await tryEarlyExitForOpenPosition(clobClient);
     await tryStopLossForVirtualWatchEntries();
     return clobClient;
   } catch (err) {
