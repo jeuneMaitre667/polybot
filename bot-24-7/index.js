@@ -627,9 +627,7 @@ const redeemAfterMarketEndMsRaw = process.env.REDEEM_AFTER_MARKET_END_MS;
 const REDEEM_AFTER_MARKET_END_MS =
   redeemAfterMarketEndMsRaw !== undefined && String(redeemAfterMarketEndMsRaw).trim() !== ''
     ? Math.max(0, Number(redeemAfterMarketEndMsRaw) || 0)
-    : MARKET_MODE === '15m'
-      ? 60_000
-      : 0;
+    : 60_000; // Forçons 1 minute par défaut pour éviter les conflits de solde entre créneaux
 /**
  * Si REDEEM_AFTER_MARKET_END_MS > 0 et qu’un trade n’a ni marketEndMs ni endDate dans les logs : sans ça, le bot tentait quand même le redeem → erreurs / Telegram avant fin de créneau.
  * Défaut **false** : sans fin de marché connue pour ce conditionId, on ne tente pas le redeem. `REDEEM_ALLOW_UNKNOWN_MARKET_END_MS=true` réactive l’ancien comportement.
@@ -1255,6 +1253,16 @@ function logSignalInRangeButNoOrder(source, reason, signal, fields = {}) {
     ...restFields,
   };
   logJson('info', 'signal_in_range_but_no_order', payload);
+  if (cond && cond !== 'na' && bestAskP != null) {
+    const endMs = parseMarketEndDateToMs(signal.endDate);
+    virtualWatchEntries.set(cond, {
+      entryPriceP: bestAskP,
+      tokenId: signal.tokenIdToBuy,
+      takeSide: signal.takeSide,
+      endMs,
+      at: now,
+    });
+  }
   try {
     console.log(`[signal_in_range_but_no_order] ${JSON.stringify(payload)}`);
   } catch (_) {}
@@ -1758,8 +1766,19 @@ async function getUsdcBalanceForTelegramAlerts() {
  * @param {Record<string, unknown>} orderData
  * @param {import('@polymarket/clob-client').ClobClient | null} clobClient
  */
+const notifiedTelegramTradeOrders = new Set();
+
 async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
   if (!telegramTradeAlertsEnabled()) return;
+  const orderId = orderData?.orderID ?? orderData?.order_id;
+  if (orderId && notifiedTelegramTradeOrders.has(String(orderId))) return;
+  if (orderId) notifiedTelegramTradeOrders.add(String(orderId));
+  // Limiter la taille du set pour éviter les fuites mémoire sur le long terme (on garde les 1000 derniers)
+  if (notifiedTelegramTradeOrders.size > 1000) {
+    const first = notifiedTelegramTradeOrders.values().next().value;
+    notifiedTelegramTradeOrders.delete(first);
+  }
+
   try {
     let balanceAfter = null;
     if (orderData?.simulationTrade) {
@@ -2781,6 +2800,51 @@ async function tryStopLossForOpenPosition(clobClient) {
   }
 }
 
+/**
+ * Surveille les signaux vus en mode "Watch" (sans ordre) pour tracker s'ils auraient touché un SL virtuel.
+ */
+async function tryStopLossForVirtualWatchEntries() {
+  if (!stopLossEnabled || virtualWatchEntries.size === 0) return;
+  const now = Date.now();
+  for (const [cid, entry] of virtualWatchEntries.entries()) {
+    // Purge auto si le créneau est fini ou si le signal est trop vieux (> 4h par sécurité)
+    if ((entry.endMs && now >= entry.endMs) || now - entry.at > 4 * 60 * 60 * 1000) {
+      virtualWatchEntries.delete(cid);
+      continue;
+    }
+    // Ne pas vérifier trop souvent (Throttle interne 15s pour le watch SL)
+    const lastCheck = entry.lastCheckAt || 0;
+    if (now - lastCheck < 15_000) continue;
+    entry.lastCheckAt = now;
+
+    try {
+      const bestBid = await getBestBid(entry.tokenId);
+      if (!(bestBid > 0 && bestBid < 1)) continue;
+
+      const drawdownPct = ((bestBid - entry.entryPriceP) / entry.entryPriceP) * 100;
+      const triggerByPrice = bestBid < stopLossTriggerPriceP;
+      const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
+
+      if (triggerByPrice || triggerByDrawdown) {
+        logStopLossTouchedWatch({
+          conditionId: cid,
+          tokenId: entry.tokenId,
+          takeSide: entry.takeSide,
+          bestBid,
+          entryPriceP: entry.entryPriceP,
+          drawdownPct,
+          triggerByPrice,
+          triggerByDrawdown,
+        });
+        // Une fois touché, on peut choisir soit de le garder (re-log périodique) soit de le supprimer.
+        // On le garde pour que le dashboard live continue de l'afficher si le prix reste bas.
+        // On augmente le throttle pour cet entry précis.
+        entry.lastCheckAt = now + 45_000; 
+      }
+    } catch (_) {}
+  }
+}
+
 /** Exécute une passe stop-loss avec verrou anti-chevauchement. Retourne un client CLOB réutilisable pour le cycle. */
 async function runStopLossPass() {
   if (!walletConfigured || !wallet || !stopLossEnabled) return null;
@@ -2803,6 +2867,7 @@ async function runStopLossPass() {
       }
     }
     await tryStopLossForOpenPosition(clobClient);
+    await tryStopLossForVirtualWatchEntries();
     return clobClient;
   } catch (err) {
     notePolymarketIncidentError('stop_loss_pass', err);
@@ -4938,6 +5003,8 @@ async function tryPlaceOrderForSignal(signal) {
 
 // ——— Boucle principale ———
 const placedKeys = new Set();
+/** Signaux "Watch" (sans ordre) pour lesquels on simule un Stop-Loss dans le dashboard. key -> { entryPrice, tokenId, takeSide, endMs } */
+const virtualWatchEntries = new Map();
 /** Fenêtres pour lesquelles on a déjà enregistré un relevé de liquidité (une fois par créneau = montant max par fenêtre pour le dashboard). */
 const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */

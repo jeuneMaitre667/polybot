@@ -180,11 +180,17 @@ export function BotOverview() {
   const [upInBandSince, setUpInBandSince] = useState(null);
   const [downInBandSince, setDownInBandSince] = useState(null);
   const preferredWalletAddress = useMemo(() => {
+    // Si un wallet est connecté dans le navigateur (MetaMask), on l'utilise en priorité pour le "Réel"
+    if (walletAddress && /^0x[a-fA-F0-9]{40}$/.test(walletAddress)) return walletAddress;
+    
+    // Sinon on regarde l'adresse configurée dans le .env
     const envAddr = String(import.meta.env.VITE_TRADE_HISTORY_ADDRESS || '').trim();
     if (/^0x[a-fA-F0-9]{40}$/.test(envAddr)) return envAddr;
+    
+    // En dernier recours, l'adresse qui a passé le dernier ordre
     if (typeof funder15m === 'string' && /^0x[a-fA-F0-9]{40}$/.test(funder15m)) return funder15m;
     return null;
-  }, [funder15m]);
+  }, [walletAddress, funder15m]);
 
   useEffect(() => {
     let cancelled = false;
@@ -644,25 +650,24 @@ export function BotOverview() {
     <div className="bot-overview-grid">
       <div className="grid-main">
         <div className="card">
-          <div className="card-label">Solde Horaire</div>
+          <div className="card-label">Solde Paper Trading</div>
           <div className="card-value green">{showStatus1h && balance != null ? formatUsd(balance) : '—'}</div>
           <div className="card-sub">
             {showStatus1h && data?.at
-              ? `${new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} · 1h`
+              ? `${new Date(data.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} · Simul`
               : showStatus1h
-                ? '— · 1h'
-                : 'Pas de bot 1h — ajoutez VITE_BOT_STATUS_URL pour rebrancher'}
+                ? '— · Simul'
+                : 'Pas de bot simulation connecté'}
           </div>
         </div>
         <div className="card">
-          <div className="card-label">Solde 15 Min</div>
-          <div className="card-value green">{show15m && displayedBalance15m != null ? formatUsd(displayedBalance15m) : '—'}</div>
+          <div className="card-label">Solde Bot Réel</div>
+          <div className="card-value green">{walletUsdc15m != null ? formatUsd(walletUsdc15m) : '—'}</div>
           <div className="card-sub">
-            {show15m && data15m?.at ? new Date(data15m.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} · 15m
+            {walletUsdcAt ? `Sync on-chain ${new Date(walletUsdcAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : '—'}
           </div>
           <div className="card-sub">
-            Source: {walletUsdc15m != null ? 'wallet on-chain (USDC.e)' : 'status-server (`balance.json`)'} · Wallet: {preferredWalletAddress ? formatWalletShort(preferredWalletAddress) : '—'}
-            {walletUsdcAt ? ` · sync ${new Date(walletUsdcAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+            Source: Wallet on-chain (USDC.e) · {preferredWalletAddress ? formatWalletShort(preferredWalletAddress) : '—'}
           </div>
           <div className="card-sub">
             Funder bot: {funder15m ? formatWalletShort(funder15m) : '—'}
@@ -672,8 +677,8 @@ export function BotOverview() {
         <div className="card">
           <div className="card-label">Trades enregistrés (24h)</div>
           <div className="overview-two-lines">
-            <div>Horaire <span>{orders24h ?? '—'}</span></div>
-            <div>15 Min <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
+            <div>Paper <span>{orders24h ?? '—'}</span></div>
+            <div>Réel <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
           </div>
           <div className="card-sub" style={{ marginTop: 6 }}>
             Lignes <code>orders.log</code> sur 24 h, hors tentatives stop-loss rejetées (sans exécution). À rapprocher de
@@ -685,21 +690,21 @@ export function BotOverview() {
       <div className="grid-main">
         <div className="card">
           <div className="card-label">
-            {pnl?.window === 'sinceFirst' ? 'PNL Horaire (depuis 1er relevé)' : 'PNL Horaire (24h)'}
+            {pnl?.window === 'sinceFirst' ? 'PNL Paper (depuis 1er relevé)' : 'PNL Paper Trading (24h)'}
           </div>
           <div className={`card-value ${showStatus1h && pnl != null ? (pnl.pct >= 0 ? 'green' : 'red') : ''}`}>
             {showStatus1h && pnl != null ? `${pnl.pct >= 0 ? '+' : ''}${pnl.pct.toFixed(1)} %` : '—'}
           </div>
           <div className="card-sub">
-            {showStatus1h ? (orders24h ? `${orders24h} ordre(s)` : 'Aucun trade exécuté') : 'Bot horaire non connecté'}
+            {showStatus1h ? (orders24h ? `${orders24h} ordre(s) simulés` : 'Aucun trade simulé') : 'Bot Paper non connecté'}
           </div>
         </div>
         <div className="card">
-          <div className="card-label">PNL net 15m (vs dépôts)</div>
+          <div className="card-label">PNL Bot Réel (vs dépôts)</div>
           <div
             className={`card-value ${netPnl15mVsDeposits != null ? (netPnl15mVsDeposits >= 0 ? 'green' : 'red') : ''}`}
           >
-            {show15m && netPnl15mVsDeposits != null ? formatSignedUsd(netPnl15mVsDeposits) : '—'}
+            {netPnl15mVsDeposits != null ? formatSignedUsd(netPnl15mVsDeposits) : '—'}
           </div>
           {show15m && historyAddressTradePnl && capitalIn15m > 0 && pnl15mRoiPct != null && (
             <div className="card-sub">
