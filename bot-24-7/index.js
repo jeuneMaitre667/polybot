@@ -4825,7 +4825,16 @@ async function tryPlaceOrderForSignal(signal) {
     allowBelowMin = true;
   }
   if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
-  if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
+  if (hasMaxStakeUsd && amountUsd === maxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
+
+  logJson('info', 'Sizing decision', {
+    balance: balance != null ? Math.round(balance * 100) / 100 : null,
+    liquidity: liquidity != null ? Math.round(liquidity * 100) / 100 : null,
+    cappedBy,
+    allowBelowMin,
+    amountUsd: Math.round(amountUsd * 100) / 100,
+    orderSizeMinUsd
+  });
 
   // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
   // Permet d'avoir un breakdown même sans trade réel.
