@@ -429,17 +429,25 @@ export function BotOverview() {
 
   useEffect(() => {
     if (signalLiveUpInBand) {
-      if (!upInBandSince) setUpInBandSince(Date.now());
-    } else {
-      setUpInBandSince(null);
+      if (!upInBandSince) {
+        const timer = setTimeout(() => setUpInBandSince(Date.now()), 0);
+        return () => clearTimeout(timer);
+      }
+    } else if (upInBandSince) {
+      const timer = setTimeout(() => setUpInBandSince(null), 0);
+      return () => clearTimeout(timer);
     }
   }, [signalLiveUpInBand, upInBandSince]);
 
   useEffect(() => {
     if (signalLiveDownInBand) {
-      if (!downInBandSince) setDownInBandSince(Date.now());
-    } else {
-      setDownInBandSince(null);
+      if (!downInBandSince) {
+        const timer = setTimeout(() => setDownInBandSince(Date.now()), 0);
+        return () => clearTimeout(timer);
+      }
+    } else if (downInBandSince) {
+      const timer = setTimeout(() => setDownInBandSince(null), 0);
+      return () => clearTimeout(timer);
     }
   }, [signalLiveDownInBand, downInBandSince]);
 

@@ -1,3 +1,4 @@
+/* global process */
 import axios from 'axios';
 import {
   parseUpDownTokenIdsFromMarket,
@@ -63,9 +64,9 @@ const DEFAULT_SIM_ENTRY_MAX_P = 0.78;
  * Charge les données de trades locaux (JSONL) pour une date donnée.
  * Utilisé pour injecter des ticks haute fidélité dans le backtest.
  */
-async function loadLocalTradeData(dateIso) {
+export async function loadLocalTradeData(dateIso) {
   // Uniquement si on tourne dans un environnement avec FS (Node/Vite-Node)
-  if (typeof process === 'undefined' || !process.versions?.node) return [];
+  if (typeof process === 'undefined' || !process.versions || !process.versions.node) return [];
   try {
     const fs = await import('fs');
     const path = await import('path');
@@ -87,7 +88,7 @@ async function loadLocalTradeData(dateIso) {
 /**
  * Filtre les ticks pour ne garder que ceux d'un actif spécifique dans une fenêtre temporelle.
  */
-function filterTicksForWindow(ticks, assetId, startMs, endMs) {
+export function filterTicksForWindow(ticks, assetId, startMs, endMs) {
   return ticks.filter(t => 
     String(t.asset) === String(assetId) && 
     t.ts >= startMs && 
@@ -403,13 +404,6 @@ const BACKTEST_ASK_FROM_MID_OFFSET_P = Math.max(
   Math.min(0.05, Number(import.meta.env.VITE_BACKTEST_ASK_FROM_MID_OFFSET_P) || 0.01),
 );
 
-function midToBestBidProxyForSl(midP) {
-  const m = Number(midP);
-  if (!Number.isFinite(m) || m <= 0) return NaN;
-  return Math.max(0.001, Math.min(0.99, m - BACKTEST_SL_BID_FROM_MID_OFFSET_P));
-}
-
-/** Prix utilisé pour la détection SL backtest (alignement best bid bot). */
 function slPriceForBacktestSl(pt, series = []) {
   const mid = normalizeOutcomePrice(pt?.p ?? pt?.price);
   if (!Number.isFinite(mid)) return NaN;
