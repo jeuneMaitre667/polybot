@@ -149,11 +149,7 @@ if [ "${REDEPLOY_PHASE:-}" != "2" ]; then
     echo "   .env créé depuis .env.example — pense à configurer PRIVATE_KEY."
   fi
   # Appliquer la config recommandée (ordre au marché, poll 3s) sans écraser PRIVATE_KEY
-  if [ -f "$BOT_DIR/.env" ]; then
-    grep -q '^USE_MARKET_ORDER=' "$BOT_DIR/.env" && sed -i.bak 's/^USE_MARKET_ORDER=.*/USE_MARKET_ORDER=true/' "$BOT_DIR/.env" || echo "USE_MARKET_ORDER=true" >> "$BOT_DIR/.env"
-    grep -q '^POLL_INTERVAL_SEC=' "$BOT_DIR/.env" && sed -i.bak 's/^POLL_INTERVAL_SEC=.*/POLL_INTERVAL_SEC=1/' "$BOT_DIR/.env" || echo "POLL_INTERVAL_SEC=1" >> "$BOT_DIR/.env"
-    echo "   .env mis à jour : USE_MARKET_ORDER=true, POLL_INTERVAL_SEC=1"
-  fi
+  # (Supprimé car causait des corruptions de .env)
 
   export REDEPLOY_PHASE=2
   exec bash "$BOT_DIR/redeploy.sh"
@@ -196,8 +192,9 @@ pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null 2>&1 || true
 
 echo ""
 echo "=== Redémarrage du bot (PM2) ==="
-(cd "$BOT_DIR" && pm2 restart polymarket-bot 2>/dev/null || pm2 start index.js --name polymarket-bot)
-(cd "$BOT_DIR" && pm2 restart bot-status-server 2>/dev/null || true)
+# On essaie de redémarrer, sinon on start proprement avec les noms attendus
+pm2 restart polymarket-bot --update-env 2>/dev/null || pm2 start index.js --name polymarket-bot
+pm2 restart bot-status-server --update-env 2>/dev/null || pm2 start status-server.js --name bot-status-server
 pm2 save 2>/dev/null || true
 
 echo ""
