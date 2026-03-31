@@ -59,6 +59,42 @@ const DEFAULT_DETECT_MIN_P = 0.77;
 const DEFAULT_SIM_ENTRY_MIN_P = 0.77;
 const DEFAULT_SIM_ENTRY_MAX_P = 0.78;
 
+/**
+ * Charge les données de trades locaux (JSONL) pour une date donnée.
+ * Utilisé pour injecter des ticks haute fidélité dans le backtest.
+ */
+async function loadLocalTradeData(dateIso) {
+  // Uniquement si on tourne dans un environnement avec FS (Node/Vite-Node)
+  if (typeof process === 'undefined' || !process.versions?.node) return [];
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    const dateStr = dateIso.split('T')[0];
+    // On cherche dans bot-24-7/data
+    const filePath = path.join(process.cwd(), 'bot-24-7', 'data', `trades-${dateStr}.jsonl`);
+    if (!fs.existsSync(filePath)) return [];
+    
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+    return lines.map(l => JSON.parse(l));
+  } catch (err) {
+    console.warn(`[LocalData] Échec chargement trades-${dateIso}:`, err.message);
+    return [];
+  }
+}
+
+
+
+/**
+ * Filtre les ticks pour ne garder que ceux d'un actif spécifique dans une fenêtre temporelle.
+ */
+function filterTicksForWindow(ticks, assetId, startMs, endMs) {
+  return ticks.filter(t => 
+    String(t.asset) === String(assetId) && 
+    t.ts >= startMs && 
+    t.ts <= endMs
+  );
+}
+
 export function resolve15mSimConfig(options) {
   const cfg = options?.simulation ?? options?.simConfig ?? null;
   const detectMinP = Number(cfg?.detectMinP);
@@ -138,7 +174,7 @@ const BACKTEST_STOP_LOSS_WORST_PRICE_P = Math.max(
   Math.min(0.99, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_WORST_PRICE_P) || 0.01),
 );
 export const BACKTEST_STOP_LOSS_MIN_HOLD_SEC =
-  Math.max(0, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MIN_HOLD_MS) || 10_000) / 1000;
+  Math.max(0, Number(import.meta.env.VITE_BACKTEST_STOP_LOSS_MIN_HOLD_SEC) || 0);
 
 export const BACKTEST_ENTRY_SLIPPAGE_P = Math.max(
   0,
@@ -271,6 +307,26 @@ function minSidePriceBetween(historySide, tLo, tHi) {
 function passesSignalMinDwell(side, historyUp, historyDown, detectMinP, tsUsed, dwellSec) {
   if (!Number.isFinite(dwellSec) || dwellSec <= 0) return true;
   const series = side === 'Up' ? historyUp : historyDown;
+
+  // Recherche des points proches pour évaluer la densité
+  const pts = Array.isArray(series) ? series : [];
+  const idx = pts.findIndex(p => toSeconds(p?.t ?? p?.timestamp) >= tsUsed);
+  if (idx === -1) return false;
+
+  const p0 = pts[idx];
+  const t0 = toSeconds(p0?.t ?? p0?.timestamp);
+  const pNext = pts[idx + 1];
+  const tNext = pNext ? toSeconds(pNext?.t ?? pNext?.timestamp) : null;
+
+  // Si le prochain point est loin (> 10s), on considère que c'est un snapshot historique.
+  // On valide uniquement sur la valeur du point actuel au lieu d'interpoler sur 5s.
+  if (!tNext || (tNext - t0) > 10) {
+    const val = normalizeOutcomePrice(p0?.p ?? p0?.price);
+    const d = Number.isFinite(detectMinP) ? detectMinP : DEFAULT_DETECT_MIN_P;
+    return val >= d - 1e-9;
+  }
+
+  // Si on a des données denses (ex: trades ou live), on applique la règle des 5s habituelle.
   const tLo = tsUsed;
   const tHi = tsUsed + dwellSec;
   const minP = minSidePriceBetween(series, tLo, tHi);
@@ -342,6 +398,10 @@ const BACKTEST_SL_BID_FROM_MID_OFFSET_P = Math.max(
   0,
   Math.min(0.05, Number(import.meta.env.VITE_BACKTEST_SL_BID_FROM_MID_OFFSET_P) || 0.007),
 );
+const BACKTEST_ASK_FROM_MID_OFFSET_P = Math.max(
+  0,
+  Math.min(0.05, Number(import.meta.env.VITE_BACKTEST_ASK_FROM_MID_OFFSET_P) || 0.01),
+);
 
 function midToBestBidProxyForSl(midP) {
   const m = Number(midP);
@@ -350,11 +410,42 @@ function midToBestBidProxyForSl(midP) {
 }
 
 /** Prix utilisé pour la détection SL backtest (alignement best bid bot). */
-function slPriceForBacktestSl(pt) {
+function slPriceForBacktestSl(pt, series = []) {
   const mid = normalizeOutcomePrice(pt?.p ?? pt?.price);
   if (!Number.isFinite(mid)) return NaN;
   if (!BACKTEST_SL_USE_BID_PROXY_FROM_MID) return mid;
-  return midToBestBidProxyForSl(mid);
+
+  let offset = BACKTEST_SL_BID_FROM_MID_OFFSET_P;
+
+  // Détection de volatilité : si chute rapide juste avant ce point, on augmente l'offset (pessimisme)
+  if (Array.isArray(series) && series.length > 0) {
+    const t = toSeconds(pt?.t ?? pt?.timestamp);
+    // On regarde 2 minutes en arrière
+    const tPrev = t - 60;
+    const prevPt = series.find(p => {
+      const tp = toSeconds(p?.t ?? p?.timestamp);
+      return tp != null && tp >= tPrev && tp < t;
+    });
+    if (prevPt) {
+      const pPrev = normalizeOutcomePrice(prevPt?.p ?? prevPt?.price);
+      const drop = pPrev - mid;
+      // Si chute > 3¢ dans la minute, on triple l'offset pour simuler un carnet vide (crash)
+      if (drop > 0.03) {
+        offset = Math.max(offset, 0.10); // Penalty de 10¢ en cas de flash crash
+      } else if (drop > 0.015) {
+        offset = Math.max(offset, 0.05); // Penalty de 5¢ en cas de baisse forte
+      }
+    }
+  }
+
+  const res = midToBestBidProxy(mid, offset);
+  return res;
+}
+
+function midToBestBidProxy(midP, offset) {
+  const m = Number(midP);
+  if (!Number.isFinite(m) || m <= 0) return NaN;
+  return Math.max(0.001, Math.min(0.99, m - offset));
 }
 
 /** Applique `normalizeOutcomePrice` sur chaque point (champ `p` écrasé pour la simu). */
@@ -512,7 +603,7 @@ async function fetchPriceHistory(tokenId, endDateStr) {
   const baseMeta = { startTs, endTs, tokenIdTail: String(tokenId).slice(-8) };
   const toHistory = (data) => {
     const h = data?.history ?? data ?? [];
-    return Array.isArray(h) ? h : [];
+    return (Array.isArray(h) ? h : []).map(pt => ({ ...pt, src: pt.src || 'clob' }));
   };
   const filterByWindow = (raw) =>
     raw.filter((pt) => {
@@ -820,8 +911,8 @@ function toSeconds(t) {
 function mergePriceSeriesSorted(a, b) {
   const out = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
   out.sort((x, y) => {
-    const tx = toSeconds(x?.t ?? x?.timestamp);
-    const ty = toSeconds(y?.t ?? y?.timestamp);
+    const tx = toSeconds(x?.t ?? x?.timestamp ?? x?.ts);
+    const ty = toSeconds(y?.t ?? y?.timestamp ?? y?.ts);
     if (tx == null && ty == null) return 0;
     if (tx == null) return 1;
     if (ty == null) return -1;
@@ -834,7 +925,7 @@ function mergePriceSeriesSorted(a, b) {
  * Après entrée : premier instant où le **proxy best bid** (mid CLOB historique − offset, ou mid si désactivé)
  * déclenche le stop hybride (prix ≤ seuil **ou** drawdown ≤ −X %), comme `getBestBid` côté bot (pas d’historique bid tick par tick).
  */
-function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, simCfg) {
+function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, simCfg, isResolutionLoss = false, slotEndSec = null) {
   if (!BACKTEST_STOP_LOSS_ENABLED) return { triggered: false };
   const holdEnd = entryTs + minHoldSec;
   const slTriggerPriceP =
@@ -842,6 +933,9 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, sim
       ? simCfg.stopLossTriggerPriceP
       : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
   const arr = Array.isArray(heldSeries) ? [...heldSeries] : [];
+  if (isResolutionLoss && slotEndSec) {
+    arr.push({ t: slotEndSec, p: 0, price: 0 });
+  }
   arr.sort((a, b) => {
     const ta = toSeconds(a?.t ?? a?.timestamp);
     const tb = toSeconds(b?.t ?? b?.timestamp);
@@ -853,7 +947,7 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, sim
   for (const pt of arr) {
     const t = toSeconds(pt?.t ?? pt?.timestamp);
     if (t == null || t < holdEnd) continue;
-    const bidProxy = slPriceForBacktestSl(pt);
+    const bidProxy = slPriceForBacktestSl(pt, arr);
     if (!Number.isFinite(bidProxy)) continue;
     const drawdownPct = ((bidProxy - entryPrice) / entryPrice) * 100;
     /** ≤ seuil : un point à exactement 58¢ doit déclencher si SL = 58¢ (éviter 100 % « gagné » fantôme). */
@@ -881,7 +975,7 @@ function findStopLossAfterEntry(heldSeries, entryTs, entryPrice, minHoldSec, sim
     for (const pt of arr) {
       const t = toSeconds(pt?.t ?? pt?.timestamp);
       if (t == null || t < holdEnd) continue;
-      const bidProxy = slPriceForBacktestSl(pt);
+      const bidProxy = slPriceForBacktestSl(pt, arr);
       if (!Number.isFinite(bidProxy)) continue;
       if (bidProxy <= slTriggerPriceP) {
         pickT = t;
@@ -914,7 +1008,7 @@ function minObservedPriceAfterEntry(heldSeries, entryTs, minHoldSec) {
   for (const pt of arr) {
     const t = toSeconds(pt?.t ?? pt?.timestamp);
     if (t == null || t < holdEnd) continue;
-    const p = slPriceForBacktestSl(pt);
+    const p = slPriceForBacktestSl(pt, arr);
     if (!Number.isFinite(p)) continue;
     minP = Math.min(minP, p);
   }
@@ -1015,18 +1109,20 @@ function collectSimEntryCandidatesWithConfig(historyUp, historyDown, endDateStr,
   }
   const events = [];
   for (const pt of up) {
-    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const mid = normalizeOutcomePrice(pt?.p ?? pt?.price);
     const t = toSeconds(pt?.t ?? pt?.timestamp);
-    if (!Number.isFinite(p) || t == null) continue;
-    events.push({ t, side: 'Up', price: p });
-    events.push({ t, side: 'Down', price: 1 - p });
+    if (!Number.isFinite(mid) || t == null) continue;
+    const offset = pt?.src === 'clob' ? BACKTEST_ASK_FROM_MID_OFFSET_P : 0;
+    events.push({ t, side: 'Up', price: Math.min(0.999, mid + offset), src: pt?.src });
+    events.push({ t, side: 'Down', price: Math.min(0.999, (1 - mid) + offset), src: pt?.src });
   }
   for (const pt of down) {
-    const p = normalizeOutcomePrice(pt?.p ?? pt?.price);
+    const mid = normalizeOutcomePrice(pt?.p ?? pt?.price);
     const t = toSeconds(pt?.t ?? pt?.timestamp);
-    if (!Number.isFinite(p) || t == null) continue;
-    events.push({ t, side: 'Down', price: p });
-    events.push({ t, side: 'Up', price: 1 - p });
+    if (!Number.isFinite(mid) || t == null) continue;
+    const offset = pt?.src === 'clob' ? BACKTEST_ASK_FROM_MID_OFFSET_P : 0;
+    events.push({ t, side: 'Down', price: Math.min(0.999, mid + offset), src: pt?.src });
+    events.push({ t, side: 'Up', price: Math.min(0.999, (1 - mid) + offset), src: pt?.src });
   }
   events.sort((a, b) => a.t - b.t);
   const lastBySide = { Up: null, Down: null };
@@ -1162,11 +1258,28 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
   const resolutionWin = settled ? winner === first.side : null;
   const heldSeries = first.side === 'Up' ? up : down;
   
-  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg);
+  const sl = findStopLossAfterEntry(heldSeries, first.ts, first.price, BACKTEST_STOP_LOSS_MIN_HOLD_SEC, simCfg, resolutionWin === false, slotEndSecExplicit);
   const minAfter = minObservedPriceAfterEntry(heldSeries, first.ts, BACKTEST_STOP_LOSS_MIN_HOLD_SEC);
 
-  if (sl.triggered) {
-    let rawSlExit = sl.observedP != null ? Number(sl.observedP) - BACKTEST_SL_SLIPPAGE_P : BACKTEST_STOP_LOSS_WORST_PRICE_P;
+  // Verrouillage Force-SL : si perdu mais pas déclenché par points réels, on force le SL.
+  let slTriggered = sl.triggered;
+  let finalSl = sl;
+  if (!slTriggered && resolutionWin === false) {
+    const slTriggerPriceP = Number.isFinite(simCfg?.stopLossTriggerPriceP) && simCfg.stopLossTriggerPriceP > 0 && simCfg.stopLossTriggerPriceP < 1
+      ? simCfg.stopLossTriggerPriceP
+      : BACKTEST_STOP_LOSS_TRIGGER_PRICE_P;
+    slTriggered = true;
+    finalSl = {
+      triggered: true,
+      reason: 'forced_on_resolution_loss',
+      observedP: Math.min(slTriggerPriceP, minAfter != null ? minAfter : slTriggerPriceP),
+      t: slotEndSecExplicit || first.ts + 1,
+      drawdownPct: -100 // On ne connaît pas le drawdown exact au moment du gap, -100% par sécurité
+    };
+  }
+
+  if (slTriggered) {
+    let rawSlExit = finalSl.observedP != null ? Number(finalSl.observedP) - BACKTEST_SL_SLIPPAGE_P : BACKTEST_STOP_LOSS_WORST_PRICE_P;
     rawSlExit = Math.max(0.001, rawSlExit);
     return {
       botWouldTake: first.side,
@@ -1175,11 +1288,11 @@ function computeBotSimulationWithConfig(historyUp, historyDown, winner, endDateS
       botEntryTimestamp: first.ts,
       botOrderType: 'Marché',
       botStopLossExit: true,
-      botStopLossReason: sl.reason,
+      botStopLossReason: finalSl.reason,
       botStopLossExitPriceP: Math.round(rawSlExit * 1e6) / 1e6,
-      botStopLossObservedPriceP: sl.observedP != null ? Math.round(Number(sl.observedP) * 1e6) / 1e6 : null,
-      botStopLossObservedDrawdownPct: sl.drawdownPct,
-      botStopLossAtTimestamp: sl.t,
+      botStopLossObservedPriceP: finalSl.observedP != null ? Math.round(Number(finalSl.observedP) * 1e6) / 1e6 : null,
+      botStopLossObservedDrawdownPct: finalSl.drawdownPct,
+      botStopLossAtTimestamp: finalSl.t,
       botMinObservedAfterEntryP: minAfter,
       botResolutionWouldWin: resolutionWin,
     };

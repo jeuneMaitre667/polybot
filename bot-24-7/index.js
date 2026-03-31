@@ -4893,6 +4893,11 @@ async function tryPlaceOrderForSignal(signal) {
       orderIDs: result.orderIDs,
       ...fillLog,
     });
+    logSignalInRangeButNoOrder('ws', 'order_placed', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      orderID: result.orderID,
+    });
     appendTradeLatencyHistory({
       source: 'ws',
       latencyMs,
@@ -5625,6 +5630,11 @@ async function run() {
         partialFillRetries: result.partialFillRetries ?? 0,
         orderIDs: result.orderIDs,
         ...fillLog,
+      });
+      logSignalInRangeButNoOrder('poll', 'order_placed', s, {
+        bestAskP: pickSignalBestAskP(s),
+        amountUsd: Math.round(amountUsd * 100) / 100,
+        orderID: result.orderID,
       });
       appendTradeLatencyHistory({
         source: 'poll',

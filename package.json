@@ -18,7 +18,8 @@
     "sweep:15m": "vite-node --config vite.config.js scripts/sweep-backtest-15m-params.mjs",
     "recalc:today-by-hour": "vite-node --config vite.config.js scripts/recalc-today-pnl-by-hour.mjs",
     "recalc:day-16h": "vite-node --config vite.config.js scripts/recalc-day-midnight-to-16h.mjs",
-    "recalc:session-hourly": "vite-node --config vite.config.js scripts/recalc-session-hourly.mjs"
+    "recalc:session-hourly": "vite-node --config vite.config.js scripts/recalc-session-hourly.mjs",
+    "import-trades": "node bot-24-7/trade-importer.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

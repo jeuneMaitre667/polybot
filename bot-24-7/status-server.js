@@ -856,86 +856,137 @@ function mergeWatchSlAndNoOrderChronological(slOut, noMerged, limit) {
   return combined;
 }
 
-function getSignalInRangeNoOrderRecent(limit = 12) {
+function getSignalInRangeNoOrderRecent(limit = 40) {
   const filePath = path.join(BOT_DIR, 'bot.log');
-  /** bot.log JSONL peut peser des dizaines de Mo — lire seulement la fin pour ne pas bloquer /api/health si /api/bot-status tourne. */
-  const BOT_LOG_TAIL_BYTES = 4 * 1024 * 1024;
+  const ordersPath = path.join(BOT_DIR, 'orders.log');
+  /** bot.log et orders.log peuvent peser des Mo — lire seulement la fin. */
+  const TAIL_BYTES = 4 * 1024 * 1024;
+  
+  const slOut = [];
+  const noOut = [];
+
   try {
+    // 1. Lecture orders.log pour les trades réussis (pour combler l'historique ou doubler le flux bot.log)
+    try {
+      let rawOrders;
+      const stO = fs.statSync(ordersPath);
+      if (stO.size <= TAIL_BYTES) rawOrders = fs.readFileSync(ordersPath, 'utf8');
+      else {
+        rawOrders = readFileTailUtf8(ordersPath, TAIL_BYTES);
+        const parts = rawOrders.split('\n');
+        parts.shift();
+        rawOrders = parts.join('\n');
+      }
+      const orderLines = rawOrders.trim().split('\n').filter(Boolean);
+      for (let i = orderLines.length - 1; i >= 0; i--) {
+        if (noOut.length >= WATCH_NO_ORDER_EVENTS_MAX) break;
+        try {
+          const row = JSON.parse(orderLines[i]);
+          if (row.at) {
+            noOut.push({
+              kind: 'no_order',
+              ts: row.at,
+              source: row.source || 'ws',
+              reason: 'order_placed',
+              takeSide: row.takeSide || null,
+              bestAskP: Number.isFinite(Number(row.averageFillPriceP)) ? Math.round(Number(row.averageFillPriceP) * 1e6) / 1e6 : null,
+              bestBidP: null,
+              conditionId: row.conditionId || null,
+              tokenId: row.tokenId || null,
+              amountUsd: Number.isFinite(Number(row.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+              orderID: row.orderID || null,
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // 2. Lecture bot.log pour les signaux in range / SL
     let raw;
     try {
       const st = fs.statSync(filePath);
-      if (st.size <= BOT_LOG_TAIL_BYTES) raw = fs.readFileSync(filePath, 'utf8');
+      if (st.size <= TAIL_BYTES) raw = fs.readFileSync(filePath, 'utf8');
       else {
-        raw = readFileTailUtf8(filePath, BOT_LOG_TAIL_BYTES);
+        raw = readFileTailUtf8(filePath, TAIL_BYTES);
         const parts = raw.split('\n');
         parts.shift();
         raw = parts.join('\n');
       }
     } catch {
-      return [];
+      raw = '';
     }
-    if (!raw) return [];
-    const lines = raw.trim().split('\n').filter(Boolean);
-    if (!lines.length) return [];
-    const slOut = [];
-    const noOut = [];
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (slOut.length >= WATCH_SL_EVENTS_MAX && noOut.length >= WATCH_NO_ORDER_EVENTS_MAX) break;
-      try {
-        const row = JSON.parse(lines[i]);
-        const msg = row?.message;
-        if (msg === 'stop_loss_touched_watch' && slOut.length < WATCH_SL_EVENTS_MAX) {
-          slOut.push({
-            kind: 'stop_loss_watch',
-            ts: row?.ts ?? null,
-            source: row?.source ?? null,
-            reason: row?.reason ?? null,
-            takeSide: row?.takeSide ?? null,
-            bestAskP: null,
-            bestBidP:
-              Number.isFinite(Number(row?.bestBidP)) ? Math.round(Number(row.bestBidP) * 1e6) / 1e6 : null,
-            stopLossTriggerPriceP: Number.isFinite(Number(row?.stopLossTriggerPriceP))
-              ? Math.round(Number(row.stopLossTriggerPriceP) * 1e6) / 1e6
-              : null,
-            conditionId: row?.conditionId ?? null,
-            tokenId: row?.tokenId != null ? String(row.tokenId).slice(0, 64) : null,
-            entryPriceP: Number.isFinite(Number(row?.entryPriceP))
-              ? Math.round(Number(row.entryPriceP) * 1e6) / 1e6
-              : null,
-            drawdownPct: Number.isFinite(Number(row?.drawdownPct)) ? Math.round(Number(row.drawdownPct) * 100) / 100 : null,
-            remainingMs: null,
-            amountUsd: null,
-            error: null,
-            timingBlock: null,
-            timingOffsetSec: null,
-          });
-        } else if (msg === 'signal_in_range_but_no_order' && noOut.length < WATCH_NO_ORDER_EVENTS_MAX) {
-          noOut.push({
-            kind: 'no_order',
-            ts: row?.ts ?? null,
-            source: row?.source ?? null,
-            reason: row?.reason ?? null,
-            takeSide: row?.takeSide ?? null,
-            bestAskP:
-              Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
-            bestBidP: null,
-            stopLossTriggerPriceP: null,
-            conditionId: row?.conditionId ?? null,
-            tokenId: row?.tokenId ?? null,
-            remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
-            amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
-            error: row?.error ?? null,
-            timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
-            timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
-              ? Math.round(Number(row.timingOffsetSec))
-              : null,
-          });
-        }
-      } catch (_) {}
+
+    if (raw) {
+      const lines = raw.trim().split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (slOut.length >= WATCH_SL_EVENTS_MAX && noOut.length >= WATCH_NO_ORDER_EVENTS_MAX * 2) break;
+        try {
+          const row = JSON.parse(lines[i]);
+          const msg = row?.message;
+          if (msg === 'stop_loss_touched_watch' && slOut.length < WATCH_SL_EVENTS_MAX) {
+            slOut.push({
+              kind: 'stop_loss_watch',
+              ts: row?.ts ?? null,
+              source: row?.source ?? null,
+              reason: row?.reason ?? null,
+              takeSide: row?.takeSide ?? null,
+              bestAskP: null,
+              bestBidP: Number.isFinite(Number(row?.bestBidP)) ? Math.round(Number(row.bestBidP) * 1e6) / 1e6 : null,
+              stopLossTriggerPriceP: Number.isFinite(Number(row?.stopLossTriggerPriceP))
+                ? Math.round(Number(row.stopLossTriggerPriceP) * 1e6) / 1e6
+                : null,
+              conditionId: row?.conditionId ?? null,
+              tokenId: row?.tokenId != null ? String(row.tokenId).slice(0, 64) : null,
+              entryPriceP: Number.isFinite(Number(row?.entryPriceP))
+                ? Math.round(Number(row.entryPriceP) * 1e6) / 1e6
+                : null,
+              drawdownPct: Number.isFinite(Number(row?.drawdownPct)) ? Math.round(Number(row.drawdownPct) * 100) / 100 : null,
+              remainingMs: null,
+              amountUsd: null,
+              error: null,
+              timingBlock: null,
+              timingOffsetSec: null,
+            });
+          } else if (msg === 'signal_in_range_but_no_order' && noOut.length < WATCH_NO_ORDER_EVENTS_MAX * 4) {
+            const reason = row?.reason ?? null;
+            // Optionnel : on peut limiter le bruit du "already_placed_for_slot" qui spamme une fois le trade pris.
+            if (reason === 'already_placed_for_slot' && noOut.filter(x => x.reason === 'already_placed_for_slot').length >= 3) {
+              continue; 
+            }
+            noOut.push({
+              kind: 'no_order',
+              ts: row?.ts ?? null,
+              source: row?.source ?? null,
+              reason: reason,
+              takeSide: row?.takeSide ?? null,
+              bestAskP: Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
+              bestBidP: null,
+              stopLossTriggerPriceP: null,
+              conditionId: row?.conditionId ?? null,
+              tokenId: row?.tokenId ?? null,
+              remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
+              amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+              error: row?.error ?? null,
+              timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
+              timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
+                ? Math.round(Number(row.timingOffsetSec))
+                : null,
+            });
+          }
+        } catch (_) {}
+      }
     }
-    const noMerged = mergeHealthTimingIntoNoOrderRecent(noOut, getHealth(), WATCH_NO_ORDER_EVENTS_MAX);
-    /** Ordre chronologique (plus récent en premier) pour comparer « montant sous min » puis SL après ; épingle le SL le plus récent s’il était évincé par le spam. */
-    return mergeWatchSlAndNoOrderChronological(slOut, noMerged, limit);
+
+    const noMerged = mergeHealthTimingIntoNoOrderRecent(noOut, getHealth(), WATCH_NO_ORDER_EVENTS_MAX * 2);
+    /** Ordre chronologique (plus récent en premier) dédoublonné sommairement par (ts, reason, conditionId) */
+    const unique = new Map();
+    for (const e of noMerged) {
+      const k = `${e.ts}|${e.reason}|${e.conditionId}`;
+      if (!unique.has(k)) unique.set(k, e);
+    }
+    const finalNo = Array.from(unique.values()).sort((a,b) => watchEventTsMs(b) - watchEventTsMs(a));
+    
+    return mergeWatchSlAndNoOrderChronological(slOut, finalNo, limit);
   } catch {
     return [];
   }

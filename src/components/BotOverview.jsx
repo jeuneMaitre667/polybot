@@ -177,6 +177,8 @@ export function BotOverview() {
   const signer15m = data15m?.lastOrder?.clobSignerAddress ?? null;
   const [walletUsdc15m, setWalletUsdc15m] = useState(null);
   const [walletUsdcAt, setWalletUsdcAt] = useState(null);
+  const [upInBandSince, setUpInBandSince] = useState(null);
+  const [downInBandSince, setDownInBandSince] = useState(null);
   const preferredWalletAddress = useMemo(() => {
     const envAddr = String(import.meta.env.VITE_TRADE_HISTORY_ADDRESS || '').trim();
     if (/^0x[a-fA-F0-9]{40}$/.test(envAddr)) return envAddr;
@@ -422,6 +424,29 @@ export function BotOverview() {
   const signalLiveDownP = pickLiveBestAskP(miseMaxBestAskLiveDown, miseMaxBestAskDown);
   const signalLiveUpInBand = isPriceInSignalBand(signalLiveUpP);
   const signalLiveDownInBand = isPriceInSignalBand(signalLiveDownP);
+
+  const DWELL_SEC = Number(import.meta.env.VITE_BACKTEST_SIGNAL_MIN_DWELL_SEC || 5);
+
+  useEffect(() => {
+    if (signalLiveUpInBand) {
+      if (!upInBandSince) setUpInBandSince(Date.now());
+    } else {
+      setUpInBandSince(null);
+    }
+  }, [signalLiveUpInBand, upInBandSince]);
+
+  useEffect(() => {
+    if (signalLiveDownInBand) {
+      if (!downInBandSince) setDownInBandSince(Date.now());
+    } else {
+      setDownInBandSince(null);
+    }
+  }, [signalLiveDownInBand, downInBandSince]);
+
+  const upDwellElapsed = upInBandSince ? (nowMs - upInBandSince) / 1000 : 0;
+  const downDwellElapsed = downInBandSince ? (nowMs - downInBandSince) / 1000 : 0;
+  const upConfirmed = signalLiveUpInBand && upDwellElapsed >= DWELL_SEC;
+  const downConfirmed = signalLiveDownInBand && downDwellElapsed >= DWELL_SEC;
   const activeLastSkip = activeStatus?.health?.lastSkipReason ?? null;
   const activeLastSkipSource = activeStatus?.health?.lastSkipSource ?? null;
   const activeLastSkipAt = activeStatus?.health?.lastSkipAt ?? null;
@@ -473,6 +498,7 @@ export function BotOverview() {
   };
   const activeLastSkipLabel = activeLastSkip ? (skipReasonLabels[activeLastSkip] ?? activeLastSkip) : null;
   const noOrderReasonLabels = {
+    order_placed: 'Signal: Ordre marché placé',
     timing_forbidden: 'Entrée interdite (timing ET)',
     cooldown_active: 'Cooldown',
     degraded_mode_pause: 'Mode incident',
@@ -785,7 +811,7 @@ export function BotOverview() {
         <div className="overview-watch-card">
           <div className="overview-watch-card__columns">
             <div className="overview-watch-column">
-              <div className="overview-watch-card__title">Watch no-order (live)</div>
+              <div className="overview-watch-card__title">Signaux Live</div>
               <p className="overview-watch-card__hint">
                 <strong>≠ Signaux live</strong> : lignes <code className="overview-watch-code">bot.log</code> côté{' '}
                 <strong>serveur</strong> (anti-spam ~5 s). Ordre <strong>chronologique</strong> : le plus récent en haut —
@@ -923,8 +949,12 @@ export function BotOverview() {
                     <span className="overview-watch-signal-ask">
                       {formatAskCents(signalLiveUpP)}
                       {signalLiveUpP != null && (
-                        <span className={signalLiveUpInBand ? 'overview-watch-signal-ok' : 'overview-watch-signal-off'}>
-                          {signalLiveUpInBand ? ` · dans la bande ${signalMinPct}–${signalMaxPct}¢` : ' · hors bande signal'}
+                        <span className={upConfirmed ? 'overview-watch-signal-ok' : signalLiveUpInBand ? 'overview-watch-signal-off' : 'overview-watch-signal-off'}>
+                          {upConfirmed 
+                            ? ` · OK (Confirmé ${DWELL_SEC}s)` 
+                            : signalLiveUpInBand 
+                              ? ` · En attente (${Math.floor(upDwellElapsed)}/${DWELL_SEC}s)` 
+                              : ' · hors bande signal'}
                         </span>
                       )}
                     </span>
@@ -934,8 +964,12 @@ export function BotOverview() {
                     <span className="overview-watch-signal-ask">
                       {formatAskCents(signalLiveDownP)}
                       {signalLiveDownP != null && (
-                        <span className={signalLiveDownInBand ? 'overview-watch-signal-ok' : 'overview-watch-signal-off'}>
-                          {signalLiveDownInBand ? ` · dans la bande ${signalMinPct}–${signalMaxPct}¢` : ' · hors bande signal'}
+                        <span className={downConfirmed ? 'overview-watch-signal-ok' : signalLiveDownInBand ? 'overview-watch-signal-off' : 'overview-watch-signal-off'}>
+                          {downConfirmed 
+                            ? ` · OK (Confirmé ${DWELL_SEC}s)` 
+                            : signalLiveDownInBand 
+                              ? ` · En attente (${Math.floor(downDwellElapsed)}/${DWELL_SEC}s)` 
+                              : ' · hors bande signal'}
                         </span>
                       )}
                     </span>
