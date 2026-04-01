@@ -5,14 +5,13 @@ export function ArbitrageMonitor({ data }) {
   if (!data || !data.liveArbitrage) return null;
 
   const { 
-    btc, strike, fair, poly, gap, vol, secondsLeft, 
+    btc, strike, fair, vol, secondsLeft, 
     priceSource, netGapUp, netGapDown, adaptiveThreshold, 
     volBucket, priceImpact, chainlinkAge 
   } = data.liveArbitrage;
   
   // Le GAP affiché est maintenant le Net Gap maximum entre Up et Down
   const netGap = Math.max(netGapUp || 0, netGapDown || 0);
-  const hasStrike = strike != null && strike > 0;
   const isStale = chainlinkAge === 'stale' || btc === 0;
 
   const gapPct = (netGap * 100).toFixed(2);
