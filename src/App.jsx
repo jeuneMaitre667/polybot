@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BotOverview } from './components/BotOverview';
 import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
 import { BotStatusBadge } from './components/BotStatus';
 import {
@@ -6,7 +7,6 @@ import {
   DEFAULT_BOT_STATUS_URL_15M,
   areBotStatusUrlsDuplicate,
 } from './hooks/useBotStatus.js';
-import { BotOverview } from './components/BotOverview';
 
 /** Ancienne page backtest retirée — évite un hash mort dans la barre d’adresse (favoris / onglet). */
 const LEGACY_HASH_ROUTES = new Set(['strat-95-70']);

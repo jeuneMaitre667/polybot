@@ -222,6 +222,12 @@ function getHealth() {
     lastOrderAt: o.lastOrderAt ?? null,
     lastOrderSource: o.lastOrderSource ?? null,
     geoblockOk: o.geoblockOk,
+    // v4.1.4 Visual Quant Engine
+    parkinsonVol: o.parkinsonVol ?? null,
+    realizedVol60m: o.realizedVol60m ?? null,
+    strikeLocked: !!o.strikeLocked,
+    currentSlot: o.currentSlot ?? null,
+    lastNetEdge: o.lastNetEdge ?? null,
     killSwitchActive: !!o.killSwitchActive,
     polymarketDegraded: !!o.polymarketDegraded,
     degradedReason: o.degradedReason ?? null,
@@ -992,6 +998,33 @@ function getSignalInRangeNoOrderRecent(limit = 40) {
   }
 }
 
+/**
+ * Lit les dernières lignes du journal de décision pour le flux d'arbitrage.
+ */
+function getDecisionFeed(limit = 50) {
+  const filePath = path.join(BOT_DIR, 'decisions.log');
+  const TAIL_BYTES = 100 * 1024; // 100 KB suffisent pour 50 lignes JSON
+  try {
+    const raw = readFileTailUtf8(filePath, TAIL_BYTES);
+    if (!raw) return [];
+    return raw
+      .trim()
+      .split('\n')
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .reverse()
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 const server = http.createServer((req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') {
@@ -1049,6 +1082,9 @@ const server = http.createServer((req, res) => {
         await tick();
         const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
         await tick();
+        const decisionFeed = getDecisionFeed();
+        const lastDecision = decisionFeed[0] || null;
+        await tick();
         const health = getHealth();
         const alerts = getHealthAlerts(health, config);
         const payload = {
@@ -1081,6 +1117,20 @@ const server = http.createServer((req, res) => {
           cycleLatencyStats,
           signalDecisionLatencyStats,
           signalInRangeNoOrderRecent,
+          decisionFeed,
+          liveArbitrage: lastDecision ? {
+            btc: lastDecision.btc,
+            strike: lastDecision.strike,
+            fair: lastDecision.fair,
+            poly: lastDecision.poly,
+            gap: lastDecision.gap,
+            vol: lastDecision.vol,
+            secondsLeft: lastDecision.secondsLeft,
+            priceSource: lastDecision.priceSource ?? null,
+            binanceBtc: lastDecision.binanceBtc ?? null,
+            chainlinkDelta: lastDecision.chainlinkDelta ?? null,
+            strikeSource: lastDecision.strikeSource ?? null,
+          } : null,
           at: new Date().toISOString(),
         };
         if (debugRequested) {

@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { use15mMiseMaxBookAvg } from '@/hooks/use15mMiseMaxBookAvg.js';
 import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.jsx';
+import { ArbitrageMonitor } from './ArbitrageMonitor';
+import { DecisionFeed } from './DecisionFeed';
 import { TradeHistory } from '@/components/TradeHistory.jsx';
 import { formatBitcoin15mSlotRangeEt, formatLiveClockEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
 import {
@@ -681,8 +683,46 @@ export function BotOverview() {
             <div>Réel <span>{show15m ? (orders24h15m ?? '—') : '—'}</span></div>
           </div>
           <div className="card-sub" style={{ marginTop: 6 }}>
-            Lignes <code>orders.log</code> sur 24 h, hors tentatives stop-loss rejetées (sans exécution). À rapprocher de
-            l’historique Polymarket ci-dessous — ce n’est pas le nombre d’ordres encore ouverts sur le carnet.
+            Lignes <code>orders.log</code> sur 24 h.
+          </div>
+        </div>
+      </div>
+
+      {/* v4.0.0 : Quant Engine Metrics */}
+      <div className="grid-main" style={{ marginTop: '1.5rem' }}>
+        <div className="card border-quant">
+          <div className="card-label gold">Volatilité Hybride (Risk)</div>
+          <div className="card-value amber">
+            {data15m?.health?.parkinsonVol || data15m?.health?.realizedVol60m ? 
+              `${(Math.max(data15m?.health?.parkinsonVol || 0, data15m?.health?.realizedVol60m || 0) * 100).toFixed(1)}%` : '—'}
+          </div>
+          <div className="overview-two-lines">
+            <div>24h (Binance) <span>{data15m?.health?.parkinsonVol ? `${(data15m.health.parkinsonVol * 100).toFixed(1)}%` : '—'}</span></div>
+            <div>60min (Local) <span>{data15m?.health?.realizedVol60m ? `${(data15m.health.realizedVol60m * 100).toFixed(1)}%` : '—'}</span></div>
+          </div>
+        </div>
+        <div className="card border-quant">
+          <div className="card-label gold">Strike Lock (Golden Window)</div>
+          <div className={`card-value ${data15m?.health?.strikeLocked ? 'green' : 'amber'}`}>
+            {data15m?.health?.strikeLocked ? 'VERROUILLÉ' : 'ATTENTE 15s'}
+          </div>
+          <div className="card-sub">
+            Slot: {data15m?.health?.currentSlot || 'Scan...'}
+          </div>
+          <div className="card-sub">
+            Fidélité T+15s activée (v3.9.3)
+          </div>
+        </div>
+        <div className="card border-quant">
+          <div className="card-label gold">Alpha Edge (Pessimiste)</div>
+          <div className="card-value green">
+             {data15m?.health?.lastNetEdge ? `${(data15m.health.lastNetEdge * 100).toFixed(2)}%` : '> 0.5%'}
+          </div>
+          <div className="card-sub">
+            Modèle VWAP (100$ depth)
+          </div>
+          <div className="card-sub">
+            Taker Fee 0.5% déduit
           </div>
         </div>
       </div>
@@ -750,6 +790,22 @@ export function BotOverview() {
               <div className="card-sub">Aucune position 15m ouverte en ce moment.</div>
             </>
           )}
+        </div>
+      </div>
+
+      <div className="col-span-full">
+        <div className="section-title">
+          <h2>Arbitrage Engine 2.0</h2>
+          <div className="line" />
+        </div>
+        
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8 mt-4">
+          <div className="xl:col-span-2">
+            <ArbitrageMonitor data={data15m} />
+          </div>
+          <div>
+            <DecisionFeed feed={data15m?.decisionFeed} />
+          </div>
         </div>
       </div>
 
@@ -1203,209 +1259,6 @@ export function BotOverview() {
           balanceReconcilesWithDisplayedBalance={walletUsdc15m == null}
         />
       </div>
-
-      {show15m && (
-        <div className="col-span-full mise-max-section">
-          <div className="mise-max-section-head">
-            <div className="section-title mise-max-section-title">
-              <h2>Mise max carnet · Bitcoin 15m</h2>
-              <div className="line" />
-            </div>
-            <button
-              type="button"
-              onClick={() => refreshMiseMax15m()}
-              disabled={miseMax15mLoading}
-              className="btn btn--default btn--outline btn--sm"
-            >
-              Rafraîchir
-            </button>
-          </div>
-
-          <div className="card mise-max-card">
-            {miseMax15mLoading && (
-              <p className="overview-state mise-max-card-state">Analyse des carnets 15m… (~quelques secondes)</p>
-            )}
-            {!miseMax15mLoading && miseMax15mError && (
-              <p className="overview-state overview-state--amber mise-max-card-state">{miseMax15mError}</p>
-            )}
-            {!miseMax15mLoading && !miseMax15mError && miseMaxSample15m > 0 && (
-              <>
-                <div className="mise-max-kpi-row">
-                  <div className="mise-max-kpi-cell">
-                    <div className="mise-max-kpi-label">Moyenne</div>
-                    <div className="mise-max-kpi-value mise-max-kpi-value--green">{formatUsd(miseMaxAvg15m)}</div>
-                  </div>
-                  <div className="mise-max-kpi-cell">
-                    <div className="mise-max-kpi-label">Créneau actuel</div>
-                    <div className="mise-max-kpi-value mise-max-kpi-value--white">{formatUsd(miseMaxCurrent15m)}</div>
-                  </div>
-                  <div className="mise-max-kpi-cell">
-                    <div className="mise-max-kpi-label">Min — Max</div>
-                    <div className="mise-max-kpi-mid">
-                      {formatUsd(miseMaxMin15m)} — {formatUsd(miseMaxMax15m)}
-                    </div>
-                    <div className="mise-max-kpi-median">
-                      Médiane {miseMaxMedian15m != null ? formatUsd(miseMaxMedian15m) : '—'}
-                    </div>
-                  </div>
-                  <div className="mise-max-kpi-cell mise-max-kpi-cell--last">
-                    <div className="mise-max-kpi-label">Échantillon</div>
-                    <div className="mise-max-kpi-value mise-max-kpi-value--amber">
-                      {miseMaxSample15m} créneau{miseMaxSample15m !== 1 ? 'x' : ''}
-                    </div>
-                    <div className="mise-max-kpi-source">Gamma + CLOB</div>
-                  </div>
-                </div>
-
-                <div className="mise-max-meta">
-                  <div className="mise-max-meta-row mise-max-meta-row--asks">
-                    <span className="mise-max-meta-label">Best ask (CLOB)</span>
-                    <span className="mise-max-meta-value">
-                      Up {formatAskCents(miseMaxBestAskUp)} · Down {formatAskCents(miseMaxBestAskDown)}
-                      <span
-                        className={`mise-max-mini-label ${
-                          bestAskUpAligned == null
-                            ? 'mise-max-mini-label--muted'
-                            : bestAskUpAligned
-                              ? 'mise-max-mini-label--ok'
-                              : 'mise-max-mini-label--warn'
-                        }`}
-                      >
-                        {bestAskUpAligned == null ? 'book vs live: n/a' : `Up ${bestAskUpAligned ? 'aligné' : 'écart'}`}
-                      </span>
-                      <span
-                        className={`mise-max-mini-label ${
-                          bestAskDownAligned == null
-                            ? 'mise-max-mini-label--muted'
-                            : bestAskDownAligned
-                              ? 'mise-max-mini-label--ok'
-                              : 'mise-max-mini-label--warn'
-                        }`}
-                      >
-                        {bestAskDownAligned == null ? 'book vs live: n/a' : `Down ${bestAskDownAligned ? 'aligné' : 'écart'}`}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Best ask live (carnet CLOB, repli /price)</span>
-                    <span className="mise-max-meta-value">
-                      Up {formatAskCents(miseMaxBestAskLiveUp)} · Down {formatAskCents(miseMaxBestAskLiveDown)}
-                    </span>
-                  </div>
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Outcome comparé (mise max)</span>
-                    <span className="mise-max-meta-value">
-                      {miseMaxComparedOutcome ?? '—'}{miseMaxComparedOutcome ? ` (${signalMinPct}–${signalMaxPct}%)` : ''}
-                    </span>
-                  </div>
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Liquidité {signalMinPct}–{signalMaxPct} %</span>
-                    <span className="mise-max-meta-value">
-                      Up {formatUsd(miseMaxLiqBandUp)} · Down {formatUsd(miseMaxLiqBandDown)}
-                    </span>
-                  </div>
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Profondeur → {worstPct} ¢ (FAK / worst)</span>
-                    <span className="mise-max-meta-value">
-                      Up {formatUsd(miseMaxLiqWorstUp)} · Down {formatUsd(miseMaxLiqWorstDown)}
-                    </span>
-                  </div>
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Niveaux asks ({signalMinPct}–{signalMaxPct} %)</span>
-                    <span className="mise-max-meta-value">
-                      Up {miseMaxLevelsBandUp ?? '—'} · Down {miseMaxLevelsBandDown ?? '—'}
-                    </span>
-                  </div>
-
-                  <div className="mise-max-meta-row mise-max-meta-row--clock">
-                    <span className="mise-max-meta-label">Créneau (ET)</span>
-                    <span className="mise-max-meta-value mise-max-meta-value--wrap">
-                      {miseMaxSlotEndSec != null ? (
-                        <>
-                          Fin {formatSlotEndEt(miseMaxSlotEndSec)} · {formatBitcoin15mSlotRangeEt(miseMaxSlotEndSec)}
-                          <br />
-                          <span className="mise-max-meta-sub">
-                            Reste {formatCountdownRemaining(miseMaxSecLeft)} · fenêtres interdites (ET) :{' '}
-                            {miseMaxForbidFirstMinUi} premières min et {miseMaxForbidLastMinUi} dernières min de chaque bloc
-                            :00 / :15 / :30 / :45 (aligné API bot ou VITE_ENTRY_FORBIDDEN_*)
-                          </span>
-                        </>
-                      ) : (
-                        '—'
-                      )}
-                    </span>
-                  </div>
-
-                  {!miseMaxSlotOpen && (
-                    <p className="mise-max-meta-notice mise-max-meta-notice--resolved">
-                      Marché résolu — carnet CLOB souvent indisponible (normal, pas un bug).
-                    </p>
-                  )}
-                  {miseMaxSlotOpen &&
-                    (!miseMax15mBookAsksUp?.length && !miseMax15mBookAsksDown?.length ? (
-                      <p className="mise-max-meta-notice">
-                        Créneau ouvert mais carnet vide côté CLOB (liquidity ou latence).
-                      </p>
-                    ) : null)}
-
-                  <div className="mise-max-meta-row">
-                    <span className="mise-max-meta-label">Fraîcheur</span>
-                    <span className="mise-max-meta-value">
-                      {miseMaxBookAge != null
-                        ? `Snapshot ${miseMaxSnapshotAt ?? '—'} · il y a ${miseMaxBookAge}`
-                        : 'En attente de première lecture…'}
-                    </span>
-                  </div>
-
-                  <p className="mise-max-meta-ref">
-                    Réf. bot (CLOB) : bande signal {signalMinPct}–{signalMaxPct} % · prix max exécution marché typique{' '}
-                    {worstPct} % — la « mise max » affichée est la liquidité dans la bande, pas le plafond FAK.
-                  </p>
-
-                  {botLiqSignalUsd != null && Number(botLiqSignalUsd) > 0 && (
-                    <div className="mise-max-meta-row mise-max-meta-row--bot">
-                      <span className="mise-max-meta-label">Corrélation bot</span>
-                      <span className="mise-max-meta-value mise-max-meta-value--wrap">
-                        Dernière liquidité enregistrée au signal (status) :{' '}
-                        <strong>{formatUsd(botLiqSignalUsd)}</strong>
-                        {botLiqSignalAt ? (
-                          <>
-                            {' '}
-                            ·{' '}
-                            {new Date(botLiqSignalAt).toLocaleString('fr-FR', {
-                              dateStyle: 'short',
-                              timeStyle: 'medium',
-                            })}
-                          </>
-                        ) : null}
-                        <br />
-                        <span className="mise-max-meta-sub">
-                          Live carnet (max Up/Down, bande {signalMinPct}–{signalMaxPct} %) :{' '}
-                          <strong>
-                            {formatUsd(
-                              miseMaxLiqBandUp != null && miseMaxLiqBandDown != null
-                                ? Math.max(miseMaxLiqBandUp, miseMaxLiqBandDown)
-                                : miseMaxCurrent15m
-                            )}
-                          </strong>{' '}
-                          — utile pour debugger écarts / no-fill.
-                        </span>
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                <MiseMax15mOrderBookDepth
-                  asksUp={miseMax15mBookAsksUp}
-                  asksDown={miseMax15mBookAsksDown}
-                  lastAt={miseMax15mLastAt}
-                  lastResolved15mSlot={miseMaxLastResolved15mSlot}
-                />
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

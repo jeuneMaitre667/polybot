@@ -3,6 +3,9 @@
  * Miroir de `src/lib/gammaPolymarket.js` pour le bot sans dépendre du dossier `src/`.
  */
 
+export const ORDER_TYPE_FOK = 'FOK';
+export const ORDER_TYPE_GTC = 'GTC';
+
 function normalizeOutcomeLabel(s) {
   return String(s ?? '')
     .trim()
