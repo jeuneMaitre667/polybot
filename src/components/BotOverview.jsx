@@ -5,7 +5,7 @@ import { MiseMax15mOrderBookDepth } from '@/components/MiseMax15mOrderBookDepth.
 import { ArbitrageMonitor } from './ArbitrageMonitor';
 import { DecisionFeed } from './DecisionFeed';
 import { TradeHistory } from '@/components/TradeHistory.jsx';
-import { formatBitcoin15mSlotRangeEt, formatLiveClockEt, formatSlotEndEt } from '@/lib/polymarketDisplayTime.js';
+import { formatBitcoin15mSlotRangeEt, formatLiveClockEt } from '@/lib/polymarketDisplayTime.js';
 import {
   is15mSlotEntryTimeForbiddenWithWindows,
   normalizeForbidWindowMinutes,
@@ -74,16 +74,8 @@ function formatSignedUsd(value) {
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)} $`;
 }
 
-function formatTimeHmsMs(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return null;
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
+// v4.1.7 Nettoyage : formatTimeHmsMs supprimé car inutilisé
+
 
 function formatSecondsAgo(iso, nowMs) {
   if (!iso) return null;
@@ -300,46 +292,28 @@ export function BotOverview() {
       : null;
 
   const {
-    avgUsd: miseMaxAvg15m,
-    minUsd: miseMaxMin15m,
-    maxUsd: miseMaxMax15m,
-    medianUsd: miseMaxMedian15m,
-    sampleSize: miseMaxSample15m,
-    currentSlotMiseMaxUsd: miseMaxCurrent15m,
     loading: miseMax15mLoading,
     error: miseMax15mError,
     lastAt: miseMax15mLastAt,
-    refresh: refreshMiseMax15m,
-    currentSlotBookAsksUp: miseMax15mBookAsksUp,
-    currentSlotBookAsksDown: miseMax15mBookAsksDown,
-    lastResolved15mSlot: miseMaxLastResolved15mSlot,
     currentSlotEndSec: miseMaxSlotEndSec,
     slotMarketOpen: miseMaxSlotOpen,
-    liquidityBandUpUsd: miseMaxLiqBandUp,
-    liquidityBandDownUsd: miseMaxLiqBandDown,
     bestAskUpP: miseMaxBestAskUp,
     bestAskDownP: miseMaxBestAskDown,
     bestAskLiveUpP: miseMaxBestAskLiveUp,
     bestAskLiveDownP: miseMaxBestAskLiveDown,
     bestBidLiveUpP: miseMaxBestBidLiveUp,
     bestBidLiveDownP: miseMaxBestBidLiveDown,
-    levelsBandUp: miseMaxLevelsBandUp,
-    levelsBandDown: miseMaxLevelsBandDown,
-    liquidityToWorstUpUsd: miseMaxLiqWorstUp,
-    liquidityToWorstDownUsd: miseMaxLiqWorstDown,
   } = use15mMiseMaxBookAvg({ enabled: show15m, slotCount: 36, staggerMs: 45 });
 
-  const [miseMaxNowSec, setMiseMaxNowSec] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    if (!show15m) return undefined;
-    const id = setInterval(() => setMiseMaxNowSec(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [show15m]);
 
-  const miseMaxSecLeft =
-    miseMaxSlotEndSec != null && Number.isFinite(miseMaxSlotEndSec)
-      ? miseMaxSlotEndSec - miseMaxNowSec
-      : null;
+
+  const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt, nowMs);
+
+
+  // v4.1.7 Bloc miseMaxNowSec supprimé (inutilisé)
+
+
+  // v4.1.7 Nettoyage : miseMaxSecLeft supprimé
   /** Aligné sur le bot : API bot-status puis Vite puis défaut 0/0 (même logique que `normalizeForbidWindowMinutes`). */
   const live15mForbidWindowSec = useMemo(() => {
     const apiF = data15m?.entryForbiddenFirstMin;
@@ -368,34 +342,10 @@ export function BotOverview() {
       live15mForbidWindowSec.forbidLastSec,
     );
   }, [nowMs, live15mForbidWindowSec]);
-  const miseMaxForbidFirstMinUi = Math.round(live15mForbidWindowSec.forbidFirstSec / 60);
-  const miseMaxForbidLastMinUi = Math.round(live15mForbidWindowSec.forbidLastSec / 60);
-  const miseMaxBookAge = formatSecondsAgo(miseMax15mLastAt, nowMs);
-  const botLiqSignalUsd =
-    data15m?.liquidityStats24h?.lastUsd ?? data15m?.liquidityStats?.lastUsd ?? null;
-  const botLiqSignalAt = data15m?.liquidityStats24h?.lastAt ?? data15m?.liquidityStats?.lastAt ?? null;
   const signalMinPct = (ORDER_BOOK_SIGNAL_MIN_P * 100).toFixed(0);
   const signalMaxPct = (ORDER_BOOK_SIGNAL_MAX_P * 100).toFixed(1).replace(/\.0$/, '');
-  const worstPct = (ORDER_BOOK_MARKET_WORST_P * 100).toFixed(0);
-  const miseMaxComparedOutcome =
-    miseMaxLiqBandUp == null || miseMaxLiqBandDown == null
-      ? null
-      : miseMaxLiqBandUp >= miseMaxLiqBandDown
-        ? 'Up'
-        : 'Down';
-  const miseMaxSnapshotAt = formatTimeHmsMs(miseMax15mLastAt);
-  const bestAskDeltaUp =
-    Number.isFinite(Number(miseMaxBestAskUp)) && Number.isFinite(Number(miseMaxBestAskLiveUp))
-      ? Math.abs(Number(miseMaxBestAskUp) - Number(miseMaxBestAskLiveUp))
-      : null;
-  const bestAskDeltaDown =
-    Number.isFinite(Number(miseMaxBestAskDown)) && Number.isFinite(Number(miseMaxBestAskLiveDown))
-      ? Math.abs(Number(miseMaxBestAskDown) - Number(miseMaxBestAskLiveDown))
-      : null;
-  // 0.15c de tolérance visuelle (0.0015 en probabilité).
-  const BEST_ASK_DELTA_OK_P = 0.0015;
-  const bestAskUpAligned = bestAskDeltaUp != null ? bestAskDeltaUp <= BEST_ASK_DELTA_OK_P : null;
-  const bestAskDownAligned = bestAskDeltaDown != null ? bestAskDeltaDown <= BEST_ASK_DELTA_OK_P : null;
+  // v4.1.7 Nettoyage Lint : botLiq/miseMaxCompared/Snapshot supprimés
+  // v4.1.7 Nettoyage Lint : bestAskUp/DownAligned supprimés
 
   const activeLatency = latencySourceMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   /** Dernier ordre mesuré : WS ou poll (souvent poll si placement via boucle principale, pas le handler WS). */
