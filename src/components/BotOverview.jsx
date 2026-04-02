@@ -10,15 +10,7 @@ import { OFIMonitor } from './OFIMonitor';
 import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
 import { useWallet } from '@/context/useWallet.js';
 
-function formatUsd(value) {
-  if (value == null || Number.isNaN(value)) return '—';
-  return `${Number(value).toFixed(2)} $`;
-}
 
-function formatWalletShort(addr) {
-  if (!addr || typeof addr !== 'string' || addr.length < 12) return '—';
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
 
 const USDC_E_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
@@ -46,41 +38,7 @@ function formatMs(v) {
   return Number.isFinite(n) ? `${Math.round(n)} ms` : '—';
 }
 
-function computePnl(balanceHistory, currentBalance, nowMs = Date.now()) {
-  const history = Array.isArray(balanceHistory) ? balanceHistory : [];
-  if (!history.length) return null;
-  const sorted = [...history]
-    .filter((p) => p && p.at != null && Number.isFinite(Number(p.balance)))
-    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-  if (!sorted.length) return null;
 
-  const windowMs = 24 * 60 * 60 * 1000;
-  const cutoff = nowMs - windowMs;
-  const lastBalance =
-    currentBalance != null ? Number(currentBalance) : Number(sorted[sorted.length - 1].balance);
-  if (!Number.isFinite(lastBalance)) return null;
-
-  const beforeOrAtCutoff = sorted.filter((p) => new Date(p.at).getTime() <= cutoff);
-  let baseline;
-  let window;
-  if (beforeOrAtCutoff.length) {
-    baseline = Number(beforeOrAtCutoff[beforeOrAtCutoff.length - 1].balance);
-    window = 'rolling24h';
-  } else {
-    baseline = Number(sorted[0].balance);
-    window = 'sinceFirst';
-  }
-
-  const MIN_BASELINE_USD = 1;
-  if (!Number.isFinite(baseline) || baseline < MIN_BASELINE_USD) {
-    const firstUsable = sorted.find((p) => Number(p.balance) >= MIN_BASELINE_USD);
-    baseline = firstUsable ? Number(firstUsable.balance) : null;
-  }
-  if (!(Number.isFinite(baseline) && baseline > 0)) return null;
-
-  const pct = ((lastBalance - baseline) / baseline) * 100;
-  return { pct, window, baseline, lastBalance };
-}
 
 const SUPPORTED_ASSETS = ['BTC', 'ETH', 'SOL'];
 
@@ -94,19 +52,16 @@ export function BotOverview() {
   const [latencyMode, setLatencyMode] = useState(() =>
     readLatencyModeFromStorage(Boolean(DEFAULT_BOT_STATUS_URL_15M), Boolean(DEFAULT_BOT_STATUS_URL)),
   );
-  const [nowMs, setNowMs] = useState(() => Date.now());
+
   
-  useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+
 
   useEffect(() => {
     writeLatencyModeToStorage(latencyMode);
   }, [latencyMode]);
 
   const balance = data?.balanceUsd != null ? Number(data.balanceUsd) : null;
-  const balance15m = data15m?.balanceUsd != null ? Number(data15m.balanceUsd) : null;
+
   
   const [walletUsdc15m, setWalletUsdc15m] = useState(null);
   const funder15m = data15m?.lastOrder?.clobFunderAddress ?? null;
@@ -137,7 +92,9 @@ export function BotOverview() {
         const json = await res.json();
         const v = hexUsdcToFloat(json?.result);
         if (v != null && !cancelled) setWalletUsdc15m(v);
-      } catch (e) {}
+      } catch (err) {
+        console.warn('[Wallet] Balance fetch failed:', err.message);
+      }
     }
     fetchWalletUsdc();
     const id = setInterval(fetchWalletUsdc, 30_000);
@@ -146,8 +103,7 @@ export function BotOverview() {
 
   const tradeLatencyStats = data?.tradeLatencyStats ?? null;
   const tradeLatencyStats15m = data15m?.tradeLatencyStats ?? null;
-  const show15m = !!statusUrl15m;
-  const showStatus1h = !!statusUrl;
+
   
   const activeLatency = latencyMode === '15m' ? tradeLatencyStats15m : tradeLatencyStats;
   const lastTradeLatency = useMemo(() => {

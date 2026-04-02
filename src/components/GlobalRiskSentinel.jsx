@@ -8,7 +8,6 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
   
   // Real daily stats from health or status
   const dailyPnL = data?.dailyStats?.totalPnL || 0;
-  const pnlPercent = dailyLossLimit !== 0 ? (dailyPnL / Math.abs(dailyLossLimit)) * 100 : 0;
   
   // Progress bar color based on loss
   const progressColor = dailyPnL < -400 ? 'bg-red-500' : dailyPnL < -200 ? 'bg-amber-500' : 'bg-green-500';

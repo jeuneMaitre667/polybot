@@ -8,7 +8,6 @@ export function LatencySentinelCards({ data }) {
   const tradeLatency = data.tradeLatencyStats || {};
   const breakdown = data.tradeLatencyBreakdownStats || {};
   const cycleLatency = data.cycleLatencyStats || {};
-  const decisionLatency = data.signalDecisionLatencyStats || {};
 
   const ws = tradeLatency.ws || {};
   const poll = tradeLatency.poll || {};
@@ -126,13 +125,14 @@ export function LatencySentinelCards({ data }) {
           { label: 'Balance', key: 'balance', icon: Briefcase },
           { label: 'OrderBook', key: 'book', icon: Network },
           { label: 'Placement', key: 'placeOrder', icon: Zap },
-        ].map(({ label, key, icon: Icon }) => {
-          const stats = breakdown.all?.[key] || {};
+        ].map((item) => {
+          const IconComponent = item.icon;
+          const stats = breakdown.all?.[item.key] || {};
           return (
-            <div key={key} className="glass-panel border border-white/5 p-3 rounded-xl flex items-center justify-between hover:bg-white/5 transition-colors">
+            <div key={item.key} className="glass-panel border border-white/5 p-3 rounded-xl flex items-center justify-between hover:bg-white/5 transition-colors">
               <div className="flex items-center gap-3">
-                <div className="text-white/20"><Icon size={14} /></div>
-                <span className="text-[10px] font-bold text-white/60 uppercase">{label}</span>
+                <div className="text-white/20"><IconComponent size={14} /></div>
+                <span className="text-[10px] font-bold text-white/60 uppercase">{item.label}</span>
               </div>
               <span className={cn("text-xs font-bold font-mono", getSeverityColor(stats.avgMs))}>
                 {formatMs(stats.avgMs)}

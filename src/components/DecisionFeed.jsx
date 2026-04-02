@@ -22,7 +22,6 @@ export function DecisionFeed({ feed }) {
       <div className="flex-1 overflow-y-auto scrollbar-thin p-3 font-mono text-[11px] space-y-2">
         {feed.map((entry, idx) => {
           const isBuy = entry.decision?.startsWith('BUY');
-          const isWait = entry.decision === 'WAIT' || entry.decision === 'NO_SIGNAL' || entry.decision === 'SKIP';
           const time = entry.at ? new Date(entry.at).toLocaleTimeString('fr-FR', { hour12: false }) : '';
           const asset = entry.asset || 'BTC';
           const assetColors = {
