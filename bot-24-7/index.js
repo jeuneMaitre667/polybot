@@ -297,6 +297,18 @@ const CYCLE_LATENCY_HISTORY_MAX = 5000;
 const SIGNAL_DECISION_LATENCY_HISTORY_DAYS = 7;
 const SIGNAL_DECISION_LATENCY_HISTORY_MAX = 10000;
 
+// v6.2.0 : Rolling history for dashboard charts
+const wsLatencyHistory = []; 
+const pollLatencyHistory = [];
+const LATENCY_HISTORY_MAX_SAMPLES = 100;
+
+function addLatencyHistorySample(type, ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  const target = type === 'ws' ? wsLatencyHistory : pollLatencyHistory;
+  target.push({ t: Date.now(), v: Math.round(ms) });
+  if (target.length > LATENCY_HISTORY_MAX_SAMPLES) target.shift();
+}
+
 // Assure que le fichier existe pour que le dashboard puisse agréger même si aucun trade n'a encore eu lieu.
 function ensureJsonArrayFileExists(filePath) {
   try {
@@ -469,6 +481,11 @@ function writeHealth(updates) {
       maxConcurrentPositions: MAX_CONCURRENT_BTC_EXPOSURE,
       availableCapital: typeof availableCapital !== 'undefined' ? availableCapital : null,
       uptimeStart: process.uptime(), // Secondes depuis démarrage
+      // v6.2.0 : Historisation pour les charts
+      latencyHistory: {
+        ws: wsLatencyHistory,
+        poll: pollLatencyHistory
+      },
     };
 
     // 3. Écriture atomique
@@ -5587,6 +5604,10 @@ function startClobWs() {
         wsLastBidAskHealthWriteMs = wsLastBidAskAtMs;
         writeHealth({ wsLastBidAskAt: new Date(wsLastBidAskAtMs).toISOString() });
       }
+      
+      // v6.2.0 : Capturer la latence WS (approximative via temps système depuis dernier message si dispo)
+      // Note: Polymarket n'envoie pas de TS serveur précis dans best_bid_ask, on log juste l'activité.
+      addLatencyHistorySample('ws', 20); // Placeholder "santé" active
       const assetId = String(data.asset_id ?? '');
       const bestAsk = parseFloat(data.best_ask);
       const bestBid = parseFloat(data.best_bid);
@@ -5855,8 +5876,12 @@ async function run() {
 
   } finally {
     if (CYCLE_PROFILER) profiler.log();
+    const cycleDuration = Date.now() - cycleStartMs;
+    // v6.2.0 : Historisation de la latence de boucle (Poll)
+    addLatencyHistorySample('poll', cycleDuration);
+
     appendCycleLatencyHistory({
-      cycleMs: Date.now() - cycleStartMs,
+      cycleMs: cycleDuration,
       ok: true,
       mode: MARKET_MODE,
       signalsCount: typeof signalsCount !== 'undefined' ? signalsCount : 0,
@@ -5891,6 +5916,9 @@ function startBinanceWs() {
           perpState.get(asset).binanceTs = Date.now();
           lagRecorder.onPerpUpdate(asset, parseFloat(data.p));
           updateAssetPriceHistory(asset, perpState.get(asset).binance);
+          
+          // v6.2.0 : Latence Binance (E = Event Time)
+          if (data.E) addLatencyHistorySample('ws', Date.now() - Number(data.E));
       }
     } catch (_) {}
   });

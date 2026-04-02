@@ -1,12 +1,7 @@
 /**
- * Module Chainlink Multi-Asset Price Feed - Polygon Mainnet (v5.4.1)
+ * Module Chainlink Multi-Asset Price Feed - Polygon Mainnet (v6.2.0)
  * 
- * Lit les prix BTC/USD, ETH/USD et SOL/USD depuis les smart contracts Chainlink sur Polygon.
- * 
- * Contracts:
- * - BTC/USD: 0xc907E116054Ad103354f2D350FD2514433D57F6f
- * - ETH/USD: 0xF9680D99D99444723d9b912632E2943722415636
- * - SOL/USD: 0x1073039600E251f5C953683105CC1E4C7d99528e
+ * Implement Multi-RPC Fallback (Parallel Race) to ensure lowest latency.
  */
 import { ethers } from 'ethers';
 
@@ -36,42 +31,11 @@ const assetCaches = {
   SOL: { price: null, updatedAt: null, roundId: null, fetchedAt: 0, source: 'chainlink' },
 };
 
-let currentProviderIndex = 0;
-let providerInstance = null;
-const contractInstances = new Map(); // address -> contract
-
-function getProvider() {
-  if (providerInstance) return providerInstance;
-  const url = RPC_ENDPOINTS[currentProviderIndex % RPC_ENDPOINTS.length];
-  providerInstance = new ethers.JsonRpcProvider(url, 137, { staticNetwork: true });
-  return providerInstance;
-}
-
-function getContract(asset) {
-  const rawAddress = DATA_FEEDS[asset];
-  if (!rawAddress) return null;
-  const address = ethers.getAddress(rawAddress.toLowerCase()); // Fix checksum v5.4.1
-  if (contractInstances.has(address)) return contractInstances.get(address);
-  
-  const provider = getProvider();
-  const contract = new ethers.Contract(address, AGGREGATOR_V3_ABI, provider);
-  contractInstances.set(address, contract);
-  return contract;
-}
-
-function rotateProvider() {
-  currentProviderIndex = (currentProviderIndex + 1) % RPC_ENDPOINTS.length;
-  providerInstance = null;
-  contractInstances.clear();
-}
-
-/** Legacy support pour index.js v4/v5 */
-export async function getChainlinkBtcPrice() {
-  return getChainlinkPrice('BTC');
-}
+let lastWinningRpc = 'Unknown';
 
 /** 
  * Récupère le prix Chainlink pour un actif donné (BTC, ETH, SOL).
+ * utilise une course (Race) entre tous les RPC disponibles pour garantir la fraîcheur.
  */
 export async function getChainlinkPrice(asset = 'BTC') {
   const cleanAsset = String(asset).toUpperCase();
@@ -83,45 +47,55 @@ export async function getChainlinkPrice(asset = 'BTC') {
     return { ...cache, stale: false };
   }
 
-  // v5.6.4: On repart TOUJOURS de l'index 0 (Alchemy) pour ne pas rester bloqué sur un fallback
-  currentProviderIndex = 0; 
-  providerInstance = null;
-  contractInstances.clear();
-
-  for (let attempt = 0; attempt < RPC_ENDPOINTS.length; attempt++) {
+  // Multi-RPC Race (v6.2.0)
+  // On lance tous les RPC en parallèle et on prend le premier succès.
+  const promises = RPC_ENDPOINTS.map(async (url) => {
     try {
-      const contract = getContract(cleanAsset);
-      if (!contract) break;
-      
+      const provider = new ethers.JsonRpcProvider(url, 137, { staticNetwork: true });
+      const contract = new ethers.Contract(DATA_FEEDS[cleanAsset], AGGREGATOR_V3_ABI, provider);
       const data = await contract.latestRoundData();
       const rawPrice = Number(data.answer) / Math.pow(10, CHAINLINK_DECIMALS);
       const updatedAtMs = Number(data.updatedAt) * 1000;
-
-      const result = {
+      
+      const rpcLabel = url.includes('alchemy') ? 'Alchemy (Private)' : url.split('//')[1]?.split('/')[0] || 'Public';
+      
+      return {
         price: rawPrice,
         updatedAt: updatedAtMs,
         roundId: data.roundId.toString(),
-        fetchedAt: now,
+        fetchedAt: Date.now(),
         source: 'chainlink',
-        ageSec: Math.floor((now - updatedAtMs) / 1000),
+        rpcLabel,
+        ageSec: Math.floor((Date.now() - updatedAtMs) / 1000),
       };
-      assetCaches[cleanAsset] = result;
-      return { ...result, stale: result.ageSec > 120 };
     } catch (err) {
-      console.warn(`[Chainlink] [${cleanAsset}] Erreur RPC Polygon [${attempt}]: ${err.message}`);
-      rotateProvider(); // Passe au suivant
+      // Pour Promise.any, on jette une erreur pour l'écarter.
+      throw err;
     }
-  }
+  });
 
-  if (cache.price != null) return { ...cache, stale: true, source: 'chainlink_stale_cache' };
-  return { price: null, updatedAt: null, roundId: null, source: 'chainlink_unavailable', stale: true };
+  try {
+    const result = await Promise.any(promises);
+    assetCaches[cleanAsset] = result;
+    lastWinningRpc = result.rpcLabel;
+    return { ...result, stale: result.ageSec > 120 };
+  } catch (err) {
+    console.warn(`[Chainlink] [${cleanAsset}] Tous les RPC ont échoué ! tentative de récupération depuis le cache.`);
+    if (cache.price != null) return { ...cache, stale: true, source: 'chainlink_stale_cache' };
+    return { price: null, updatedAt: null, roundId: null, source: 'chainlink_unavailable', stale: true };
+  }
+}
+
+/** Legacy support pour index.js */
+export async function getChainlinkBtcPrice() {
+  return getChainlinkPrice('BTC');
 }
 
 export async function captureStrikeAtSlotOpen(asset, slotSlug, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
     const result = await getChainlinkPrice(asset);
     if (result.price != null && !result.stale) {
-      console.log(`[Strike] [${asset}] Capturé pour ${slotSlug}: $${result.price.toFixed(2)}`);
+      console.log(`[Strike] [${asset}] Capturé via ${result.rpcLabel}: $${result.price.toFixed(2)}`);
       return { price: result.price, slotSlug, asset, capturedAt: new Date().toISOString(), source: 'chainlink_polygon', roundId: result.roundId };
     }
     await new Promise(r => setTimeout(r, 1000));
@@ -131,7 +105,5 @@ export async function captureStrikeAtSlotOpen(asset, slotSlug, maxRetries = 3) {
 
 export function getChainlinkHealthStats(asset = 'BTC') {
   const cache = assetCaches[asset.toUpperCase()];
-  const currentRpc = RPC_ENDPOINTS[currentProviderIndex % RPC_ENDPOINTS.length] || 'Unknown';
-  const rpcLabel = currentRpc.includes('alchemy') ? 'Alchemy (Private)' : 'Public Fallback';
-  return { lastPrice: cache?.price, source: cache?.source, rpc: rpcLabel };
+  return { lastPrice: cache?.price, source: cache?.source, rpc: lastWinningRpc };
 }

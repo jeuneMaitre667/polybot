@@ -7,6 +7,8 @@ import { ExchangeMatrix } from './ExchangeMatrix';
 import { LatencySentinelCards } from './LatencySentinelCards';
 import { RiskKellySentinel } from './RiskKellySentinel';
 import { OFIMonitor } from './OFIMonitor';
+import LatencyTimelineChart from './LatencyTimelineChart';
+import ExposureHeatmap from './ExposureHeatmap';
 import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
 import { useWallet } from '@/context/useWallet.js';
 
@@ -125,11 +127,18 @@ export function BotOverview() {
     <div className="layout app-root space-y-12">
       {/* SECTION 1: GLOBAL RISK SENTINEL */}
       <section className="animate-in fade-in slide-in-from-top-4 duration-700">
-        <GlobalRiskSentinel 
-          data={data15m} 
-          paperBalance={balance} 
-          realBalance={walletUsdc15m} 
-        />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2">
+            <GlobalRiskSentinel 
+              data={data15m} 
+              paperBalance={balance} 
+              realBalance={walletUsdc15m} 
+            />
+          </div>
+          <div>
+            <ExposureHeatmap data={data15m} />
+          </div>
+        </div>
       </section>
 
       {/* SECTION 2: MARKET SENTINEL GRID */}
@@ -146,9 +155,14 @@ export function BotOverview() {
         </div>
       </section>
 
-      {/* SECTION 3: LATENCY SENTINEL */}
-      <section className="animate-in fade-in slide-in-from-bottom-4 duration-1000">
-        <LatencySentinelCards data={data15m} />
+      {/* SECTION 3: LATENCY SENTINEL & TIMELINE */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+        <div className="lg:col-span-1">
+          <LatencySentinelCards data={data15m} />
+        </div>
+        <div className="lg:col-span-2">
+          <LatencyTimelineChart data={data15m?.latencyHistory} />
+        </div>
       </section>
 
       {/* SECTION 4: RISK & STRATEGY */}
