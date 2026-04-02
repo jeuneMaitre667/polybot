@@ -56,14 +56,30 @@ export async function fetchSignals(asset, context = {}) {
             
             // On cherche le "Yes" (Upper) ou "No" (Lower)
             // Note: m.groupItemTitle contient souvent "Yes" ou "No"
+            const takeSide = m.groupItemTitle || "Yes";
+            
+            // v5.4.1: Handle clobTokenIds (plural array) for 15m markets
+            let tokenIdToBuy = m.clobTokenId;
+            if (!tokenIdToBuy && m.clobTokenIds) {
+                try {
+                    const ids = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+                    if (Array.isArray(ids) && ids.length > 0) tokenIdToBuy = ids[0];
+                } catch (e) {
+                    // fallback to conditionId
+                }
+            }
+            if (!tokenIdToBuy) tokenIdToBuy = m.conditionId;
+
+            console.log(`[${asset}] Signal detect: ${takeSide} @ ${m.outcomePrices} -> tokenId: ${tokenIdToBuy}`);
+
             return {
                 asset,
-                tokenIdToBuy: m.clobTokenIds ? JSON.parse(m.clobTokenIds)[0] : null,
+                conditionId: m.conditionId,
+                tokenIdToBuy: tokenIdToBuy,
                 strike: parseFloat(m.line),
                 yesPrice,
                 noPrice,
-                m,
-                conditionId: m.conditionId
+                m
             };
         });
 

@@ -119,7 +119,7 @@ import {
 } from './gammaUpDownOrder.js';
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
-import { getChainlinkBtcPrice, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
+import { getChainlinkPrice, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
 import { fetchSignals, getSignalKey, shouldSkipTradeTiming } from './signal-engine.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -410,10 +410,30 @@ function writeHealth(updates) {
       last425ErrorAt,
       isMaintenance: isMaintenanceWindow(),
       perpSources: {
-        binance: { price: perpState.BTC.binance || binanceBtcPrice, lastUpdate: perpState.BTC.binanceTs || binanceLastUpdateMs },
-        okx: { price: perpState.BTC.okx || okxBtcPrice, lastUpdate: perpState.BTC.okxTs || okxLastUpdateMs },
-        hyperliquid: { price: perpState.BTC.hyper || hyperliquidBtcPrice, lastUpdate: perpState.BTC.hyperTs || hyperliquidLastUpdateMs },
+        BTC: { 
+           binance: perpState.BTC.binance, 
+           okx: perpState.BTC.okx, 
+           hyperliquid: perpState.BTC.hyper,
+           lastUpdate: Math.max(perpState.BTC.binanceTs, perpState.BTC.okxTs, perpState.BTC.hyperTs)
+        },
+        ETH: { 
+           binance: perpState.ETH.binance, 
+           okx: perpState.ETH.okx, 
+           hyperliquid: perpState.ETH.hyper,
+           lastUpdate: Math.max(perpState.ETH.binanceTs, perpState.ETH.okxTs, perpState.ETH.hyperTs)
+        },
+        SOL: { 
+           binance: perpState.SOL.binance, 
+           okx: perpState.SOL.okx, 
+           hyperliquid: perpState.SOL.hyper,
+           lastUpdate: Math.max(perpState.SOL.binanceTs, perpState.SOL.okxTs, perpState.SOL.hyperTs)
+        },
       },
+      chainlinkSources: {
+        BTC: getChainlinkHealthStats('BTC'),
+        ETH: getChainlinkHealthStats('ETH'),
+        SOL: getChainlinkHealthStats('SOL'),
+      }
     };
     try {
       const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
@@ -4381,7 +4401,6 @@ async function getActiveMarketTokensForWs() {
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
-/** Slug du créneau 15m ouvert : `btc-updown-15m-{eventStartSec}` (Gamma), start = floor(epoch/900)*900. */
 /** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
 function getCurrent15mEventSlug(asset = 'BTC') {
   const nowSec = Math.floor(Date.now() / 1000);
@@ -5107,8 +5126,10 @@ async function tryPlaceOrderForSignal(signal) {
   }
 
   // --- Sérités 3.0 WS : Drift, Circuit Breaker et Corrélation ---
+  const clData = await getChainlinkPrice(signal.asset || 'BTC');
+  const chainlinkSpotPrice = clData.price;
   const currentPrice = calculateConsensusPrice(signal.asset || 'BTC');
-  const safety = isTradeAllowedBySafety(signal.strike, chainlinkSpotPrice || currentPrice);
+  const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, chainlinkSpotPrice || currentPrice);
   if (!safety.ok) {
      recordSkipReason('safety_trigger', 'ws', { conditionId: key, reason: safety.reason });
      logSignalInRangeButNoOrder('ws', 'safety_trigger', signalWithPrice, { reason: safety.reason });
@@ -5629,7 +5650,8 @@ async function run() {
           }
 
           // Safety Checks (Multi-Asset)
-          const safety = isTradeAllowedBySafety(s.strike, calculateConsensusPrice(asset));
+          const clDataMain = await getChainlinkPrice(asset);
+          const safety = isTradeAllowedBySafety(asset, s.strike, clDataMain.price || calculateConsensusPrice(asset));
           if (!safety.ok) {
              console.log(`[${asset}] 🛡️ Skip ${s.takeSide}: ${safety.reason}`);
              continue;
@@ -6010,12 +6032,12 @@ function calculateKellyStake(netGap, tokenPrice, bankroll) {
 /**
  * Vérifie si le trade est autorisé par les garde-fous 3.0.
  */
-function isTradeAllowedBySafety(strike, currentBtc) {
+function isTradeAllowedBySafety(asset, strike, currentPrice) {
   // 1. Dérive du Strike
-  if (strike && currentBtc > 0) {
-    const drift = Math.abs(currentBtc - strike) / strike;
+  if (strike && currentPrice > 0) {
+    const drift = Math.abs(currentPrice - strike) / strike;
     if (drift > STRIKE_DRIFT_THRESHOLD) {
-      logJson('warn', 'Trade rejeté (Drift Strike excessif)', { strike, currentBtc, drift });
+      logJson('warn', `[${asset}] Trade rejeté (Drift Strike excessif)`, { strike, currentPrice, drift });
       return { ok: false, reason: `Strike Drift (${(drift * 100).toFixed(1)}% > ${STRIKE_DRIFT_THRESHOLD * 100}%)` };
     }
   }
