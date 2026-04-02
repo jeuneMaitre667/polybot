@@ -49,7 +49,7 @@ export async function fetchSignals(asset, context = {}) {
         const event = res.data;
         if (!event || !event.markets) return [];
 
-        const signals = event.markets.map(m => {
+        const signalsRaw = event.markets.map(m => {
             const outcomePrices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
             const yesPrice = parseFloat(outcomePrices[0]);
             const noPrice = parseFloat(outcomePrices[1]);
@@ -86,14 +86,20 @@ export async function fetchSignals(asset, context = {}) {
         });
 
         const profile = { totalMs: Date.now() - startFetch };
-        const result = signals.filter(s => s.tokenIdToBuy != null);
-        result._fetchSignalsProfile = profile;
+        const signals = signalsRaw.filter(s => s.tokenIdToBuy != null);
+        
+        const result = {
+            signals,
+            slug,
+            hasEvent: true,
+            _fetchSignalsProfile: profile
+        };
         
         signalCache.set(asset, { data: result, ts: now });
         return result;
     } catch (err) {
         console.error(`[${asset}] Erreur fetchSignals:`, err.message);
-        return [];
+        return { signals: [], slug: null, hasEvent: false };
     }
 }
 

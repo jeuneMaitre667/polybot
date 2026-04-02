@@ -33,77 +33,80 @@ export function AssetSentinelCard({ asset, data }) {
   const theme = themes[asset] || themes.BTC;
 
   return (
-    <div className={cn("card relative overflow-hidden transition-all duration-300 hover:scale-[1.02]", theme.cardClass)}>
+    <div className={cn("card relative overflow-hidden transition-all duration-500 hover:scale-[1.03] hover:shadow-2xl hover:shadow-white/5", theme.cardClass)}>
       <div className="card-glow" style={{ background: `radial-gradient(circle at center, ${theme.color} 0%, transparent 70%)` }} />
       
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg" style={{ backgroundColor: theme.muted, color: theme.color, border: `1px solid ${theme.color}33` }}>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-lg" style={{ backgroundColor: theme.muted, color: theme.color, border: `1px solid ${theme.color}44` }}>
             {asset[0]}
           </div>
           <div>
-            <h3 className="font-bold text-lg tracking-tight">{asset}</h3>
-            <div className="flex items-center gap-1.5 text-[10px] opacity-50 uppercase font-mono tracking-wider">
+            <h3 className="font-black text-xl tracking-tighter uppercase">{asset}</h3>
+            <div className="flex items-center gap-1.5 text-[10px] opacity-60 uppercase font-mono tracking-widest">
               <Activity size={10} className="text-blue-400" />
-              Real-time Sentinel
+              Sentinel Active
             </div>
           </div>
         </div>
-        <div className={cn("flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold border", 
-          isStrikeLocked ? "bg-green-500/10 border-green-500/20 text-green-400" : "bg-amber-500/10 border-amber-500/20 text-amber-400")}>
+        <div className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black border transition-all duration-500", 
+          isStrikeLocked ? "bg-green-500/20 border-green-500/40 text-green-400 shadow-[0_0_12px_rgba(74,222,128,0.2)]" : "bg-amber-500/10 border-amber-500/20 text-amber-400")}>
           {isStrikeLocked ? <Lock size={10} /> : <Unlock size={10} className="animate-pulse" />}
-          {isStrikeLocked ? 'STRIKE LOCKED' : 'SYNCING'}
+          {isStrikeLocked ? 'LOCKED' : 'SYNCING'}
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-6">
         {/* PRICE SECTION */}
-        <div className="stat-card bg-white/5 border-white/5">
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-[10px] opacity-40 uppercase font-mono">Consensus Price</span>
-            <TrendingUp size={12} className={Math.abs(drift) > 0.05 ? 'text-amber-400 animate-pulse' : 'opacity-20'} />
+        <div className="stat-card bg-white/[0.03] border-white/[0.05] p-5 rounded-2xl">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-[10px] opacity-50 uppercase font-mono tracking-widest">Consensus Price</span>
+            <TrendingUp size={14} className={cn("transition-all", Math.abs(drift) > 0.05 ? 'text-amber-400 animate-pulse' : 'opacity-20')} />
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold font-mono tracking-tighter">${consensusPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            <span className={cn("text-xs font-bold", drift >= 0 ? "text-green-400" : "text-red-400")}>
+          <div className="flex items-baseline gap-3">
+            <span className="text-3xl font-black font-mono tracking-tighter text-white">
+              ${consensusPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+            <span className={cn("text-sm font-black px-2 py-0.5 rounded", drift >= 0 ? "text-green-400 bg-green-400/10" : "text-red-400 bg-red-400/10")}>
               {drift >= 0 ? '+' : ''}{drift.toFixed(3)}%
             </span>
           </div>
-          <p className="text-[9px] opacity-30 mt-1 uppercase">vs Chainlink Spot (${clPrice.toLocaleString()})</p>
+          <p className="text-[10px] font-mono opacity-30 mt-2 uppercase tracking-tight">Oracle Spot: ${clPrice.toLocaleString()}</p>
         </div>
 
         {/* RISK & VOLATILITY */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="stat-card bg-white/5 border-white/5 flex flex-col justify-between">
-            <span className="text-[10px] opacity-40 uppercase font-mono">Realized Vol</span>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={cn("text-lg font-bold font-mono", volColor)}>{(vol * 100).toFixed(1)}%</span>
-              <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px_currentColor]", volBg)} />
+        <div className="grid grid-cols-2 gap-4">
+          <div className="stat-card bg-white/[0.03] border-white/[0.05] p-4 rounded-xl flex flex-col justify-between">
+            <span className="text-[10px] opacity-50 uppercase font-mono tracking-widest">Realized Vol</span>
+            <div className="flex items-center gap-2 mt-2">
+              <span className={cn("text-xl font-black font-mono", volColor)}>{(vol * 100).toFixed(1)}%</span>
+              <div className={cn("w-2 h-2 rounded-full shadow-[0_0_10px_currentColor]", volBg)} />
             </div>
           </div>
-          <div className="stat-card bg-white/5 border-white/5 flex flex-col justify-between">
-            <span className="text-[10px] opacity-40 uppercase font-mono">Slot Activity</span>
-            <div className="text-sm font-bold font-mono text-blue-300 mt-1 truncate" title={currentSlot}>
-              {currentSlot.split('-').pop() || '—'}
+          <div className="stat-card bg-white/[0.03] border-white/[0.05] p-4 rounded-xl flex flex-col justify-between">
+            <span className="text-[10px] opacity-50 uppercase font-mono tracking-widest">Slot Activity</span>
+            <div className="text-base font-black font-mono text-blue-300 mt-2 truncate max-w-full" title={currentSlot}>
+              {currentSlot.split('-').pop() || 'ACTIVE SCAN'}
             </div>
           </div>
         </div>
 
         {/* EXCHANGE STATUS PILLS */}
-        <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
+        <div className="flex flex-wrap gap-2 pt-4 border-t border-white/5">
           {['binance', 'okx', 'hyper'].map(exchange => (
-            <div key={exchange} className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 border border-white/5 text-[9px] font-mono uppercase">
-              <div className={cn("w-1 h-1 rounded-full", perpData[exchange] > 0 ? "bg-green-400" : "bg-red-400")} />
-              <span className="opacity-60">{exchange}</span>
+            <div key={exchange} className={cn("flex items-center gap-2 px-2.5 py-1 rounded-lg border text-[10px] font-mono uppercase transition-all", 
+              perpData[exchange] > 0 ? "bg-green-500/5 border-green-500/10 text-green-400/70" : "bg-red-500/5 border-red-500/10 text-red-400/70")}>
+              <div className={cn("w-1.5 h-1.5 rounded-full", perpData[exchange] > 0 ? "bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.4)]" : "bg-red-400")} />
+              <span>{exchange}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-[9px] opacity-30 uppercase tracking-widest font-mono">
-        <span>Sentinel v5.5.0</span>
-        <div className="flex items-center gap-1">
-          <ShieldCheck size={10} /> SECURED
+      <div className="mt-6 flex items-center justify-between text-[10px] opacity-30 uppercase tracking-widest font-mono">
+        <span>Sentinel v6.2.3</span>
+        <div className="flex items-center gap-1.5">
+          <ShieldCheck size={12} className="text-green-500/50" /> SECURED
         </div>
       </div>
     </div>

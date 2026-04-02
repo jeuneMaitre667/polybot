@@ -1,9 +1,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
 
 /* ====== Arbitrage 2.0 Premium Styles ====== */
 .glass-panel {
@@ -310,14 +310,16 @@ body::after {
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 20px 22px;
+  border-radius: 20px;
+  padding: 24px;
   position: relative;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  animation: fadeUp 0.5s ease both;
+  gap: 20px;
+  animation: fadeUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
 }
 
 .card::before {
@@ -495,7 +497,7 @@ body::after {
 .layout.app-root {
   position: relative;
   z-index: 1;
-  max-width: 1440px;
+  max-width: 1720px;
   margin: 0 auto;
   padding: 0 24px 60px;
 }

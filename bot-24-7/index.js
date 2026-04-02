@@ -5704,7 +5704,7 @@ async function run() {
     clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
     
     for (const asset of SUPPORTED_ASSETS) {
-      const signals = await profiler.measure(`fetchSignals_${asset}`, () => 
+      const res = await profiler.measure(`fetchSignals_${asset}`, () => 
         fetchSignals(asset, { 
           MARKET_MODE, 
           getCurrent15mEventSlug, 
@@ -5713,17 +5713,20 @@ async function run() {
         })
       );
       
+      const signals = res.signals || [];
+      const slug = res.slug;
+      const hasEvent = res.hasEvent;
+
       // Priorité 1 : Capture Strike T-Zéro pour Health.json (Isolé)
-      if (Array.isArray(signals) && signals.length > 0) {
+      if (hasEvent && slug) {
         const state = getAssetState(asset);
         // Si le slot a changé ou si null, on capture
-        const currentSlug = signals[0].slug || signals[0].eventSlug;
-        if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== currentSlug) {
-           state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, currentSlug);
+        if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
+           state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, slug);
         }
       }
-      const fetchProfile = signals?._fetchSignalsProfile ?? null;
-      const signalsCount = Array.isArray(signals) ? signals.length : 0;
+      const fetchProfile = res._fetchSignalsProfile ?? null;
+      const signalsCount = signals.length;
       
       if (signalsCount === 0) {
         appendSignalDecisionLatencyHistory({
