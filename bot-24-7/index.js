@@ -4934,6 +4934,26 @@ async function tryPlaceOrderForSignal(signal) {
     logSignalInRangeButNoOrder('ws', r, signal, {});
     return;
   }
+  // --- Correlation Guard BTC/ETH (v5.4.1) ---
+  const MAX_CONCURRENT_CORRELATED_POSITIONS = 1;
+  const correlatedGroup = ["BTC", "ETH"];
+  if (correlatedGroup.includes(signal.asset)) {
+    const activePositions = readActivePositions();
+    const now = Date.now();
+    // On considère une position "active" si l'échéance du marché est dans le futur
+    const activeCorrelated = activePositions.filter(p => 
+      correlatedGroup.includes(p.asset) && 
+      (p.marketEndMs ? p.marketEndMs > now : true)
+    ).length;
+
+    if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
+        console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — skip.`);
+        recordSkipReason('correlation_limit', 'ws', { asset: signal.asset, activeCorrelated });
+        logSignalInRangeButNoOrder('ws', 'correlation_limit', signal, { activeCorrelated });
+        return;
+    }
+  }
+
   const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
   if (cooldownRemainingMs > 0) {
     if (signal.edge && signal.edge > 0.35) { // 35% (v3.3.2)
@@ -5251,6 +5271,8 @@ async function tryPlaceOrderForSignal(signal) {
     const marketEndMs = parseMarketEndDateToMs(signalWithPrice?.endDate);
     const orderData = {
       at: time,
+      asset: signalWithPrice.asset || 'BTC',
+      slug: signalWithPrice.slug || null,
       takeSide: signalWithPrice.takeSide,
       amountUsd,
       conditionId: key,

@@ -74,6 +74,7 @@ export async function fetchSignals(asset, context = {}) {
 
             return {
                 asset,
+                slug,
                 conditionId: m.conditionId,
                 tokenIdToBuy: tokenIdToBuy,
                 strike: parseFloat(m.line),
