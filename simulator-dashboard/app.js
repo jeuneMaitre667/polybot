@@ -259,6 +259,122 @@ function runAll() {
   window.__SIM_RESULT__ = summary;
 }
 
+// --- Live Monitoring Logic (Blindage 2026) ---
+let liveInterval = null;
+
+async function fetchLiveStatus() {
+  const ip = byId('botIp').value.trim();
+  if (!ip) return;
+
+  try {
+    const res = await fetch(`http://${ip}:3001/api/bot-status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    updateLiveUI(data);
+  } catch (err) {
+    console.error('Erreur Live Polling:', err);
+    byId('rateLimitText').textContent = 'Erreur de connexion...';
+    const statusBox = byId('killSwitchStatus');
+    statusBox.textContent = 'OFFLINE';
+    statusBox.className = 'status-box error';
+  }
+}
+
+function updateLiveUI(data) {
+  const health = data.health || {};
+  const rl = health.lastRateLimitInfo || { limit: 100, remaining: 100 };
+  
+  // 1. Quota Cloudflare
+  const pctUsed = rl.limit > 0 ? (rl.remaining / rl.limit) * 100 : 100;
+  const gauge = byId('rateLimitGauge');
+  gauge.style.width = `${pctUsed}%`;
+  
+  if (pctUsed < 20) {
+    gauge.style.background = 'linear-gradient(90deg, #dc2626, #991b1b)';
+    byId('liveAlert').classList.remove('hidden');
+  } else {
+    gauge.style.background = 'linear-gradient(90deg, #2f72ff, #26b46d)';
+    byId('liveAlert').classList.add('hidden');
+  }
+  
+  byId('rateLimitText').textContent = `Quota: ${rl.remaining} / ${rl.limit} (Refresh: ${Math.round((rl.limit-rl.remaining)/rl.limit*100)}%)`;
+
+  // 2. Kill-Switch / Adverse Selection
+  const ks = byId('killSwitchStatus');
+  if (health.killSwitchActive) {
+    ks.textContent = 'KILL-SWITCH ACTIF';
+    ks.className = 'status-box error';
+  } else {
+    ks.textContent = 'OPÉRATIONNEL';
+    ks.className = 'status-box ok';
+  }
+
+  // 3. Maintenance
+  const maintStatus = byId('maintStatus');
+  const maintAlert = byId('maintAlert');
+  const isCooldown = data.last425ErrorAt && (Date.now() - data.last425ErrorAt < 120000);
+  
+  if (data.isMaintenance || isCooldown) {
+    maintStatus.textContent = data.isMaintenance ? 'MAINTENANCE' : 'COOLDOWN 425';
+    maintStatus.className = 'status-box warn';
+    maintAlert.classList.remove('hidden');
+    maintAlert.textContent = data.isMaintenance ? '🚧 MAINTENANCE : Polymarket redémarre (Fenêtre hebdo).' : '🚧 COOL-DOWN : Erreur 425 détectée, bot en pause de sécurité.';
+  } else {
+    maintStatus.textContent = 'NORMAL';
+    maintStatus.className = 'status-box ok';
+    maintAlert.classList.add('hidden');
+  }
+
+  // 4. Sources Perp
+  if (data.perpSources) {
+    updateSourceBox('srcBinance', data.perpSources.binance);
+    updateSourceBox('srcOkx', data.perpSources.okx);
+    updateSourceBox('srcHyper', data.perpSources.hyperliquid);
+  }
+
+  // 5. Logs d'événements
+  const logList = byId('liveTradeLog');
+  const logs = (data.logs || '').split('\n').filter(l => l.includes('Blindage') || l.includes('425') || l.includes('Maintenance') || l.includes('Kill-Switch')).slice(-5).reverse();
+  
+  if (logs.length > 0) {
+    logList.innerHTML = logs.map(l => `<li>${l}</li>`).join('');
+  } else if (health.at) {
+    logList.innerHTML = `<li>Dernière mise à jour : ${new Date(health.at).toLocaleTimeString()} - En attente d'événements...</li>`;
+  }
+}
+
+function updateSourceBox(id, src) {
+  const box = byId(id);
+  if (!box || !src) return;
+  const priceSpan = box.querySelector('.src-price');
+  priceSpan.textContent = src.price ? `$${src.price.toFixed(2)}` : '--';
+  
+  const now = Date.now();
+  const diff = now - src.lastUpdate;
+  
+  if (!src.lastUpdate || diff > 30000) {
+    box.className = 'source-box dead';
+  } else if (diff > 5000) {
+    box.className = 'source-box stale';
+  } else {
+    box.className = 'source-box active';
+  }
+}
+
+byId('liveBtn').addEventListener('click', () => {
+  if (liveInterval) {
+    clearInterval(liveInterval);
+    liveInterval = null;
+    byId('liveBtn').textContent = '📡 Connecter Live';
+    byId('liveBtn').classList.remove('active');
+  } else {
+    byId('liveBtn').textContent = '🛑 Arrêter Sync';
+    byId('liveBtn').classList.add('active');
+    fetchLiveStatus();
+    liveInterval = setInterval(fetchLiveStatus, 2000);
+  }
+});
+
 byId('runBtn').addEventListener('click', runAll);
 byId('exportBtn').addEventListener('click', () => {
   const data = window.__SIM_RESULT__ || {};

@@ -13,18 +13,15 @@ import { ethers } from 'ethers';
 // --- Configuration ---
 const DATA_FEEDS = {
   BTC: '0xc907E116054Ad103354f2D350FD2514433D57F6f',
-  ETH: '0xF9680D99D99444723d9b912632E2943722415636',
-  SOL: '0x10C8264C0935b3B9870013e057f330Ff3e9C56dC',
+  ETH: '0xF9680D99D6C9589e2a93a78A04A279e509205945',
+  SOL: '0x10C8264C0935B3B9870013E057F330FF3E9C56DC',
 };
 const CHAINLINK_DECIMALS = 8;
 
-const RPC_ENDPOINTS = [
-  'https://polygon-rpc.com',
-  'https://1rpc.io/matic',
-  'https://rpc.ankr.com/polygon',
-  'https://polygon.llamarpc.com',
-  'https://polygon.api.onfinality.io/public',
-];
+const ALCHEMY_RPC = process.env.POLYGON_RPC_URL;
+const FALLBACK_RPCS = (process.env.POLYGON_RPC_FALLBACK || 'https://1rpc.io/matic,https://rpc.ankr.com/polygon,https://polygon.llamarpc.com').split(',').map(u => u.trim()).filter(Boolean);
+
+const RPC_ENDPOINTS = ALCHEMY_RPC ? [ALCHEMY_RPC, ...FALLBACK_RPCS] : FALLBACK_RPCS;
 
 const AGGREGATOR_V3_ABI = [
   'function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
@@ -86,6 +83,11 @@ export async function getChainlinkPrice(asset = 'BTC') {
     return { ...cache, stale: false };
   }
 
+  // v5.6.4: On repart TOUJOURS de l'index 0 (Alchemy) pour ne pas rester bloqué sur un fallback
+  currentProviderIndex = 0; 
+  providerInstance = null;
+  contractInstances.clear();
+
   for (let attempt = 0; attempt < RPC_ENDPOINTS.length; attempt++) {
     try {
       const contract = getContract(cleanAsset);
@@ -106,8 +108,8 @@ export async function getChainlinkPrice(asset = 'BTC') {
       assetCaches[cleanAsset] = result;
       return { ...result, stale: result.ageSec > 120 };
     } catch (err) {
-      console.warn(`[Chainlink] [${cleanAsset}] Erreur RPC Polygon: ${err.message}`);
-      rotateProvider();
+      console.warn(`[Chainlink] [${cleanAsset}] Erreur RPC Polygon [${attempt}]: ${err.message}`);
+      rotateProvider(); // Passe au suivant
     }
   }
 
@@ -129,5 +131,7 @@ export async function captureStrikeAtSlotOpen(asset, slotSlug, maxRetries = 3) {
 
 export function getChainlinkHealthStats(asset = 'BTC') {
   const cache = assetCaches[asset.toUpperCase()];
-  return { lastPrice: cache?.price, source: cache?.source, rpc: 'Alchemy/Fallback Polygon' };
+  const currentRpc = RPC_ENDPOINTS[currentProviderIndex % RPC_ENDPOINTS.length] || 'Unknown';
+  const rpcLabel = currentRpc.includes('alchemy') ? 'Alchemy (Private)' : 'Public Fallback';
+  return { lastPrice: cache?.price, source: cache?.source, rpc: rpcLabel };
 }

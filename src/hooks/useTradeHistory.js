@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
-const DATA_API_TRADES = 'https://data-api.polymarket.com/trades';
+const DATA_API_TRADES = '/apiData/trades';
 
 /**
  * Récupère l'historique des trades Polymarket pour une adresse wallet (Data API).
@@ -24,12 +24,19 @@ export function useTradeHistory(address, options = {}) {
     setLoading(true);
     setError(null);
     try {
+      const normalizedAddress = address.toLowerCase();
+      // data-api.polymarket.com usually expects 'user' or 'userAddress' parameter
       const { data } = await axios.get(DATA_API_TRADES, {
-        params: { user: address, limit },
-        timeout: 15000,
+        params: { user: normalizedAddress, limit },
+        timeout: 10000,
       });
-      setTrades(Array.isArray(data) ? data : []);
+      setTrades(Array.isArray(data) ? data : (data?.data || []));
     } catch (err) {
+      const resp = err.response;
+      if (resp?.status === 400) {
+        // Fallback or more info
+        console.warn(`[TradeHistory] 400 for ${address}. Resp:`, resp.data);
+      }
       setError(err?.message || 'Erreur lors du chargement des trades');
       setTrades([]);
     } finally {

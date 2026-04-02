@@ -262,7 +262,12 @@ function getHealth() {
     last425ErrorAt: o.last425ErrorAt ?? null,
     isMaintenance: !!o.isMaintenance,
     perpSources: o.perpSources ?? null,
+    chainlinkSources: o.chainlinkSources ?? null, // v5.6.3 (Alchemy Visibility)
+    uptimeStart: o.uptimeStart ?? null, // v5.6.3 (Bot Uptime)
+    kellyFraction: o.kellyFraction ?? null, // v5.6.3 (Risk)
+    availableCapital: o.availableCapital ?? null, // v5.6.3 (Bankroll)
     at: o.at ?? null,
+    assetStates: o.assetStates ?? null,
   };
 }
 

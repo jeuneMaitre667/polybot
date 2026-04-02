@@ -704,15 +704,21 @@ function outcomeLabelToSide(outcome) {
 
 async function fetchDataApiTradesAllPages(extraParams) {
   const merged = [];
-  for (let offset = 0; offset < 60000; offset += 10000) {
-    const { data } = await axios.get(DATA_API_TRADES_URL, {
-      params: { ...extraParams, limit: 10000, offset, takerOnly: false },
-      timeout: 25000,
-    });
-    const page = unwrapTradesPayload(data);
-    if (page.length === 0) break;
-    merged.push(...page);
-    if (page.length < 10000) break;
+  const MAX_OFFSET = 2000;
+  for (let offset = 0; offset <= MAX_OFFSET; offset += 1000) {
+    try {
+      const { data } = await axios.get(DATA_API_TRADES_URL, {
+        params: { ...extraParams, limit: 1000, offset, takerOnly: false },
+        timeout: 15000,
+      });
+      const page = unwrapTradesPayload(data);
+      if (!page || page.length === 0) break;
+      merged.push(...page);
+      if (page.length < 1000) break;
+    } catch (e) {
+      console.warn(`[TradesFetch] Offset ${offset} failed:`, e.message);
+      break;
+    }
   }
   return merged;
 }
@@ -722,23 +728,30 @@ async function fetchDataApiTradesAllPages(extraParams) {
  */
 async function fetchDataApiTradesByAsset(tokenId, afterTs, beforeTs) {
   const merged = [];
-  for (let offset = 0; offset < 5000; offset += 500) {
-    const { data } = await axios.get(DATA_API_TRADES_URL, {
-      params: {
-        asset_id: String(tokenId),
-        limit: 500,
-        offset,
-        takerOnly: false,
-      },
-      timeout: 10000,
-    });
-    const raw = unwrapTradesPayload(data);
-    const inWindow = raw.filter((tr) => {
-      const t = tradeTimestampSec(tr);
-      return t != null && t >= afterTs && t <= beforeTs;
-    });
-    merged.push(...inWindow);
-    if (raw.length < 500) break;
+  const MAX_OFFSET = 1500;
+  for (let offset = 0; offset <= MAX_OFFSET; offset += 500) {
+    try {
+      const { data } = await axios.get(DATA_API_TRADES_URL, {
+        params: {
+          asset_id: String(tokenId),
+          limit: 500,
+          offset,
+          takerOnly: false,
+        },
+        timeout: 10000,
+      });
+      const raw = unwrapTradesPayload(data);
+      if (!raw || raw.length === 0) break;
+      const inWindow = raw.filter((tr) => {
+        const t = tradeTimestampSec(tr);
+        return t != null && t >= afterTs && t <= beforeTs;
+      });
+      merged.push(...inWindow);
+      if (raw.length < 500) break;
+    } catch (e) {
+      console.warn(`[TradesAssetFetch] Offset ${offset} failed:`, e.message);
+      break;
+    }
   }
   return merged;
 }

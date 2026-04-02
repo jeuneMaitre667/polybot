@@ -1,0 +1,118 @@
+import React from 'react';
+import { DollarSign, ShieldAlert, Activity, LayoutGrid, Server, Globe } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
+  const totalBalance = (paperBalance || 0) + (realBalance || 0);
+  const dailyLossLimit = -500;
+  
+  // Real daily stats from health or status
+  const dailyPnL = data?.dailyStats?.totalPnL || 0;
+  const pnlPercent = dailyLossLimit !== 0 ? (dailyPnL / Math.abs(dailyLossLimit)) * 100 : 0;
+  
+  // Progress bar color based on loss
+  const progressColor = dailyPnL < -400 ? 'bg-red-500' : dailyPnL < -200 ? 'bg-amber-500' : 'bg-green-500';
+  const progressShadow = dailyPnL < -400 ? '0 0 12px rgba(239, 68, 68, 0.4)' : 'none';
+
+  return (
+    <div className="glass-panel relative border border-white/5 bg-gradient-to-br from-indigo-500/5 to-emerald-500/5 p-6 rounded-3xl overflow-hidden shadow-2xl">
+      <div className="absolute top-0 right-0 p-4 opacity-5">
+        <ShieldAlert size={120} />
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8">
+        {/* TOTAL BANKROLL */}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-1">
+            <LayoutGrid size={14} /> Global Bankroll
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-4xl font-extrabold tracking-tight font-mono text-white">
+              ${totalBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+            <span className="text-xs opacity-40 font-mono">USD</span>
+          </div>
+          <div className="flex items-center gap-4 mt-2">
+            <div className="flex items-center gap-1.5 text-[9px] opacity-60">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Paper: ${paperBalance?.toFixed(0) || '—'}
+            </div>
+            <div className="flex items-center gap-1.5 text-[9px] opacity-60">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" /> Real: ${realBalance?.toFixed(0) || '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* DAILY PERFORMANCE & RISK BRAKE */}
+        <div className="lg:col-span-2 flex flex-col justify-center">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-amber-400 font-bold">
+              <ShieldAlert size={14} /> Daily Risk Guard
+            </div>
+            <div className="flex items-center gap-2 text-[10px] font-mono opacity-60 uppercase tracking-tighter">
+              Limit: <span className="text-white font-bold">${dailyLossLimit}</span>
+            </div>
+          </div>
+          
+          <div className="relative h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
+             <div 
+               className={cn("h-full transition-all duration-500", progressColor)}
+               style={{ width: `${Math.min(100, Math.max(0, (dailyPnL / dailyLossLimit) * 100))}%`, boxShadow: progressShadow }}
+             />
+          </div>
+          
+          <div className="flex justify-between mt-2 font-mono text-[9px] uppercase tracking-widest">
+            <span className={cn(dailyPnL < 0 ? "text-red-400" : "text-green-400")}>
+              Current PnL: {dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}
+            </span>
+            <span className="opacity-30">Threshold -500</span>
+          </div>
+        </div>
+
+        {/* SYSTEM CONNECTIVITY */}
+        <div className="flex flex-col gap-3 justify-center border-l border-white/5 pl-8">
+           <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-green-400 font-bold mb-1">
+             <Server size={14} /> System Health
+           </div>
+           
+           <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] opacity-40 uppercase">Latency</span>
+                <span className="text-xs font-bold font-mono text-white">
+                  {data?.health?.tradeLatencyStats?.ws?.lastLatencyMs 
+                    ? `${Math.round(data.health.tradeLatencyStats.ws.lastLatencyMs)}ms` 
+                    : '—'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] opacity-40 uppercase">Node</span>
+                <span className={cn(
+                  "text-[10px] font-bold font-mono",
+                  data?.health?.chainlinkSources?.BTC?.rpc?.includes('Alchemy') ? "text-purple-400" : "text-blue-400"
+                )}>
+                  {data?.health?.chainlinkSources?.BTC?.rpc || 'Polygon RPC'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] opacity-40 uppercase">Bot</span>
+                <span className={cn(
+                  "text-[10px] font-bold font-mono flex items-center gap-1",
+                  data?.health?.wsConnected || data?.health?.wsLastBidAskAt ? "text-green-400" : "text-red-400"
+                )}>
+                  <Activity size={10} className={cn(data?.health?.wsConnected && "animate-pulse")} /> 
+                  {data?.health?.wsConnected || data?.health?.wsLastBidAskAt ? 'ONLINE' : 'OFFLINE'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] opacity-40 uppercase">Uptime</span>
+                <span className="text-[10px] font-bold font-mono text-white truncate">
+                  {data?.health?.uptimeStart 
+                    ? `${Math.floor(data.health.uptimeStart / 3600)}h ${Math.floor((data.health.uptimeStart % 3600) / 60)}m` 
+                    : 'Active'}
+                </span>
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+}

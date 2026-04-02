@@ -133,11 +133,12 @@ const OKX_WS_URL = 'wss://ws.okx.com:8443/ws/v5/public';
 const HYPERLIQUID_WS_URL = 'wss://api.hyperliquid.xyz/ws';
 
 // État global des prix Perp par Asset (v5.4.0)
-const perpState = {
-  BTC: { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 },
-  ETH: { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 },
-  SOL: { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 },
-};
+// v5.4.3 : perpState converti en Map pour multi-actifs
+const perpState = new Map([
+  ['BTC', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
+  ['ETH', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
+  ['SOL', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
+]);
 
 let binanceBtcPrice = 0; // Legacy global (v5.4.1: will be prioritized by current asset in perpState)
 let binanceLastUpdateMs = 0;
@@ -151,13 +152,13 @@ let hyperliquidLastUpdateMs = 0;
  * Combine Binance, OKX et Hyperliquid pour l'actif demandé.
  */
 function calculateConsensusPrice(asset = 'BTC') {
-  const p = perpState[asset];
+  const p = perpState.get(asset);
   if (!p) return 0;
   const sources = [];
   if (p.binance > 0) sources.push(p.binance);
   if (p.okx > 0) sources.push(p.okx);
   if (p.hyper > 0) sources.push(p.hyper);
-  if (sources.length === 0) return asset === 'BTC' ? binanceBtcPrice : 0;
+  if (sources.length === 0) return (asset === 'BTC' && binanceBtcPrice > 0) ? binanceBtcPrice : 0;
   return sources.reduce((a, b) => a + b, 0) / sources.length;
 }
 
@@ -168,8 +169,20 @@ let hyperliquidWs = null;
 /** Cache global des prix Polymarket (via WS) pour le SL Miroir et l'enrichissement */
 const latestPrices = new Map(); // assetId -> { bestBid, bestAsk }
 const ofiState = new Map(); // assetId -> { prevBidPrice, prevBidSize, ..., ofi }
-const btcPriceHistory = []; // Buffer pour volatilité dynamique (max 60 échantillons)
-let lastVolatilityCalculation = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.20;
+// v5.4.2 : État spécifique par actif (BTC, ETH, SOL)
+const assetSpecificState = new Map();
+function getAssetState(asset) {
+  if (!assetSpecificState.has(asset)) {
+    const defaultVolMap = { BTC: 0.40, ETH: 0.50, SOL: 0.80 };
+    const defaultVol = Number(process.env[`${asset}_ANNUALIZED_VOLATILITY`]) || defaultVolMap[asset] || 0.20;
+    assetSpecificState.set(asset, {
+      vol: defaultVol,
+      priceHistory: [],
+      currentSlotStrike: null
+    });
+  }
+  return assetSpecificState.get(asset);
+}
 
 /// État global des Strikes par Asset (v5.4.0)
 const assetStrikes = {
@@ -197,10 +210,28 @@ let chainlinkRoundId = null; // v5.2.0 : Pour le logging
 let chainlinkAgeMs = 0; // v5.2.0 : Pour le logging
 
 const ARBITRAGE_GAP_THRESHOLD = Number(process.env.ARBITRAGE_GAP_THRESHOLD) || 0.05;
-const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.20;
+const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.40;
 const POLYMARKET_FEE_RATE = 0.072; // Taux officiel pour Crypto (Crypto Fee Rate)
 const FEE_SAFETY_BUFFER = 1.05; // Marge de sécurité 5% (Blindage 2026)
-const DEFAULT_STAKE_USDC = 300; // Taille de mise par défaut pour le price impact
+const DEFAULT_STAKE_USDC = 300; 
+
+/** Vérifie si le côté du trade correspond au sens du carnet d'ordres (v5.8.2) */
+function isOfiSideMatch(side, ofiScore) {
+  const s = String(side || '').toLowerCase();
+  const isUp = (s === 'up' || s === 'yes');
+  const isDown = (s === 'down' || s === 'no');
+  return (isUp && ofiScore > 0) || (isDown && ofiScore < 0);
+}
+
+/** Calculateur de multiplicateur de seuil basé sur l'OFI (Momentum Control v5.7.1 / v5.8.2) */
+function getOfiThresholdMultiplier(asset, ofiScore, side) {
+  if (isOfiSideMatch(side, ofiScore)) {
+    const absOfi = Math.abs(ofiScore || 0);
+    if (absOfi > 50) return 0.50; // Réduction 50% (Ultra Agressif)
+    if (absOfi > 20) return 0.75; // Réduction 25% (Momentum Fort)
+  }
+  return 1.0;
+}
 
 console.log("=== 🛡️ Blindage 2026 v5.3.0 Engine Active ===");
 
@@ -215,7 +246,8 @@ const strikeHistoryCacheMap = new Map(); // Cache de Strike par Slug pour le mod
 // --- Paramètres Arbitrage Engine 3.0 (Capital Optimization) ---
 const KELLY_FRACTION = Number(process.env.KELLY_FRACTION) || 0.25; // Quarter-Kelly
 const KELLY_MAX_BANKROLL_PCT = Number(process.env.KELLY_MAX_BANKROLL_PCT) || 0.25;
-const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 1;
+const ABSOLUTE_MAX_STAKE_USD = Number(process.env.ABSOLUTE_MAX_STAKE_USD) || 200; // Cap absolu (v5.8.0)
+const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 10;
 const MAX_DAILY_LOSS_USDC = 500; // Libération v3.7.0 pour le Match 16:45
 const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; // 3%
 
@@ -381,67 +413,66 @@ function readLastOrder() {
   }
 }
 
-/** Met à jour health.json (lu par status-server pour /api/bot-status). Fusionne updates avec l'état existant. */
+/** État de santé local en mémoire pour éviter les corruptions de fichier par lecture/réécriture concurrente. */
+let currentHealthState = {
+  wsConnected: false,
+  wsLastConnectedAt: null,
+  wsLastBidAskAt: null,
+  lastOrderAt: null,
+  lastOrderSource: null,
+  at: null,
+};
+
+/** Met à jour health.json (lu par status-server). */
 function writeHealth(updates) {
   try {
-    let state = {
-      wsConnected: false,
-      wsLastChangeAt: null,
-      wsLastConnectedAt: null,
-      wsLastBidAskAt: null,
-      lastOrderAt: null,
-      lastOrderSource: null,
-      geoblockOk: null,
-      killSwitchActive: false,
-      polymarketDegraded: false,
-      degradedReason: null,
-      degradedUntil: null,
-      staleWsData: false,
-      staleWsDataAt: null,
-      executionDelayed: false,
-      executionDelayedAt: null,
-      at: null,
-      // v4.0.0 Visual Quant
-      parkinsonVol: (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : null,
-      realizedVol60m: lastVolatilityCalculation || null,
-      strikeLocked: (typeof currentSlotStrike !== 'undefined' ? currentSlotStrike?.isOfficial : false) || false,
-      currentSlot: (typeof currentSlotStrike !== 'undefined' ? currentSlotStrike?.slotSlug : null) || null,
-      lastRateLimitInfo, // v5.3.0 (Blindage 2026)
-      last425ErrorAt,
-      isMaintenance: isMaintenanceWindow(),
-      perpSources: {
-        BTC: { 
-           binance: perpState.BTC.binance, 
-           okx: perpState.BTC.okx, 
-           hyperliquid: perpState.BTC.hyper,
-           lastUpdate: Math.max(perpState.BTC.binanceTs, perpState.BTC.okxTs, perpState.BTC.hyperTs)
-        },
-        ETH: { 
-           binance: perpState.ETH.binance, 
-           okx: perpState.ETH.okx, 
-           hyperliquid: perpState.ETH.hyper,
-           lastUpdate: Math.max(perpState.ETH.binanceTs, perpState.ETH.okxTs, perpState.ETH.hyperTs)
-        },
-        SOL: { 
-           binance: perpState.SOL.binance, 
-           okx: perpState.SOL.okx, 
-           hyperliquid: perpState.SOL.hyper,
-           lastUpdate: Math.max(perpState.SOL.binanceTs, perpState.SOL.okxTs, perpState.SOL.hyperTs)
-        },
-      },
-      chainlinkSources: {
-        BTC: getChainlinkHealthStats('BTC'),
-        ETH: getChainlinkHealthStats('ETH'),
-        SOL: getChainlinkHealthStats('SOL'),
-      }
+    // 1. Fusionner avec l'état en mémoire
+    currentHealthState = { 
+      ...currentHealthState, 
+      ...updates, 
+      at: new Date().toISOString() 
     };
-    try {
-      const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
-      const prev = JSON.parse(raw);
-      if (prev && typeof prev === 'object') state = { ...prev, ...state };
-    } catch (_) {}
-    state = { ...state, ...updates, at: new Date().toISOString() };
-    fs.writeFileSync(HEALTH_FILE, JSON.stringify(state), 'utf8');
+
+    // 2. Enrichir avec les données globales actuelles (v5.6.1)
+    const fullState = {
+      ...currentHealthState,
+      parkinsonVol: (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : null,
+      perpSources: Object.fromEntries(
+        [...perpState.entries()].map(([k, v]) => [k, { ...v, lastUpdate: Math.max(v.binanceTs || 0, v.okxTs || 0, v.hyperTs || 0) }])
+      ),
+      chainlinkSources: Object.fromEntries(
+        SUPPORTED_ASSETS.map(asset => [asset, getChainlinkHealthStats(asset)])
+      ),
+      assetStates: Object.fromEntries(
+        [...assetSpecificState.entries()].map(([asset, state]) => [asset, {
+          realizedVol60m: state.vol,
+          currentSlot: state.currentSlotStrike?.slotSlug || null,
+          strike: state.currentSlotStrike?.strike || null,
+          ofiScore: (() => {
+            let total = 0; let count = 0;
+            for (const [tid, o] of ofiState.entries()) {
+              const sig = wsState.tokenToSignal.get(tid);
+              if (sig && sig.asset === asset) {
+                total += (sig.takeSide === 'Up' ? o.ofi : -o.ofi);
+                count++;
+              }
+            }
+            return count > 0 ? total / count : 0;
+          })(),
+          strikeLocked: state.currentSlotStrike?.isOfficial || false
+        }])
+      ),
+      lastRateLimitInfo: typeof lastRateLimitInfo !== 'undefined' ? lastRateLimitInfo : null,
+      isMaintenance: isMaintenanceWindow(),
+      kellyFraction: KELLY_FRACTION,
+      kellyMaxBankrollPct: KELLY_MAX_BANKROLL_PCT,
+      maxConcurrentPositions: MAX_CONCURRENT_BTC_EXPOSURE,
+      availableCapital: typeof availableCapital !== 'undefined' ? availableCapital : null,
+      uptimeStart: process.uptime(), // Secondes depuis démarrage
+    };
+
+    // 3. Écriture atomique
+    fs.writeFileSync(HEALTH_FILE, JSON.stringify(fullState, null, 2), 'utf8');
   } catch (e) {
     console.error('[health] writeHealth échoué:', e?.message ?? e);
   }
@@ -2098,11 +2129,12 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       Number.isFinite(totalLatencyMs) && totalLatencyMs > 0 && Number.isFinite(placeOrderMs) && placeOrderMs >= 0
         ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
         : null;
+    const assetLabel = orderData?.underlying || orderData?.asset || 'Unknown';
     const paperPre = orderData?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
       hasFilled
-        ? `${paperPre}✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`
-        : `${paperPre}⚠️ Trade accepté (remplissage immédiat nul)`,
+        ? `${paperPre}✅ [${assetLabel}] Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`
+        : `${paperPre}⚠️ [${assetLabel}] Trade accepté (remplissage immédiat nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
       `Montant demandé : ${amtStr} USDC`,
       `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
@@ -2586,20 +2618,24 @@ async function tryDynamicExitForOpenPosition(clobClient) {
   const bestBid = await getBestBid(tokenId);
   if (!(bestBid > 0 && bestBid < 1)) return;
 
-  // --- CONVERGENCE ENGINE v5.0.0 (Logic) ---
+  // --- CONVERGENCE ENGINE v5.0.0 / v5.9.0 (Logic) ---
   const nowMs = Date.now();
   const secondsLeft = endMs ? Math.max(0, (endMs - nowMs) / 1000) : 300;
   
-  // 1. Take Profit : Convergence vers le Fair d'entrée (ou profit net 2.5%)
+  // 1. Take Profit : Convergence brute ou Edge d'entrée (v5.9.0)
   const entryFair = Number(last.entryFair || last.probFairAtEntry);
   const netProfitPct = (bestBid - entryPriceP) / entryPriceP;
   
-  const triggerTP = (entryFair > 0 && bestBid >= entryFair * 0.98) || (netProfitPct >= 0.025);
+  // Le TP cible est maintenant égal à l'Edge identifié à l'entrée (min 2.5%, max 20%)
+  const targetProfitPct = Math.min(0.20, Math.max(0.025, Number(last.edge || 0.05)));
+  const triggerTP = (netProfitPct >= targetProfitPct) || (entryFair > 0 && bestBid >= entryFair * 0.98);
 
-  // 2. Stop Loss Miroir : Drastic move sur le côté opposé
+  // 2. Stop Loss Miroir + Hard Stop -5% (v5.9.0)
   let triggerMirrorSL = false;
+  const triggerHardSL = (netProfitPct <= -0.05); // Fin de la confusion : SL fixe à -5%
+
   const entryOppositePrice = Number(last.entryOppositePrice);
-  if (entryOppositePrice > 0) {
+  if (entryOppositePrice > 0 && !triggerHardSL) {
       // Trouver l'ID du token opposé (recherche dans les positions ou cache)
       const isUp = takeSide === 'Up';
       // On cherche dans les positions actives ou on déduit si possible
@@ -2617,10 +2653,12 @@ async function tryDynamicExitForOpenPosition(clobClient) {
   const triggerTimeForce = secondsLeft < 30; // Force exit
   const triggerTimeCut = secondsLeft < 60 && netProfitPct < 0; // Cut loss
 
-  const triggered = triggerTP || triggerMirrorSL || triggerTimeForce || triggerTimeCut;
+  const triggered = triggerTP || triggerMirrorSL || triggerHardSL || triggerTimeForce || triggerTimeCut;
   if (!triggered) return;
 
   const triggerReason = triggerTP ? 'CONVERGENCE_TP' : 
+                        triggerHardSL ? 'HARD_STOP_LOSS' :
+                        triggerMirrorSL ? 'MIRROR_STOP_LOSS' :
                        (triggerMirrorSL ? 'MIRROR_SL_DRIFT' : 
                        (triggerTimeForce ? 'TIME_FORCE_EXIT' : 'TIME_CUT_LOSS'));
 
@@ -4367,6 +4405,9 @@ async function getActiveMarketTokensForWs() {
           tokenIds.push(tokenIdUp);
           tokenToSignal.set(tokenIdUp, {
             market: merged,
+            asset,
+            tokenIdUp,
+            tokenIdDown,
             eventSlug: ev.slug ?? eventSlug,
             takeSide: 'Up',
             endDate,
@@ -4379,6 +4420,9 @@ async function getActiveMarketTokensForWs() {
           tokenIds.push(tokenIdDown);
           tokenToSignal.set(tokenIdDown, {
             market: merged,
+            asset,
+            tokenIdUp,
+            tokenIdDown,
             eventSlug: ev.slug ?? eventSlug,
             takeSide: 'Down',
             endDate,
@@ -4910,6 +4954,26 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 async function tryPlaceOrderForSignal(signal) {
   if (!signal?.tokenIdToBuy) return;
   const key = getSignalKey(signal);
+
+  // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
+  const ofiMultiplier = getOfiThresholdMultiplier(signal.asset || 'BTC', signal.ofiScore || 0, signal.takeSide);
+  const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
+
+  // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
+  logDecision({
+    at: new Date().toISOString(),
+    source: 'ws',
+    asset: signal.asset || 'BTC',
+    slug: signal.slug || signal.eventSlug,
+    side: signal.takeSide,
+    prob: signal.probFairAtEntry || signal.priceUp || signal.priceDown,
+    ask: pickSignalBestAskP(signal),
+    edge: signal.netGap || signal.edge,
+    strike: signal.strike,
+    ofi: signal.ofiScore || 0,
+    adjThreshold: Number(adjustedThreshold.toFixed(4))
+  });
+
   /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
   if (shouldSkipTradeTiming(signal)) {
     const timingDetails = getTimingForbiddenDetails();
@@ -5041,8 +5105,8 @@ async function tryPlaceOrderForSignal(signal) {
    const rawEdge = signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry);
    const netEdge = rawEdge - POLYMARKET_TAKER_FEE;
    
-   if (netEdge < MIN_EDGE) {
-     recordSkipReason('insufficient_net_edge', 'ws', { conditionId: key, netEdge: netEdge.toFixed(4) });
+   if (netEdge < adjustedThreshold) {
+     recordSkipReason('insufficient_net_edge', 'ws', { conditionId: key, netEdge: netEdge.toFixed(4), threshold: adjustedThreshold.toFixed(4) });
      return;
    }
    
@@ -5120,7 +5184,12 @@ async function tryPlaceOrderForSignal(signal) {
   let amountUsd = orderSizeUsd;
   if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
       const tokenPrice = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-      amountUsd = calculateKellyStake(signal.netGap, tokenPrice, balanceForSizing);
+      // v5.4.1 : Kelly sur capital disponible (Bug de sizing corrigé)
+      const activePositions = readActivePositions();
+      const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+      const availableCapital = Math.max(0, balanceForSizing - lockedCapital);
+      
+      amountUsd = calculateKellyStake(signal.netGap, tokenPrice, availableCapital, signal.ofiScore || 0, signal.takeSide);
   } else {
       amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
   }
@@ -5143,6 +5212,7 @@ async function tryPlaceOrderForSignal(signal) {
 
   // --- Sérités 3.0 WS : Drift, Circuit Breaker et Corrélation ---
   const clData = await getChainlinkPrice(signal.asset || 'BTC');
+  if (clData?.price) lagRecorder.onChainlinkUpdate(signal.asset || 'BTC', clData.price);
   const chainlinkSpotPrice = clData.price;
   const currentPrice = calculateConsensusPrice(signal.asset || 'BTC');
   const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, chainlinkSpotPrice || currentPrice);
@@ -5291,6 +5361,7 @@ async function tryPlaceOrderForSignal(signal) {
       latencyMs,
       timingsMs,
       ...fillLog,
+      edge: signalWithPrice.netGap || signalWithPrice.edge || 0.05,
       probFairAtEntry: signalWithPrice.probFairAtEntry ?? null,
       binancePriceAtEntry: signalWithPrice.binancePriceAtEntry ?? null,
       ...(result.simulationTrade ? { simulationTrade: true } : {}),
@@ -5529,7 +5600,7 @@ function startClobWs() {
         if (sig) {
             const upP = latestPrices.get(sig.tokenIdUp)?.bestAsk || 0;
             const downP = latestPrices.get(sig.tokenIdDown)?.bestAsk || 0;
-            lagRecorder.onPolyUpdate(upP, downP);
+            lagRecorder.onPolyUpdate(sig.asset || 'BTC', upP, downP);
         }
       }
 
@@ -5624,6 +5695,16 @@ async function run() {
           FETCH_SIGNALS_CACHE_MS 
         })
       );
+      
+      // Priorité 1 : Capture Strike T-Zéro pour Health.json (Isolé)
+      if (Array.isArray(signals) && signals.length > 0) {
+        const state = getAssetState(asset);
+        // Si le slot a changé ou si null, on capture
+        const currentSlug = signals[0].slug || signals[0].eventSlug;
+        if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== currentSlug) {
+           state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, currentSlug);
+        }
+      }
       const fetchProfile = signals?._fetchSignalsProfile ?? null;
       const signalsCount = Array.isArray(signals) ? signals.length : 0;
       
@@ -5649,6 +5730,40 @@ async function run() {
         for (const s of signals) {
           if (!s.tokenIdToBuy) continue;
           const key = getSignalKey(s);
+
+          // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
+          const assetOfi = (() => {
+            let total = 0; let count = 0;
+            for (const [tid, o] of ofiState.entries()) {
+              const sig = wsState.tokenToSignal.get(tid);
+              if (sig && sig.asset === asset) {
+                total += (sig.takeSide === 'Up' ? o.ofi : -o.ofi);
+                count++;
+              }
+            }
+            return count > 0 ? total / count : 0;
+          })();
+          const ofiMultiplier = getOfiThresholdMultiplier(asset, assetOfi, s.takeSide);
+          const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
+
+          const signalEdge = s.netGap || s.edge || 0;
+          const entrySpotPrice = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
+
+          // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
+          logDecision({
+            at: new Date().toISOString(),
+            source: 'poll',
+            asset,
+            slug: s.slug || s.eventSlug,
+            side: s.takeSide,
+            prob: s.probFairAtEntry,
+            ask: pickSignalBestAskP(s),
+            edge: signalEdge,
+            strike: s.strike,
+            ofi: assetOfi,
+            adjThreshold: Number(adjustedThreshold.toFixed(4))
+          });
+
           if (getExecutionCooldownRemainingMs(key) > 0) continue;
           if (placedKeys.has(key)) continue;
 
@@ -5657,18 +5772,29 @@ async function run() {
 
           if (shouldSkipTradeTiming(s)) continue;
 
-          // --- DYNAMIC STAKE INTEGRATION (v5.4.0) ---
+          // v5.8.1 Fix: Fetch balance before Kelly sizing
+          const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
+
+          // --- DYNAMIC STAKE INTEGRATION (v5.4.0 / v5.8.0 : Kelly) ---
           let amountUsd = orderSizeUsd;
-          if (s.optimalStake != null && s.optimalStake > 0) {
-            amountUsd = s.optimalStake;
-            console.log(`[${asset}] 🚀 Utilisation Stake Optimal: ${amountUsd.toFixed(2)} USDC`);
+          if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
+              const tokenPrice = pickSignalBestAskP(s);
+              // v5.8.0 : Kelly sur disponible avec momentum
+              const activePositions = readActivePositions();
+              const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+              const availableCapital = Math.max(0, balance - lockedCapital);
+              
+              amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
+          } else if (s.optimalStake != null && s.optimalStake > 0) {
+              amountUsd = s.optimalStake;
+              console.log(`[${asset}] 🚀 Utilisation Stake Optimal: ${amountUsd.toFixed(2)} USDC`);
           } else if (useBalanceAsSize || simulationTradeEnabled) {
-            const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
-            amountUsd = balance != null ? balance : orderSizeUsd;
+              amountUsd = balance != null ? balance : orderSizeUsd;
           }
 
           // Safety Checks (Multi-Asset)
           const clDataMain = await getChainlinkPrice(asset);
+          if (clDataMain?.price) lagRecorder.onChainlinkUpdate(asset, clDataMain.price);
           const safety = isTradeAllowedBySafety(asset, s.strike, clDataMain.price || calculateConsensusPrice(asset));
           if (!safety.ok) {
              console.log(`[${asset}] 🛡️ Skip ${s.takeSide}: ${safety.reason}`);
@@ -5699,7 +5825,8 @@ async function run() {
               underlying: asset,
               resolved: false,
               strike: s.strike,
-              spotAtEntry: calculateConsensusPrice(asset),
+              edge: signalEdge || 0.05,
+              spotAtEntry: entrySpotPrice,
               entryTime: new Date().toISOString(),
               ofiScore: s.ofiScore ?? 0
             };
@@ -5760,11 +5887,10 @@ function startBinanceWs() {
       const data = msg.data;
       if (data && data.s && data.p) {
         const asset = data.s.replace('USDT', '').toUpperCase();
-        if (perpState[asset]) {
-          perpState[asset].binance = parseFloat(data.p);
-          perpState[asset].binanceTs = Date.now();
-          if (asset === 'BTC') updateBtcPriceHistory(perpState.BTC.binance);
-        }
+          perpState.get(asset).binance = parseFloat(data.p);
+          perpState.get(asset).binanceTs = Date.now();
+          lagRecorder.onPerpUpdate(asset, parseFloat(data.p));
+          updateAssetPriceHistory(asset, perpState.get(asset).binance);
       }
     } catch (_) {}
   });
@@ -5800,8 +5926,14 @@ function startOkxWs() {
     try {
       const data = JSON.parse(raw.toString());
       if (data && data.arg?.channel === 'tickers' && data.data?.[0]?.last) {
-        okxBtcPrice = parseFloat(data.data[0].last);
-        okxLastUpdateMs = Date.now();
+        const asset = data.arg.instId.split('-')[0];
+        const state = perpState.get(asset);
+        if (state) {
+          const price = parseFloat(data.data[0].last);
+          state.okx = price;
+          state.okxTs = Date.now();
+          lagRecorder.onPerpUpdate(asset, price);
+        }
       }
     } catch (_) {}
   });
@@ -5822,20 +5954,28 @@ function startHyperliquidWs() {
   }
 
   hyperliquidWs.on('open', () => {
-    hyperliquidWs.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'l2Book', coin: 'BTC' } }));
+    SUPPORTED_ASSETS.forEach(asset => {
+      hyperliquidWs.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'l2Book', coin: asset } }));
+    });
   });
 
   hyperliquidWs.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString());
       if (data && data.channel === 'l2Book' && data.data?.levels?.[0]?.length >= 2) {
+        const asset = data.data.coin;
         const bids = data.data.levels[0];
         const asks = data.data.levels[1];
         if (bids[0] && asks[0]) {
           const bid = parseFloat(bids[0].px);
           const ask = parseFloat(asks[0].px);
-          hyperliquidBtcPrice = (bid + ask) / 2;
-          hyperliquidLastUpdateMs = Date.now();
+          const state = perpState.get(asset);
+          if (state) {
+            const price = (bid + ask) / 2;
+            state.hyper = price;
+            state.hyperTs = Date.now();
+            lagRecorder.onPerpUpdate(asset, price);
+          }
         }
       }
     } catch (_) {}
@@ -5849,15 +5989,16 @@ function startHyperliquidWs() {
  * Ajoute un échantillon de prix au buffer (max 60 échantillons, un toutes les 60s env).
  */
 let lastSampleMs = 0;
-function updateBtcPriceHistory(price) {
+function updateAssetPriceHistory(asset, price) {
   const now = Date.now();
   if (now - lastSampleMs < 60_000) return; // 1 échantillon par minute
   lastSampleMs = now;
-  btcPriceHistory.push(price);
-  if (btcPriceHistory.length > 60) btcPriceHistory.shift(); 
+  const state = getAssetState(asset);
+  state.priceHistory.push(price);
+  if (state.priceHistory.length > 60) state.priceHistory.shift(); 
   
-  if (btcPriceHistory.length >= 10) {
-    lastVolatilityCalculation = calculateAnnualizedVolatility(btcPriceHistory);
+  if (state.priceHistory.length >= 10) {
+    state.vol = calculateAnnualizedVolatility(state.priceHistory);
   }
 }
 
@@ -5955,7 +6096,8 @@ function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, vo
   let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
   if (!volOverwrite) {
     const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
-    const realized = Number(lastVolatilityCalculation) || 0;
+  const state = getAssetState(asset);
+  const realized = Number(state.vol) || 0;
     vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
   }
 
@@ -6018,28 +6160,41 @@ function calculatePolymarketTakerFee(price) {
  * Calcule le seuil GAP adaptatif selon la volatilité actuelle.
  */
 function getAdaptiveThreshold(vol, baseThreshold = ARBITRAGE_GAP_THRESHOLD) {
-  const volBaseline = 0.20;
+  const volBaseline = 0.50;
   const ratio = vol / volBaseline;
   return baseThreshold * Math.min(Math.max(ratio, 1.0), 2.0);
 }
 
 /**
- * Calcule la mise optimale via le Critère de Kelly (Engine 3.0).
- * f* = (edge / odds) * fraction
+ * Calcule la mise optimale via le Critère de Kelly (Engine 3.0 / v5.8.0).
+ * f* = (edge / odds) * fraction (dynamique via OFI)
  */
-function calculateKellyStake(netGap, tokenPrice, bankroll) {
+function calculateKellyStake(netGap, tokenPrice, bankroll, ofiScore = 0, side = 'Up') {
   if (netGap <= 0 || !tokenPrice || tokenPrice <= 0 || tokenPrice >= 1) return 0;
   
   // odds = (1 / price) - 1. Ex: prix 0.54 => odds 0.85
   const odds = (1 / tokenPrice) - 1;
   const kelly = netGap / odds;
   
-  // Appliquer la fraction (ex: Half-Kelly)
-  let stake = kelly * KELLY_FRACTION * bankroll;
+  // Appliquer la fraction dynamique basée sur l'OFI (v5.8.0 / v5.8.2 : Momentum-Weighted Kelly)
+  let dynamicFraction = KELLY_FRACTION;
+  if (isOfiSideMatch(side, ofiScore)) {
+      const absOfi = Math.abs(ofiScore);
+      if (absOfi > 20) {
+          // On scale de 0.25 à 0.40 entre OFI 20 et 50 (Bonus max +0.15)
+          const bonus = Math.min(0.15, (absOfi - 20) * (0.15 / 30));
+          dynamicFraction += bonus;
+      }
+  }
   
-  // Plafonner à la limite de bankroll par trade (ex: 25%)
-  const maxStake = bankroll * KELLY_MAX_BANKROLL_PCT;
-  stake = Math.min(stake, maxStake);
+  let stake = kelly * dynamicFraction * bankroll;
+  
+  // 1. Plafonner à la limite de bankroll par trade (ex: 25%)
+  const maxBankrollStake = bankroll * KELLY_MAX_BANKROLL_PCT;
+  stake = Math.min(stake, maxBankrollStake);
+
+  // 2. Plafonner au Cap Absolu (v5.8.0)
+  stake = Math.min(stake, ABSOLUTE_MAX_STAKE_USD);
   
   return Math.max(0, Math.round(stake * 100) / 100);
 }
@@ -6063,7 +6218,7 @@ function isTradeAllowedBySafety(asset, strike, currentPrice) {
   // 2. Circuit Breaker Journalier
   const stats = readDailyStats();
   if (stats.dailyPnl <= -MAX_DAILY_LOSS_USDC) {
-     return { ok: false, reason: `Daily Loss Limit reached (${stats.dailyPnl} USDC)` };
+     return { ok: false, reason: `Daily Loss Limit reached (${stats.dailyPnl} USDC) triggered by ${asset}` };
   }
   
   return { ok: true };

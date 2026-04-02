@@ -250,6 +250,14 @@ body {
   --destructive-foreground: var(--bg-base);
   --input: rgba(255, 255, 255, 0.06);
   --ring: rgba(0, 255, 136, 0.45);
+
+  /* Asset Accent Colors v5.5.0 */
+  --btc-gold: #f7931a;
+  --btc-gold-muted: rgba(247, 147, 26, 0.12);
+  --eth-blue: #627eea;
+  --eth-blue-muted: rgba(98, 126, 234, 0.12);
+  --sol-purple: #9945ff;
+  --sol-purple-muted: rgba(153, 69, 255, 0.12);
 }
 
 body {
@@ -325,6 +333,33 @@ body::after {
 .card > * {
   position: relative;
   z-index: 1;
+}
+
+.card--btc::before {
+  background: radial-gradient(ellipse at left top, var(--btc-gold-muted) 0%, transparent 55%),
+    radial-gradient(ellipse at right top, rgba(247, 147, 26, 0.08) 0%, transparent 55%);
+}
+
+.card--eth::before {
+  background: radial-gradient(ellipse at left top, var(--eth-blue-muted) 0%, transparent 55%),
+    radial-gradient(ellipse at right top, rgba(98, 126, 234, 0.08) 0%, transparent 55%);
+}
+
+.card--sol::before {
+  background: radial-gradient(ellipse at left top, var(--sol-purple-muted) 0%, transparent 55%),
+    radial-gradient(ellipse at right top, rgba(153, 69, 255, 0.08) 0%, transparent 55%);
+}
+
+.card-glow {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100px;
+  height: 100px;
+  background: radial-gradient(circle at center, var(--accent) 0%, transparent 70%);
+  opacity: 0.1;
+  filter: blur(20px);
+  pointer-events: none;
 }
 
 .card--sm {
