@@ -19,10 +19,11 @@ const DATA_FEEDS = {
 const CHAINLINK_DECIMALS = 8;
 
 const RPC_ENDPOINTS = [
-  'https://polygon.llamarpc.com',
-  'https://rpc.ankr.com/polygon',
   'https://polygon-rpc.com',
   'https://1rpc.io/matic',
+  'https://rpc.ankr.com/polygon',
+  'https://polygon.llamarpc.com',
+  'https://polygon.api.onfinality.io/public',
 ];
 
 const AGGREGATOR_V3_ABI = [
