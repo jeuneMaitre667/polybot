@@ -24,12 +24,6 @@ const LatencyTimelineChart = ({ data }) => {
   const wsData = data.ws || [];
   const pollData = data.poll || [];
   
-  // Utiliser le temps du dernier échantillon comme point de référence
-  const lastTs = Math.max(
-    wsData.length ? wsData[wsData.length-1].t : 0,
-    pollData.length ? pollData[pollData.length-1].t : 0
-  );
-
   // Créer un dataset unifié (on prend les indices pour l'axe X)
   const maxLen = Math.max(wsData.length, pollData.length);
   for (let i = 0; i < maxLen; i++) {

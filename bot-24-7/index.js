@@ -223,13 +223,9 @@ function isOfiSideMatch(side, ofiScore) {
   return (isUp && ofiScore > 0) || (isDown && ofiScore < 0);
 }
 
-/** Calculateur de multiplicateur de seuil basé sur l'OFI (Momentum Control v5.7.1 / v5.8.2) */
+/** Calculateur de multiplicateur de seuil basé sur l'OFI (v6.2.2 : Neutralisé suite à l'Audit Alpha) */
 function getOfiThresholdMultiplier(asset, ofiScore, side) {
-  if (isOfiSideMatch(side, ofiScore)) {
-    const absOfi = Math.abs(ofiScore || 0);
-    if (absOfi > 50) return 0.50; // Réduction 50% (Ultra Agressif)
-    if (absOfi > 20) return 0.75; // Réduction 25% (Momentum Fort)
-  }
+  // Audit v6.2.0 : Accuracy 14-20% (Contrarian). On repasse à 1.0 (Neutre) pour la collecte 48h.
   return 1.0;
 }
 
