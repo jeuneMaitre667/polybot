@@ -43,6 +43,7 @@ export async function fetchSignals(asset, context = {}) {
     const startFetch = Date.now();
     try {
         const url = `${GAMMA_EVENT_BY_SLUG_URL}/${slug}`;
+        console.log(`[${asset}] Fetching signals from: ${url}`);
         const res = await axios.get(url, { timeout: 5000 });
 
         const event = res.data;
