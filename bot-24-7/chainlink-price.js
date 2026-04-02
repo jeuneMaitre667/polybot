@@ -32,7 +32,7 @@ const AGGREGATOR_V3_ABI = [
 ];
 
 // --- Cache ---
-const CACHE_TTL_MS = 5000; // 5s de cache
+const CACHE_TTL_MS = 2000; // 2s de cache (Audit Compliance v5.2.0)
 let cachedPrice = { price: null, updatedAt: null, roundId: null, fetchedAt: 0, source: 'chainlink' };
 let currentProviderIndex = 0;
 let providerInstance = null;

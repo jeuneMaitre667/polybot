@@ -134,21 +134,23 @@ function ordersLogLineIsCountableTrade(o) {
 
 /**
  * Compte les ordres dans orders.log sur les 24 dernières heures + stats remplissage (fillRatio, compléments FAK).
- * Si orders.log dépasse ~12 Mo, seule la fin du fichier est lue (win rate / stats = approximation sur cette fenêtre).
  */
 function getStats24h() {
   const ordersPath = path.join(BOT_DIR, 'orders.log');
-  /** Au-delà de cette taille, on ne lit que la fin du fichier (ordres récents + win rate sur cette fenêtre). */
   const ORDERS_LOG_MAX_READ = 12 * 1024 * 1024;
+  
   let ordersLast24h = 0;
   let won = 0;
   let totalWithResult = 0;
   let fillRatioCount = 0;
   let fillRatioSum = 0;
-  let fillRatioMin = null;
-  let fillRatioMax = null;
-  let ordersWithPartialRetries = 0;
-  let partialRetriesSum = 0;
+  
+  const byAsset = {
+    BTC: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 },
+    ETH: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 },
+    SOL: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 }
+  };
+
   try {
     let raw;
     const st = fs.statSync(ordersPath);
@@ -162,51 +164,66 @@ function getStats24h() {
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const lines = raw.trim().split('\n').filter(Boolean);
+    
     for (const line of lines) {
       try {
         const o = JSON.parse(line);
         const at = o.at ? new Date(o.at).getTime() : 0;
+        const countThis = ordersLogLineIsCountableTrade(o);
+        const asset = o.underlying || 'BTC';
+        
+        if (!byAsset[asset]) {
+          byAsset[asset] = { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 };
+        }
+
         if (at >= cutoff) {
-          const countThis = ordersLogLineIsCountableTrade(o);
-          if (countThis) ordersLast24h++;
+          if (countThis) {
+            ordersLast24h++;
+            byAsset[asset].ordersLast24h++;
+          }
+          
           const fr = o.fillRatio;
           if (countThis && fr != null && Number.isFinite(Number(fr))) {
             const n = Number(fr);
-            fillRatioCount += 1;
+            fillRatioCount++;
             fillRatioSum += n;
-            if (fillRatioMin == null || n < fillRatioMin) fillRatioMin = n;
-            if (fillRatioMax == null || n > fillRatioMax) fillRatioMax = n;
-          }
-          const pr = Number(o.partialFillRetries);
-          if (countThis && Number.isFinite(pr) && pr > 0) {
-            ordersWithPartialRetries += 1;
-            partialRetriesSum += pr;
+            byAsset[asset].fillRatioCount++;
+            byAsset[asset].fillRatioSum += n;
           }
         }
+        
         if (typeof o.won === 'boolean') {
           totalWithResult++;
-          if (o.won) won++;
+          byAsset[asset].totalWithResult++;
+          if (o.won) {
+            won++;
+            byAsset[asset].won++;
+          }
         }
       } catch (_) {}
     }
   } catch (_) {}
-  const winRate = totalWithResult > 0 ? Math.round((won / totalWithResult) * 1000) / 1000 : null;
+
+  // Finalize statistics per asset
+  const assetReport = {};
+  for (const [asset, stats] of Object.entries(byAsset)) {
+    if (stats.ordersLast24h > 0 || stats.totalWithResult > 0) {
+      assetReport[asset] = {
+        ordersLast24h: stats.ordersLast24h,
+        winRate: stats.totalWithResult > 0 ? Math.round((stats.won / stats.totalWithResult) * 1000) / 1000 : null,
+        avgFillRatio: stats.fillRatioCount > 0 ? Math.round((stats.fillRatioSum / stats.fillRatioCount) * 10000) / 10000 : null
+      };
+    }
+  }
+
   return {
     ordersLast24h,
-    winRate,
+    winRate: totalWithResult > 0 ? Math.round((won / totalWithResult) * 1000) / 1000 : null,
     fillExecutionStats24h: {
       fillRatioCount,
-      avgFillRatio:
-        fillRatioCount > 0 ? Math.round((fillRatioSum / fillRatioCount) * 10000) / 10000 : null,
-      minFillRatio: fillRatioMin != null ? Math.round(fillRatioMin * 10000) / 10000 : null,
-      maxFillRatio: fillRatioMax != null ? Math.round(fillRatioMax * 10000) / 10000 : null,
-      ordersWithPartialRetries,
-      totalPartialRetryLegs: partialRetriesSum,
-      avgPartialRetriesWhenUsed:
-        ordersWithPartialRetries > 0
-          ? Math.round((partialRetriesSum / ordersWithPartialRetries) * 100) / 100
-          : null,
+      avgFillRatio: fillRatioCount > 0 ? Math.round((fillRatioSum / fillRatioCount) * 10000) / 10000 : null
     },
+    byAsset: assetReport
   };
 }
 
@@ -241,6 +258,10 @@ function getHealth() {
     lastSkipAt: o.lastSkipAt ?? null,
     lastSkipDetails: o.lastSkipDetails ?? null,
     lastTimingForbiddenSkip: o.lastTimingForbiddenSkip ?? null,
+    lastRateLimitInfo: o.lastRateLimitInfo ?? null, // v5.3.0 (Blindage 2026)
+    last425ErrorAt: o.last425ErrorAt ?? null,
+    isMaintenance: !!o.isMaintenance,
+    perpSources: o.perpSources ?? null,
     at: o.at ?? null,
   };
 }
