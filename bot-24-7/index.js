@@ -4316,56 +4316,67 @@ function isCooldown425() {
 }
 /** Récupère les token IDs des marchés actifs (Up + Down) pour s'abonner au WebSocket CLOB. Retourne { tokenIds, tokenToSignal }. */
 async function getActiveMarketTokensForWs() {
-  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
-  const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
-  let events = gammaOut.events;
-
-  if (MARKET_MODE === '15m') {
-    const r = await resolve15mEventsForTrading(events, Date.now());
-    events = r.events;
-    if (r.slugMismatch) {
-      console.log(
-        `[WS] 15m: résolution créneau — stratégie=${r.resolveStrategy} attendu=${r.expectedSlug} (mismatch vs liste Gamma)`,
-      );
-    }
-  }
-
   const tokenIds = [];
   const tokenToSignal = new Map();
-  for (const ev of events) {
-    if (!ev?.markets?.length) continue;
-    const eventSlug = (ev.slug ?? '').toLowerCase();
-    if (!eventSlug.includes(slugMatch)) continue;
-    const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
-    for (const m of ev.markets) {
-      const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
-      const merged = mergeGammaEventMarketForUpDown(ev, m);
-      const { tokenIdUp, tokenIdDown } = getAlignedUpDownTokenIds(merged);
-      if (tokenIdUp) {
-        tokenIds.push(tokenIdUp);
-        tokenToSignal.set(tokenIdUp, {
-          market: merged,
-          eventSlug: ev.slug ?? eventSlug,
-          takeSide: 'Up',
-          endDate,
-          tokenIdToBuy: tokenIdUp,
-          priceUp: MIN_P,
-          priceDown: 1 - MIN_P,
-        });
-      }
-      if (tokenIdDown) {
-        tokenIds.push(tokenIdDown);
-        tokenToSignal.set(tokenIdDown, {
-          market: merged,
-          eventSlug: ev.slug ?? eventSlug,
-          takeSide: 'Down',
-          endDate,
-          tokenIdToBuy: tokenIdDown,
-          priceUp: 1 - MIN_P,
-          priceDown: MIN_P,
-        });
+
+  const collectForAsset = async (asset) => {
+    let slugMatch = BITCOIN_UP_DOWN_SLUG;
+    if (MARKET_MODE === '15m') {
+      if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_15M_SLUG;
+      else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_15M_SLUG;
+      else slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
+    } else {
+      if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_SLUG;
+      else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_SLUG;
+      else slugMatch = BITCOIN_UP_DOWN_SLUG;
+    }
+
+    const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
+    let events = gammaOut.events;
+    if (MARKET_MODE === '15m') {
+      const r = await resolve15mEventsForTrading(events, Date.now(), asset);
+      events = r.events;
+    }
+
+    for (const ev of events) {
+      if (!ev?.markets?.length) continue;
+      const eventSlug = (ev.slug ?? '').toLowerCase();
+      if (!eventSlug.includes(slugMatch.toLowerCase())) continue;
+      const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+      for (const m of ev.markets) {
+        const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
+        const merged = mergeGammaEventMarketForUpDown(ev, m);
+        const { tokenIdUp, tokenIdDown } = getAlignedUpDownTokenIds(merged);
+        if (tokenIdUp) {
+          tokenIds.push(tokenIdUp);
+          tokenToSignal.set(tokenIdUp, {
+            market: merged,
+            eventSlug: ev.slug ?? eventSlug,
+            takeSide: 'Up',
+            endDate,
+            tokenIdToBuy: tokenIdUp,
+            priceUp: MIN_P,
+            priceDown: 1 - MIN_P,
+          });
+        }
+        if (tokenIdDown) {
+          tokenIds.push(tokenIdDown);
+          tokenToSignal.set(tokenIdDown, {
+            market: merged,
+            eventSlug: ev.slug ?? eventSlug,
+            takeSide: 'Down',
+            endDate,
+            tokenIdToBuy: tokenIdDown,
+            priceUp: 1 - MIN_P,
+            priceDown: MIN_P,
+          });
+        }
       }
     }
+  };
+
+  for (const asset of SUPPORTED_ASSETS) {
+    await collectForAsset(asset);
   }
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
@@ -4437,23 +4448,36 @@ async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'B
   return { events: [], resolveStrategy: 'empty', slugMismatch: false, expectedSlug };
 }
 
-/** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix. */
+/** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix pour tous les assets. */
 async function fetchActiveWindows() {
-  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
-  const { events } = await fetchGammaEventsCached(slugMatch, 15000);
   const results = [];
   const seenKeys = new Set();
-  for (const ev of events) {
-    if (!ev?.markets?.length) continue;
-    const eventSlug = (ev.slug ?? '').toLowerCase();
-    if (!eventSlug.includes(slugMatch)) continue;
-    const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
-    for (const m of ev.markets) {
-      const key = m.conditionId ?? m.condition_id ?? '';
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
-      results.push({ market: m, ev, endDate: marketEndDate, key });
+  
+  for (const asset of SUPPORTED_ASSETS) {
+    let slugMatch = BITCOIN_UP_DOWN_SLUG;
+    if (MARKET_MODE === '15m') {
+       if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_15M_SLUG;
+       else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_15M_SLUG;
+       else slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
+    } else {
+       if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_SLUG;
+       else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_SLUG;
+       else slugMatch = BITCOIN_UP_DOWN_SLUG;
+    }
+
+    const { events } = await fetchGammaEventsCached(slugMatch, 15000);
+    for (const ev of events) {
+      if (!ev?.markets?.length) continue;
+      const eventSlug = (ev.slug ?? '').toLowerCase();
+      if (!eventSlug.includes(slugMatch.toLowerCase())) continue;
+      const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+      for (const m of ev.markets) {
+        const key = m.conditionId ?? m.condition_id ?? '';
+        if (!key || seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+        results.push({ market: m, ev, endDate: marketEndDate, key, asset });
+      }
     }
   }
   return results;
