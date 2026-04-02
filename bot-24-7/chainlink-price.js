@@ -18,13 +18,12 @@ const DATA_FEEDS = {
 };
 const CHAINLINK_DECIMALS = 8;
 
-const ALCHEMY_KEY = 'qDLYcGckGL323XVWQot_r';
-const PRIMARY_RPC = `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-const FALLBACK_RPCS = [
+const RPC_ENDPOINTS = [
+  'https://polygon.llamarpc.com',
+  'https://rpc.ankr.com/polygon',
   'https://polygon-rpc.com',
-  'https://rpc-mainnet.maticvigil.com',
+  'https://1rpc.io/matic',
 ];
-const RPC_ENDPOINTS = [PRIMARY_RPC, ...FALLBACK_RPCS];
 
 const AGGREGATOR_V3_ABI = [
   'function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
@@ -51,8 +50,9 @@ function getProvider() {
 }
 
 function getContract(asset) {
-  const address = DATA_FEEDS[asset];
-  if (!address) return null;
+  const rawAddress = DATA_FEEDS[asset];
+  if (!rawAddress) return null;
+  const address = ethers.getAddress(rawAddress.toLowerCase()); // Fix checksum v5.4.1
   if (contractInstances.has(address)) return contractInstances.get(address);
   
   const provider = getProvider();
