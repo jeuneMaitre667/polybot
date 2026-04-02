@@ -666,14 +666,11 @@ if (privateKeyRaw && looksLikeAddress) {
   console.error('ERREUR: PRIVATE_KEY ressemble à une ADRESSE (0x + 40 caractères). Il faut la CLÉ PRIVÉE (0x + 64 caractères hex). Récupère-la depuis Phantom/MetaMask : Paramètres → Sécurité → Exporter clé privée. Puis dans ~/bot-24-7/.env mets PRIVATE_KEY=0x...');
 }
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
-const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon.llamarpc.com';
-/** Ankr public sans clé renvoie souvent 401 — utiliser une URL avec clé ou retirer Ankr d’ici. */
+const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
 const polygonRpcFallbacks = (
   process.env.POLYGON_RPC_FALLBACKS ||
-  'https://rpc.ankr.com/polygon,https://polygon-rpc.com,https://1rpc.io/matic'
-).split(',')
-  .map((u) => u.trim())
-  .filter(Boolean);
+  'https://1rpc.io/matic,https://rpc.ankr.com/polygon,https://polygon.llamarpc.com'
+).split(',').map(u => u.trim()).filter(Boolean);
 /** Montant minimum pour placer un ordre (USDC). En dessous, on skip. Défaut 1. */
 const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
