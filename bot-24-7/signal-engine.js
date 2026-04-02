@@ -77,8 +77,9 @@ export async function fetchSignals(asset, context = {}) {
                 conditionId: m.conditionId,
                 tokenIdToBuy: tokenIdToBuy,
                 strike: parseFloat(m.line),
-                yesPrice,
-                noPrice,
+                takeSide,
+                priceUp: yesPrice,
+                priceDown: noPrice,
                 m
             };
         });
