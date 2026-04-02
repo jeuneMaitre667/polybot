@@ -5553,7 +5553,14 @@ async function run() {
     clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
     
     for (const asset of SUPPORTED_ASSETS) {
-      const signals = await profiler.measure(`fetchSignals_${asset}`, () => fetchSignals(asset));
+      const signals = await profiler.measure(`fetchSignals_${asset}`, () => 
+        fetchSignals(asset, { 
+          MARKET_MODE, 
+          getCurrent15mEventSlug, 
+          getCurrentHourlyEventSlug, 
+          FETCH_SIGNALS_CACHE_MS 
+        })
+      );
       const fetchProfile = signals?._fetchSignalsProfile ?? null;
       const signalsCount = Array.isArray(signals) ? signals.length : 0;
       
