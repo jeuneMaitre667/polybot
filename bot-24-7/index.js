@@ -5254,8 +5254,20 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
   if (vwapPrice == null) return;
 
+  const asset = signal.asset || 'BTC';
   const spotPrice = calculateConsensusPrice(asset);
-  const strikePrice = signal.strike;
+  const strikePrice = Number(signal.strike);
+
+  if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
+    recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
+    return;
+  }
+  
+  if (spotPrice <= 0) {
+    recordSkipReason('missing_spot_price', source, { asset, spotPrice });
+    return;
+  }
+
   const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
   const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
   const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
