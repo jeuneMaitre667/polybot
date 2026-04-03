@@ -5837,15 +5837,23 @@ async function run() {
                 const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
                 const availableCapital = Math.max(0, balance - lockedCapital);
                 amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
+                // --- HARD CAP MIN STAKE (v6.3.5) ---
+                if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0; 
             } else if (s.optimalStake != null && s.optimalStake > 0) {
                 amountUsd = s.optimalStake;
             } else if (useBalanceAsSize || simulationTradeEnabled) {
                 amountUsd = balance != null ? balance : orderSizeUsd;
             }
+            // Final check: Never below 1.0
+            if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0;
           } catch (err) {
             console.error(`[Error] [${asset}] Erreur calcul Kelly: ${err.message}`);
-            amountUsd = orderSizeUsd; // Fallback safe
+            amountUsd = 1.0; // Fallback safe
           }
+
+          // --- PROFITABILITY FILTER (v6.3.5) ---
+          // Skip if edge < 1.0% (covers 0.72% fee + slippage)
+          if (signalEdge < 0.01) continue;
 
           // Safety Checks (Multi-Asset)
           const clDataMain = await getChainlinkPrice(asset);
