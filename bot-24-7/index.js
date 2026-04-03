@@ -5253,12 +5253,21 @@ async function tryPlaceOrderForSignal(signal) {
   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
   if (vwapPrice == null) return;
 
-  const fairValue = signal.takeSide === 'Up' ? signal.probFairAtEntry : (1 - signal.probFairAtEntry);
-  const netEdge = (fairValue - vwapPrice) - POLYMARKET_TAKER_FEE;
+  const asset = signal.asset || 'BTC';
+  const spotPrice = calculateConsensusPrice(asset);
+  const strikePrice = signal.strike;
+  const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
+  const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
+  const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+
+  // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
+  signal.probFairAtEntry = probFairLive;
+  const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
+  const netEdge = (fairValue - vwapPrice) - 0.005; 
 
   // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
   if (vwapPrice > 0.98) {
-    recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset: signal.asset });
+    recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset });
     return;
   }
 
