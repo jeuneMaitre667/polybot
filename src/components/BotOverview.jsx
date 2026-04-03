@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
 import { DecisionFeed } from './DecisionFeed';
 import { GlobalRiskSentinel } from './GlobalRiskSentinel';
@@ -150,6 +151,13 @@ export function BotOverview() {
             <span className="text-[10px] text-white/40 uppercase font-medium">Open Makers</span>
             <span className="text-sm font-mono font-bold text-white/90">{data15m?.openLimitOrders || 0}</span>
           </div>
+          <div className="h-4 w-[1px] bg-white/10" />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-indigo-400 uppercase font-medium">Rewards</span>
+            <span className="text-sm font-mono font-bold text-indigo-400">
+              {data15m?.rewards ? `${Math.max(...(data15m.rewards.map(r => Number(r.reward_percentage) || 0))).toFixed(1)}%` : '---'}
+            </span>
+          </div>
         </div>
         
         <div className="flex items-center gap-3">
@@ -157,6 +165,76 @@ export function BotOverview() {
           <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest">Live Engine</span>
         </div>
       </div>
+
+      {/* v7.4.0 Performance Trend Chart */}
+      {data15m?.trendHistory && data15m.trendHistory.length > 1 && (
+        <div className="mx-4 max-w-7xl">
+          <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 backdrop-blur-3xl overflow-hidden transition-all hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-6 px-2">
+              <div>
+                <h3 className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/30 mb-1">Portfolio Intelligence</h3>
+                <h2 className="text-xs font-bold text-white/70">Performance Velocity (Volume vs Earnings)</h2>
+              </div>
+              <div className="flex gap-8">
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)]" />
+                  <span className="text-[9px] uppercase font-bold text-white/40 tracking-widest">Filled Volume</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                  <span className="text-[9px] uppercase font-bold text-white/40 tracking-widest">Reward Alpha</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="h-[140px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data15m.trendHistory} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorVol" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorRew" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'rgba(15, 23, 42, 0.95)', 
+                      borderRadius: '16px', 
+                      border: '1px solid rgba(255,255,255,0.05)', 
+                      fontSize: '11px',
+                      backdropFilter: 'blur(12px)',
+                      boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
+                    }}
+                    itemStyle={{ padding: '2px 0' }}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="vol" 
+                    stroke="#6366f1" 
+                    fillOpacity={1} 
+                    fill="url(#colorVol)" 
+                    strokeWidth={2}
+                    animationDuration={1500}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="rew" 
+                    stroke="#10b981" 
+                    fillOpacity={1} 
+                    fill="url(#colorRew)" 
+                    strokeWidth={2}
+                    animationDuration={2000}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SYSTEM STALL ALERT (v6.3.4) */}
       {isStale && (

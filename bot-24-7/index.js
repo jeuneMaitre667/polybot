@@ -29,10 +29,13 @@ import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
 import WebSocket from 'ws';
 import axios from 'axios';
+import crypto from 'crypto';
 
 // --- v7.0.0 Globals ---
 export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
 export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
+export const DEEP_ORDER_ENABLED = process.env.DEEP_ORDER_ENABLED !== 'false';
+export const DEEP_ORDER_OFFSET = Number(process.env.DEEP_ORDER_OFFSET) || 0.005; // 0.5% d'écart supplémentaire
 
 // --- Smart Rate Limiter / Cloudflare (Blindage 2026) ---
 function updateRateLimitFromHeaders(headers) {
@@ -147,6 +150,8 @@ const perpState = new Map([
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
+let lastRewardsFetch = 0;
+let cachedRewardsData = null;
 
 let binanceBtcPrice = 0; // Legacy global (v5.4.1: will be prioritized by current asset in perpState)
 let binanceLastUpdateMs = 0;
@@ -524,8 +529,25 @@ function writeHealth(updates) {
         updatedAt: new Date().toISOString()
       },
       openLimitOrders: OPEN_LIMIT_ORDERS.size,
-      executionMode: ORDER_EXECUTION_TYPE
+      executionMode: ORDER_EXECUTION_TYPE,
+      rewards: cachedRewardsData,
+      trendHistory: (existingHealth && existingHealth.trendHistory) || []
     };
+
+    // v7.4.0 Analytics: Store trends every cycle (throttled by 5m in caller usually)
+    const maxReward = cachedRewardsData ? Math.max(...(cachedRewardsData.map(r => Number(r.reward_percentage) || 0))) : 0;
+    const currentVol = (fullState.performance && fullState.performance.totalVolume) || 0;
+    
+    // Only push if time passed > 5m or first point
+    const lastPoint = fullState.trendHistory[fullState.trendHistory.length - 1];
+    if (!lastPoint || (Date.now() - new Date(lastPoint.t).getTime() > 300000)) {
+        fullState.trendHistory.push({
+            t: new Date().toISOString(),
+            vol: currentVol,
+            rew: maxReward
+        });
+        if (fullState.trendHistory.length > 100) fullState.trendHistory.shift();
+    }
 
     // 3. Écriture atomique
     fs.writeFileSync(HEALTH_FILE, JSON.stringify(fullState, null, 2), 'utf8');
@@ -1774,16 +1796,42 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
   const asset = signal.underlying || signal.asset || 'BTC';
   const tokenId = signal.tokenIdToBuy;
   
+  // v7.4.0: Emergency Inventory Brake (Safety 1500 tokens)
+  const EMERGENCY_CAP = 1500;
+  try {
+     const balRes = await clobClient.getBalanceAllowance({ token_id: tokenId });
+     const balance = Number(balRes.balance) || 0;
+     if (balance > EMERGENCY_CAP) {
+        console.error(`[${asset}] 🚨 EMERGENCY: Inventory too high (${balance.toFixed(0)} > ${EMERGENCY_CAP}). DELEVERAGING NOW.`);
+        if (telegramTradeAlertsEnabled) {
+           await sendTelegramAlert(`🚨 *EMERGENCY BRAKE*\nAsset: ${asset}\nInventory: ${balance.toFixed(0)}\nAction: Market SELL Triggered`);
+        }
+        await clobClient.createAndPostMarketOrder({ tokenId, amount: balance, side: Side.SELL }, { tickSize: '0.001' });
+        return { ok: false, reason: 'emergency_brake_triggered' };
+     }
+  } catch (_) {}
+  
   try {
     // 1. Get Order Book
     const book = await clobClient.getOrderBook(tokenId);
     const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
     const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 1;
     
-    // 2. Calculate Maker Price (Best Bid + 0.001)
-    const limitPrice = calculateMakerPrice('Buy', bestBid, bestAsk);
+    // 2. Inventory Skewing (Safety Engine v7.3.0)
+    let inventorySkew = 0;
+    try {
+       const balRes = await clobClient.getBalanceAllowance({ token_id: tokenId });
+       const balance = Number(balRes.balance) || 0;
+       if (balance > (INVENTORY_CAP * 0.7)) {
+          inventorySkew = SKEW_REDUCTION_OFFSET;
+          console.warn(`[${asset}] 🛡️ Inventory Skew active: balance ${balance.toFixed(0)} tokens. Reducing bid by ${(inventorySkew * 100).toFixed(1)}%.`);
+       }
+    } catch (_) {}
+
+    // 3. Calculate Maker Price (Best Bid + 0.001 - inventorySkew)
+    const limitPrice = Number((bestBid + 0.001 - inventorySkew).toFixed(3));
     
-    // 3. Round amount to 0.1 tokens (Polymarket min)
+    // 4. Round amount to 0.1 tokens (Polymarket min)
     const rawTokens = amountUsd / limitPrice;
     const tokens = Math.floor(rawTokens * 10) / 10;
     
@@ -1800,7 +1848,9 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
     };
 
     const signedOrder = await createSignedLimitOrder(clobClient, userLimitOrder);
-    const result = await clobClient.postOrder(signedOrder, OrderType.GTC);
+    
+    // GTC (Good-Til-Canceled), deferExec=false, postOnly=true (absolute maker-only)
+    const result = await clobClient.postOrder(signedOrder, OrderType.GTC, false, true);
 
     if (result.success && result.orderID) {
       OPEN_LIMIT_ORDERS.set(signal.conditionId, {
@@ -1810,6 +1860,39 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
         asset,
         tokenId
       });
+      saveOpenOrders(); // v7.1.0 Persistence
+      
+      // v7.3.0: Liquidity Ladder (3-Tier Bidding)
+      // Tier 1 (Primary) is already placed. Now Tier 2 (Volume) and Tier 3 (Deep).
+      const ladderSteps = [
+         { name: 'Volume', offset: 0.002, suffix: 'vol' },
+         { name: 'Deep', offset: 0.006, suffix: 'deep' }
+      ];
+
+      for (const step of ladderSteps) {
+         try {
+           const stepPrice = (limitPrice - step.offset).toFixed(3);
+           if (stepPrice <= 0.01) continue;
+           
+           const stepTokens = (amountUsd / Number(stepPrice)).toFixed(1);
+           const stepOrder = { ...userLimitOrder, price: Number(stepPrice), size: stepTokens };
+           const stepSigned = await createSignedLimitOrder(clobClient, stepOrder);
+           const resStep = await clobClient.postOrder(stepSigned, OrderType.GTC, false, true);
+           
+           if (resStep.success) {
+              OPEN_LIMIT_ORDERS.set(`${signal.conditionId}_${step.suffix}`, {
+                orderId: resStep.orderID,
+                at: Date.now(),
+                price: Number(stepPrice),
+                asset,
+                tokenId
+              });
+              console.log(`[${asset}] 🪜 ${step.name} ladder step placed at ${stepPrice}`);
+           }
+         } catch (_) {}
+      }
+      saveOpenOrders();
+
       return { ok: true, orderId: result.orderID, price: limitPrice, filledUsd: 0 }; // Maker is not filled yet
     }
     
@@ -1823,19 +1906,85 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
  * Monitor and cancel stale limit orders (v7.0.0).
  * Runs at the end of each cycle.
  */
+const OPEN_ORDERS_FILE = path.join(__dirname, 'open-orders.json');
+
+function saveOpenOrders() {
+  try {
+    const data = Object.fromEntries(OPEN_LIMIT_ORDERS);
+    fs.writeFileSync(OPEN_ORDERS_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[Persistence] Error saving open orders:', e.message);
+  }
+}
+
+function loadOpenOrders() {
+  try {
+    if (fs.existsSync(OPEN_ORDERS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(OPEN_ORDERS_FILE, 'utf8'));
+      for (const [key, val] of Object.entries(data)) {
+        OPEN_LIMIT_ORDERS.set(key, val);
+      }
+      console.log(`[Persistence] Loaded ${OPEN_LIMIT_ORDERS.size} orders from disk.`);
+    }
+  } catch (e) {
+    console.error('[Persistence] Error loading open orders:', e.message);
+  }
+}
+
+/**
+ * Fetch Rewards Score from Polymarket (v7.1.0).
+ * Requires API credentials.
+ */
+async function fetchRewardsUserPercentages(clobClient) {
+  if (!clobClient) return null;
+  try {
+    // v7.3.0: Using native SDK method for 100% reliable rewards monitor
+    const res = await clobClient.getRewardPercentages();
+    return res;
+  } catch (err) {
+    if (err.message.includes('403') || err.message.includes('401')) {
+       // Silently fail if auth is not ready yet
+    } else {
+       console.warn(`[Rewards] Native fetch failed: ${err.message}`);
+    }
+    return null;
+  }
+}
+
 async function checkAndCancelStaleOrders(clobClient) {
-  if (!clobClient || OPEN_LIMIT_ORDERS.size === 0) return;
+  // v7.4.0: Detect Fills via SDK comparison
+  let activeOrderIds = new Set();
+  try {
+     const openClobOrders = await clobClient.getOpenOrders();
+     activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
+  } catch (err) {
+     warnClobClientIfThrottled(`[Monitor] Could not fetch active CLOB orders: ${err.message}`);
+     return; // Safety: don't delete anything if we can't verify status
+  }
 
   const now = Date.now();
   for (const [condId, data] of OPEN_LIMIT_ORDERS.entries()) {
+    // 0. Fill Detection (Order exists in our map but NOT in CLOB API)
+    if (!activeOrderIds.has(data.orderId)) {
+        console.log(`[${data.asset}] 🌊 LADDER FILL DETECTED: Order ${data.orderId} at ${data.price}¢`);
+        if (telegramTradeAlertsEnabled) {
+           await sendTelegramAlert(`🌊 *LADDER FILL*\nAsset: ${data.asset}\nPrice: ${data.price}¢\nType: Maker Fill`);
+        }
+        OPEN_LIMIT_ORDERS.delete(condId);
+        saveOpenOrders();
+        continue;
+    }
+
     const ageMs = now - data.at;
     
     // 1. Time-based Expiration (TTL)
     if (ageMs > LIMIT_ORDER_TTL_MS) {
+       // ... existing cancel logic ...
       console.log(`[${data.asset}] 🕒 Cancel stale LIMIT order ${data.orderId} (Age: ${Math.round(ageMs/1000)}s)`);
       try {
         await clobClient.cancelOrder(data.orderId);
         OPEN_LIMIT_ORDERS.delete(condId);
+        saveOpenOrders(); // v7.1.0 Persistence
       } catch (err) {
         warnClobClientIfThrottled(`Error cancelling order ${data.orderId}: ${err.message}`);
       }
@@ -1852,6 +2001,7 @@ async function checkAndCancelStaleOrders(clobClient) {
             console.log(`[${data.asset}] 📉 Market move: Cancel stale LIMIT order ${data.orderId}`);
             await clobClient.cancelOrder(data.orderId);
             OPEN_LIMIT_ORDERS.delete(condId);
+            saveOpenOrders(); // v7.1.0 Persistence
         }
     } catch (err) {
         // Silent fail on book fetch
@@ -6023,6 +6173,18 @@ async function run() {
     // Post-cycle cleanup
     await profiler.measure('redeem_global', () => tryRedeemResolvedPositions());
     await profiler.measure('stale_orders_v7', () => checkAndCancelStaleOrders(clobClient));
+
+    // v7.1.0 : Rewards Monitor (tous les 5 mins)
+    if (Date.now() - lastRewardsFetch > 300000) {
+       await profiler.measure('fetch_rewards', async () => {
+         const data = await fetchRewardsUserPercentages(clobClient);
+         if (data) {
+           cachedRewardsData = data;
+           lastRewardsFetch = Date.now();
+         }
+       });
+    }
+
     await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
 
     async function getBalance() {
@@ -6502,6 +6664,7 @@ function logDecision(data) {
 }
 
 async function main() {
+  loadOpenOrders(); // v7.1.0 Persistence
   console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
   if (simulationTradeEnabled) {
