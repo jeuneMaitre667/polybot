@@ -35,9 +35,9 @@ export function LatencySentinelCards({ data }) {
         <div className="h-[1px] flex-1 bg-gradient-to-r from-white/10 to-transparent" />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4 gap-6">
+      <div className="flex flex-wrap gap-6 items-stretch justify-start">
         {/* WS LATENCY */}
-        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all", getSeverityBg(ws.avgMs))}>
+        <div className={cn("card glass-panel border border-white/5 p-6 space-y-4 flex-[1_0_280px] transition-all", getSeverityBg(ws.avgMs))}>
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
               <Zap size={20} />
@@ -57,7 +57,7 @@ export function LatencySentinelCards({ data }) {
         </div>
 
         {/* REST LATENCY */}
-        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all", getSeverityBg(poll.avgMs))}>
+        <div className={cn("card glass-panel border border-white/5 p-6 space-y-4 flex-[1_0_280px] transition-all", getSeverityBg(poll.avgMs))}>
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
               <Server size={20} />
@@ -76,8 +76,7 @@ export function LatencySentinelCards({ data }) {
           </div>
         </div>
 
-        {/* CYCLE SPEED */}
-        <div className="card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all">
+        <div className="card glass-panel border border-white/5 p-6 space-y-4 flex-[1_0_280px]">
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
               <Timer size={20} />
@@ -96,8 +95,7 @@ export function LatencySentinelCards({ data }) {
           </div>
         </div>
 
-        {/* CACHE PERFORMANCE */}
-        <div className="card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all">
+        <div className="card glass-panel border border-white/5 p-6 space-y-4 flex-[1_0_280px]">
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-orange-500/10 text-orange-400">
               <Activity size={20} />

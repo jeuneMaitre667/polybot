@@ -19,9 +19,9 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         <ShieldAlert size={180} />
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5 gap-8 xl:gap-12 relative z-10 transition-all">
+      <div className="flex flex-wrap items-center justify-between gap-12 2xl:gap-20 relative z-10 transition-all">
         {/* TOTAL BANKROLL */}
-        <div className="flex flex-col gap-1 min-w-[320px] 2xl:col-span-2">
+        <div className="flex flex-col gap-1 flex-1 min-w-[380px] 2xl:min-w-[450px]">
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-1">
             <LayoutGrid size={14} /> Global Bankroll
           </div>
@@ -42,7 +42,7 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         </div>
 
         {/* DAILY PERFORMANCE & RISK BRAKE */}
-        <div className="lg:col-span-2 2xl:col-span-2 flex flex-col justify-center px-4 border-l border-white/5">
+        <div className="flex-[2] min-w-[450px] flex flex-col justify-center px-8 border-l border-white/5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-amber-400 font-bold whitespace-nowrap">
               <ShieldAlert size={14} /> Daily Risk Guard
@@ -68,7 +68,7 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         </div>
 
         {/* SYSTEM CONNECTIVITY */}
-        <div className="flex flex-col gap-3 justify-center border-l border-white/5 pl-8 min-w-[280px]">
+        <div className="flex-1 min-w-[300px] flex flex-col gap-3 justify-center border-l border-white/5 pl-8">
            <div className="flex items-center justify-between text-[10px] 2xl:text-[11px] uppercase tracking-widest text-green-400 font-bold mb-1">
              <div className="flex items-center gap-2">
                <Server size={14} /> System Health
