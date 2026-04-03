@@ -15,8 +15,8 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
 
   return (
     <div className="glass-panel relative border border-white/5 bg-gradient-to-br from-indigo-500/5 to-emerald-500/5 p-6 rounded-3xl overflow-hidden shadow-2xl">
-      <div className="absolute top-0 right-0 p-4 opacity-5">
-        <ShieldAlert size={120} />
+      <div className="absolute top-0 right-0 p-4 opacity-[0.03] pointer-events-none">
+        <ShieldAlert size={180} />
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8">
@@ -26,10 +26,10 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
             <LayoutGrid size={14} /> Global Bankroll
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold tracking-tight font-mono text-white">
+            <span className="text-4xl 2xl:text-6xl font-extrabold tracking-tight font-mono text-white transition-all">
               ${totalBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span>
-            <span className="text-xs opacity-40 font-mono">USD</span>
+            <span className="text-xs 2xl:text-sm opacity-40 font-mono">USD</span>
           </div>
           <div className="flex items-center gap-4 mt-2">
             <div className="flex items-center gap-1.5 text-[9px] opacity-60">
@@ -68,9 +68,11 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         </div>
 
         {/* SYSTEM CONNECTIVITY */}
-        <div className="flex flex-col gap-3 justify-center border-l border-white/5 pl-8">
-           <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-green-400 font-bold mb-1">
-             <Server size={14} /> System Health
+        <div className="flex flex-col gap-3 justify-center border-l border-white/5 pl-8 min-w-[280px]">
+           <div className="flex items-center justify-between text-[10px] 2xl:text-[11px] uppercase tracking-widest text-green-400 font-bold mb-1">
+             <div className="flex items-center gap-2">
+               <Server size={14} /> System Health
+             </div>
            </div>
            
            <div className="grid grid-cols-2 gap-4">

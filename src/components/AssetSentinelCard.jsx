@@ -38,7 +38,7 @@ export function AssetSentinelCard({ asset, data }) {
       
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-lg" style={{ backgroundColor: theme.muted, color: theme.color, border: `1px solid ${theme.color}44` }}>
+          <div className="w-12 h-12 2xl:w-16 2xl:h-16 rounded-2xl flex items-center justify-center font-black text-xl 2xl:text-3xl shadow-lg transition-all" style={{ backgroundColor: theme.muted, color: theme.color, border: `1px solid ${theme.color}44` }}>
             {asset[0]}
           </div>
           <div>
@@ -64,7 +64,7 @@ export function AssetSentinelCard({ asset, data }) {
             <TrendingUp size={14} className={cn("transition-all", Math.abs(drift) > 0.05 ? 'text-amber-400 animate-pulse' : 'opacity-20')} />
           </div>
           <div className="flex items-baseline gap-3">
-            <span className="text-3xl font-black font-mono tracking-tighter text-white">
+            <span className="text-3xl 2xl:text-5xl font-black font-mono tracking-tighter text-white transition-all">
               ${consensusPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
             <span className={cn("text-sm font-black px-2 py-0.5 rounded", drift >= 0 ? "text-green-400 bg-green-400/10" : "text-red-400 bg-red-400/10")}>

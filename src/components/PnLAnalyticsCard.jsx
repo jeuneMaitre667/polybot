@@ -14,7 +14,7 @@ export function PnLAnalyticsCard({ performance }) {
   const isProfitable = netProfit >= 0;
   
   return (
-    <div className="card bg-gradient-to-br from-slate-900/80 to-slate-800/80 border-white/5 p-6 rounded-3xl backdrop-blur-2xl relative overflow-hidden group">
+    <div className="card bg-gradient-to-br from-slate-900/80 to-slate-800/80 border-white/5 p-8 rounded-3xl backdrop-blur-2xl relative overflow-hidden group mx-auto max-w-[1720px]">
       {/* Heartbeat Badge */}
       <div className="absolute top-0 right-0 p-4">
         <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
@@ -44,10 +44,10 @@ export function PnLAnalyticsCard({ performance }) {
               {isProfitable ? <TrendingUp size={16} className="text-green-400" /> : <TrendingDown size={16} className="text-red-400" />}
             </div>
             <div className="flex items-baseline gap-2">
-              <span className={cn("text-4xl font-black font-mono tracking-tighter", isProfitable ? "text-green-400" : "text-red-400")}>
+              <span className={cn("text-4xl 2xl:text-6xl font-black font-mono tracking-tighter transition-all", isProfitable ? "text-green-400" : "text-red-400")}>
                 {isProfitable ? '+' : ''}{netProfit.toFixed(2)}
               </span>
-              <span className="text-sm font-mono text-white/20 uppercase">USDC</span>
+              <span className="text-sm 2xl:text-base font-mono text-white/20 uppercase">USDC</span>
             </div>
             <p className="text-[10px] text-white/20 mt-2 font-mono">After Polymarket Fees (0.72%)</p>
           </div>
@@ -59,10 +59,10 @@ export function PnLAnalyticsCard({ performance }) {
               <Target size={16} className="text-blue-400" />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-black font-mono tracking-tighter text-white">
+              <span className="text-4xl 2xl:text-6xl font-black font-mono tracking-tighter text-white transition-all">
                 {winRatePct}%
               </span>
-              <span className="text-sm font-mono text-white/20 uppercase">Win Rate</span>
+              <span className="text-sm 2xl:text-base font-mono text-white/20 uppercase">Win Rate</span>
             </div>
             <div className="w-full h-1.5 bg-white/5 rounded-full mt-4 overflow-hidden">
               <div 

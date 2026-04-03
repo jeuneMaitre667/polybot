@@ -62,7 +62,7 @@ export function LatencySentinelCards({ data }) {
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
               <Server size={20} />
             </div>
-            <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest">REST Poll ({data.chainlinkSources?.BTC?.rpc || 'Public'})</div>
+            <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest">REST Poll</div>
           </div>
           <div>
             <div className={cn("text-3xl font-bold font-mono tracking-tighter", getSeverityColor(poll.avgMs))}>
@@ -129,12 +129,12 @@ export function LatencySentinelCards({ data }) {
           const IconComponent = item.icon;
           const stats = breakdown.all?.[item.key] || {};
           return (
-            <div key={item.key} className="glass-panel border border-white/5 p-3 rounded-xl flex items-center justify-between hover:bg-white/5 transition-colors">
+            <div key={item.key} className="glass-panel border border-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/5 transition-all duration-300 group">
               <div className="flex items-center gap-3">
-                <div className="text-white/20"><IconComponent size={14} /></div>
-                <span className="text-[10px] font-bold text-white/60 uppercase">{item.label}</span>
+                <div className="text-white/20 group-hover:text-blue-400 transition-colors"><IconComponent size={16} /></div>
+                <span className="text-[10px] 2xl:text-[11px] font-bold text-white/60 uppercase tracking-tighter">{item.label}</span>
               </div>
-              <span className={cn("text-xs font-bold font-mono", getSeverityColor(stats.avgMs))}>
+              <span className={cn("text-xs 2xl:text-sm font-bold font-mono transition-all", getSeverityColor(stats.avgMs))}>
                 {formatMs(stats.avgMs)}
               </span>
             </div>
