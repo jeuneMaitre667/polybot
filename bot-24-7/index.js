@@ -730,7 +730,7 @@ const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
  */
 const botBudgetMode = process.env.BOT_BUDGET_MODE?.trim() || '';
 const budgetModeReserveExcessFromStart = botBudgetMode === 'reserve_excess_from_start';
-const botStartStakeUsd = Number(process.env.BOT_START_STAKE_USD) || orderSizeUsd;
+const botStartStakeUsd = Math.max(1.0, Number(process.env.BOT_START_STAKE_USD) || orderSizeUsd);
 const botReservedExtraUsdOverride = Number(process.env.BOT_RESERVED_EXTRA_USD);
 const hasBotReservedExtraUsdOverride = Number.isFinite(botReservedExtraUsdOverride) && botReservedExtraUsdOverride >= 0;
 
@@ -4594,7 +4594,7 @@ async function getTickSizeForToken(client, tokenId) {
 }
 
 /** Seuil en dessous duquel on ne place jamais (évite les ordres dust). */
-const ABSOLUTE_MIN_USD = 0.5;
+const ABSOLUTE_MIN_USD = 1.0;
 
 /**
  * Garde : mise `stakeUsd` au prix moyen `p` (0<p<1) → parts ≈ stake/p → si victoire encaissement ≈ stake/p USDC.
