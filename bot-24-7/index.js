@@ -1309,6 +1309,15 @@ function telegramStopLossAlertsEnabled() {
   return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_STOPLOSS !== 'false';
 }
 
+function getAssetBranding(asset) {
+  if (!asset) return { emoji: '🤖', label: 'Bot' };
+  const up = String(asset).toUpperCase();
+  if (up === 'BTC') return { emoji: '🟠', label: 'BTC' };
+  if (up === 'ETH') return { emoji: '🔵', label: 'ETH' };
+  if (up === 'SOL') return { emoji: '🟣', label: 'SOL' };
+  return { emoji: '💎', label: up };
+}
+
 async function notifyTelegramStopLossTriggered(p) {
   if (!telegramStopLossAlertsEnabled()) return;
   const cid = String(p?.conditionId || '').trim();
@@ -1321,8 +1330,10 @@ async function notifyTelegramStopLossTriggered(p) {
     const bestBidCents = Number.isFinite(p?.bestBidP) ? p.bestBidP * 100 : null;
     const triggerCents = Number.isFinite(p?.stopLossTriggerPriceP) ? p.stopLossTriggerPriceP * 100 : null;
     const pre = p?.simulationTrade ? '[PAPER] ' : '';
+    const brand = getAssetBranding(p?.underlying || p?.asset);
     const lines = [
-      `${pre}⚠️ Stop-loss déclenché (${reason})`,
+      `${pre}${brand.emoji} Stop-loss déclenché (${reason})`,
+      `Asset : ${brand.label}`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `entry : ${entryCents != null ? `${entryCents.toFixed(2)}¢` : '—'}`,
@@ -1347,9 +1358,10 @@ async function notifyTelegramStopLossFilled(p) {
   stopLossTelegramFilledNotified.add(cid);
 
   try {
-    const pre = p?.simulationTrade ? '[PAPER] ' : '';
+    const brand = getAssetBranding(p?.underlying || p?.asset);
     const lines = [
-      `${pre}✅ Stop-loss vente remplie`,
+      `${pre}${brand.emoji} Stop-loss vente remplie`,
+      `Asset : ${brand.label}`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `filled : ${p?.filledUsdc != null && Number.isFinite(p.filledUsdc) ? p.filledUsdc.toFixed(2) : '?'} USDC`,
@@ -1369,9 +1381,10 @@ async function notifyTelegramStopLossExitFailed(p) {
   if (!cid || stopLossTelegramExitFailedNotified.has(cid)) return;
   stopLossTelegramExitFailedNotified.add(cid);
   try {
-    const pre = p?.simulationTrade ? '[PAPER] ' : '';
+    const brand = getAssetBranding(p?.underlying || p?.asset);
     const lines = [
-      `${pre}❌ Stop-loss déclenché mais vente refusée`,
+      `${pre}${brand.emoji} Stop-loss automatique refusé`,
+      `Asset : ${brand.label}`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       p?.errorHint ? `raison : ${String(p.errorHint).slice(0, 180)}` : '',
@@ -1391,9 +1404,11 @@ async function notifyTelegramStopLossEscalation(p) {
   if (!cid || stopLossTelegramEscalatedNotified.has(cid)) return;
   stopLossTelegramEscalatedNotified.add(cid);
   try {
+    const brand = getAssetBranding(p?.underlying || p?.asset);
     const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `${pre}🚨 Escalade SL: position non clôturée`,
+      `${pre}🚨 ${brand.emoji} Escalade SL: position non clôturée`,
+      `Asset : ${brand.label}`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       Number.isFinite(p?.openSinceMs) ? `ouvert depuis : ${Math.round(Number(p.openSinceMs) / 1000)}s` : '',
@@ -2596,6 +2611,7 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       tokenId &&
       typeof tokenId === 'string';
 
+    const brand = getAssetBranding(orderData?.asset || orderData?.underlying);
     let mtmLine = '';
     if (hasFilled) {
       const bid = await getBestBid(tokenId);
@@ -2625,12 +2641,12 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       Number.isFinite(totalLatencyMs) && totalLatencyMs > 0 && Number.isFinite(placeOrderMs) && placeOrderMs >= 0
         ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
         : null;
-    const assetLabel = orderData?.underlying || orderData?.asset || 'Unknown';
+    const assetLabel = brand.label;
     const paperPre = orderData?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
       hasFilled
-        ? `${paperPre}✅ [${assetLabel}] Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`
-        : `${paperPre}⚠️ [${assetLabel}] Trade accepté (remplissage immédiat nul)`,
+        ? `${paperPre}${brand.emoji} Trade Success (${brand.label})`
+        : `${paperPre}⚠️ [${assetLabel}] Trade accepté (remplissage nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
       `Montant demandé : ${amtStr} USDC`,
       `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
