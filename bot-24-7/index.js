@@ -5221,7 +5221,77 @@ async function tryPlaceOrderForSignal(signal) {
       writeHealth({ staleWsData: false });
     }
 
-    // --- QUANT UPDATE v3.9.0 (VWAP & Fees) --- (v7.12.0 Fix: Moved out of the stale-check block)
+    // --- SIZING & RISK MANAGEMENT v7.13.6 (Hoisted to fix ReferenceError) ---
+    const balanceForSizing =
+      budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
+    
+    let amountUsd = orderSizeUsd;
+    if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
+        const tokenPrice = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
+        const activePositions = readActivePositions();
+        const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+        const availableCapital = Math.max(0, balanceForSizing - lockedCapital);
+        
+        amountUsd = calculateKellyStake(signal.netGap, tokenPrice, availableCapital, signal.ofiScore || 0, signal.takeSide);
+    } else {
+        amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
+    }
+
+    const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+    if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+      amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+    }
+
+    if (signal.asset === 'SOL') {
+       amountUsd *= 0.5;
+       console.log(`[Risk] 📉 SOL detected. Reducing stake to ${(amountUsd).toFixed(2)} USDC (0.5x)`);
+    }
+
+    let allowBelowMin = false;
+    let cappedBy = false;
+    if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
+      amountUsd = liquidity;
+      cappedBy = true;
+    }
+    if (useAvgPriceSizing && maxUsdAvg != null && maxUsdAvg > 0 && amountUsd > maxUsdAvg) {
+      amountUsd = maxUsdAvg;
+      cappedBy = true;
+    }
+
+    // --- Safety 3.0 WS : Drift, Circuit Breaker et Corrélation ---
+    const clData = await getChainlinkPrice(signal.asset || 'BTC');
+    if (clData?.price) lagRecorder.onChainlinkUpdate(signal.asset || 'BTC', clData.price);
+    const chainlinkSpotPrice = clData.price;
+    const currentPrice = calculateConsensusPrice(signal.asset || 'BTC');
+    const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, chainlinkSpotPrice || currentPrice);
+    if (!safety.ok) {
+       recordSkipReason('safety_trigger', 'ws', { conditionId: key, reason: safety.reason });
+       logSignalInRangeButNoOrder('ws', 'safety_trigger', signal, { reason: safety.reason });
+       placedKeys.delete(key);
+       return;
+    }
+
+    // v7.9.1: Surgical Exposure Check
+    const activePositionsLog = readActivePositions(); 
+    const assetPositions = activePositionsLog.filter(p => !p.resolved && (p.underlying === signal.asset || p.asset === signal.asset));
+    const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
+
+    if (assetPositions.length >= assetLimit) {
+       recordSkipReason('max_exposure_reached', 'ws', { conditionId: key, asset: signal.asset });
+       logSignalInRangeButNoOrder('ws', 'max_exposure_reached', signal, { activeAssetCount: assetPositions.length, limit: assetLimit });
+       placedKeys.delete(key);
+       return;
+    }
+    amountUsd = applyMaxStakeUsd(amountUsd);
+    const degradedNow = inPolymarketDegradedMode();
+    if (degradedNow && incidentBehavior === 'pause') {
+      amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
+      allowBelowMin = true;
+    }
+    if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
+    if (hasMaxStakeUsd && amountUsd === maxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
+
+    // --- QUANT UPDATE v3.9.0 (VWAP & Fees) ---
     const POLYMARKET_TAKER_FEE = 0.005; // 0.5% buffer
     const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
     
