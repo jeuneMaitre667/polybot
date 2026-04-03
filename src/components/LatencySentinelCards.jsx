@@ -35,9 +35,9 @@ export function LatencySentinelCards({ data }) {
         <div className="h-[1px] flex-1 bg-gradient-to-r from-white/10 to-transparent" />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4 gap-6">
         {/* WS LATENCY */}
-        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4", getSeverityBg(ws.avgMs))}>
+        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all", getSeverityBg(ws.avgMs))}>
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
               <Zap size={20} />
@@ -57,7 +57,7 @@ export function LatencySentinelCards({ data }) {
         </div>
 
         {/* REST LATENCY */}
-        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4", getSeverityBg(poll.avgMs))}>
+        <div className={cn("card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all", getSeverityBg(poll.avgMs))}>
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
               <Server size={20} />
@@ -77,7 +77,7 @@ export function LatencySentinelCards({ data }) {
         </div>
 
         {/* CYCLE SPEED */}
-        <div className="card glass-panel border border-white/5 p-5 space-y-4">
+        <div className="card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all">
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
               <Timer size={20} />
@@ -97,7 +97,7 @@ export function LatencySentinelCards({ data }) {
         </div>
 
         {/* CACHE PERFORMANCE */}
-        <div className="card glass-panel border border-white/5 p-5 space-y-4">
+        <div className="card glass-panel border border-white/5 p-5 space-y-4 min-w-[240px] flex-shrink-0 transition-all">
           <div className="flex justify-between items-start">
             <div className="p-2 rounded-lg bg-orange-500/10 text-orange-400">
               <Activity size={20} />
@@ -118,7 +118,7 @@ export function LatencySentinelCards({ data }) {
       </div>
 
       {/* DETAILED BREAKDOWN GRID */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="flex flex-wrap gap-4 items-center justify-start lg:justify-between">
         {[
           { label: 'Best Ask', key: 'bestAsk', icon: Target },
           { label: 'Creds', key: 'creds', icon: ShieldCheck },
@@ -129,7 +129,7 @@ export function LatencySentinelCards({ data }) {
           const IconComponent = item.icon;
           const stats = breakdown.all?.[item.key] || {};
           return (
-            <div key={item.key} className="glass-panel border border-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/5 transition-all duration-300 group">
+            <div key={item.key} className="glass-panel border border-white/5 px-4 py-3 rounded-xl flex items-center gap-6 hover:bg-white/5 transition-all duration-300 group min-w-[160px]">
               <div className="flex items-center gap-3">
                 <div className="text-white/20 group-hover:text-blue-400 transition-colors"><IconComponent size={16} /></div>
                 <span className="text-[10px] 2xl:text-[11px] font-bold text-white/60 uppercase tracking-tighter">{item.label}</span>

@@ -19,9 +19,9 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         <ShieldAlert size={180} />
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5 gap-8 xl:gap-12 relative z-10 transition-all">
         {/* TOTAL BANKROLL */}
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 min-w-[320px] 2xl:col-span-2">
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-1">
             <LayoutGrid size={14} /> Global Bankroll
           </div>
@@ -42,9 +42,9 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
         </div>
 
         {/* DAILY PERFORMANCE & RISK BRAKE */}
-        <div className="lg:col-span-2 flex flex-col justify-center">
+        <div className="lg:col-span-2 2xl:col-span-2 flex flex-col justify-center px-4 border-l border-white/5">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-amber-400 font-bold">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-amber-400 font-bold whitespace-nowrap">
               <ShieldAlert size={14} /> Daily Risk Guard
             </div>
             <div className="flex items-center gap-2 text-[10px] font-mono opacity-60 uppercase tracking-tighter">
