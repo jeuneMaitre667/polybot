@@ -26,8 +26,13 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
+import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
 import WebSocket from 'ws';
 import axios from 'axios';
+
+// --- v7.0.0 Globals ---
+export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
+export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
 
 // --- Smart Rate Limiter / Cloudflare (Blindage 2026) ---
 function updateRateLimitFromHeaders(headers) {
@@ -139,6 +144,9 @@ const perpState = new Map([
   ['ETH', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
   ['SOL', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
 ]);
+
+const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
+const ACTIVE_REDEMPTIONS = new Set();
 
 let binanceBtcPrice = 0; // Legacy global (v5.4.1: will be prioritized by current asset in perpState)
 let binanceLastUpdateMs = 0;
@@ -515,6 +523,8 @@ function writeHealth(updates) {
         tradeCount: 0,
         updatedAt: new Date().toISOString()
       },
+      openLimitOrders: OPEN_LIMIT_ORDERS.size,
+      executionMode: ORDER_EXECUTION_TYPE
     };
 
     // 3. Écriture atomique
@@ -1750,6 +1760,103 @@ function purgeExpiredPreSignCache() {
  */
 async function createSignedMarketOrder(client, userMarketOrder) {
   return client.createMarketOrder(userMarketOrder, { negRisk: false });
+}
+
+async function createSignedLimitOrder(client, userLimitOrder) {
+  return client.createLimitOrder(userLimitOrder, { negRisk: false });
+}
+
+/**
+ * Place a LIMIT order as a Maker.
+ * v7.0.0 Pivot.
+ */
+async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
+  const asset = signal.underlying || signal.asset || 'BTC';
+  const tokenId = signal.tokenIdToBuy;
+  
+  try {
+    // 1. Get Order Book
+    const book = await clobClient.getOrderBook(tokenId);
+    const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
+    const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 1;
+    
+    // 2. Calculate Maker Price (Best Bid + 0.001)
+    const limitPrice = calculateMakerPrice('Buy', bestBid, bestAsk);
+    
+    // 3. Round amount to 0.1 tokens (Polymarket min)
+    const rawTokens = amountUsd / limitPrice;
+    const tokens = Math.floor(rawTokens * 10) / 10;
+    
+    console.log(`[${asset}] [DEBUG] Limit Order Calculation: $${amountUsd} / ${limitPrice} = ${tokens} tokens (raw: ${rawTokens.toFixed(4)})`);
+
+    if (tokens < 0.1 || !Number.isFinite(tokens)) return { ok: false, error: 'Amount too low or invalid for limit order' };
+
+    const userLimitOrder = {
+      tokenId,
+      price: limitPrice,
+      side: Side.BUY,
+      size: tokens,
+      feeRateBps: 0, // Maker is zero
+    };
+
+    const signedOrder = await createSignedLimitOrder(clobClient, userLimitOrder);
+    const result = await clobClient.postOrder(signedOrder, OrderType.GTC);
+
+    if (result.success && result.orderID) {
+      OPEN_LIMIT_ORDERS.set(signal.conditionId, {
+        orderId: result.orderID,
+        at: Date.now(),
+        price: limitPrice,
+        asset,
+        tokenId
+      });
+      return { ok: true, orderId: result.orderID, price: limitPrice, filledUsd: 0 }; // Maker is not filled yet
+    }
+    
+    return { ok: false, error: result.errorMsg || 'Clob post failed' };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Monitor and cancel stale limit orders (v7.0.0).
+ * Runs at the end of each cycle.
+ */
+async function checkAndCancelStaleOrders(clobClient) {
+  if (!clobClient || OPEN_LIMIT_ORDERS.size === 0) return;
+
+  const now = Date.now();
+  for (const [condId, data] of OPEN_LIMIT_ORDERS.entries()) {
+    const ageMs = now - data.at;
+    
+    // 1. Time-based Expiration (TTL)
+    if (ageMs > LIMIT_ORDER_TTL_MS) {
+      console.log(`[${data.asset}] 🕒 Cancel stale LIMIT order ${data.orderId} (Age: ${Math.round(ageMs/1000)}s)`);
+      try {
+        await clobClient.cancelOrder(data.orderId);
+        OPEN_LIMIT_ORDERS.delete(condId);
+      } catch (err) {
+        warnClobClientIfThrottled(`Error cancelling order ${data.orderId}: ${err.message}`);
+      }
+      continue;
+    }
+
+    // 2. Market-based Stale (Price moved too far)
+    try {
+        const book = await clobClient.getOrderBook(data.tokenId);
+        const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
+        const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 1;
+        
+        if (isOrderStale(data.price, bestBid, bestAsk, 0.005)) {
+            console.log(`[${data.asset}] 📉 Market move: Cancel stale LIMIT order ${data.orderId}`);
+            await clobClient.cancelOrder(data.orderId);
+            OPEN_LIMIT_ORDERS.delete(condId);
+        }
+    } catch (err) {
+        // Silent fail on book fetch
+    }
+  }
 }
 
 /** Taille max du JSON `clobResponse` dans last-order / orders.log (évite fichiers énormes). */
@@ -5853,7 +5960,10 @@ async function run() {
 
           // --- PROFITABILITY FILTER (v6.3.5) ---
           // Skip if edge < 1.0% (covers 0.72% fee + slippage)
-          if (signalEdge < 0.01) continue;
+          if (signalEdge < 0.01) {
+            if (Date.now() % 10 === 0) console.log(`[${asset}] 🛡️ Skip: Edge ${ (signalEdge * 100).toFixed(2) }% < 1% threshold`);
+            continue;
+          }
 
           // Safety Checks (Multi-Asset)
           const clDataMain = await getChainlinkPrice(asset);
@@ -5871,7 +5981,11 @@ async function run() {
             result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: pickSignalBestAskP(s), conditionId: key });
             if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
           } else {
-            result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, { allowBelowMin: true });
+            if (ORDER_EXECUTION_TYPE === 'LIMIT') {
+              result = await placeLimitOrderAtOptimalPrice(s, amountUsd, clobClient);
+            } else {
+              result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, { allowBelowMin: true });
+            }
           }
           timingsMs.placeOrder = Date.now() - tPlace0;
 
@@ -5908,6 +6022,7 @@ async function run() {
 
     // Post-cycle cleanup
     await profiler.measure('redeem_global', () => tryRedeemResolvedPositions());
+    await profiler.measure('stale_orders_v7', () => checkAndCancelStaleOrders(clobClient));
     await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
 
     async function getBalance() {

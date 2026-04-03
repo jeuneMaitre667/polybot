@@ -139,6 +139,25 @@ export function BotOverview() {
 
   return (
     <div className="layout app-root space-y-12">
+      {/* EXECUTION HUD (v7.0.0) */}
+      <div className="flex items-center justify-between gap-6 px-4 py-2 bg-white/5 border-b border-white/10 backdrop-blur-xl">
+        <div className="flex items-center gap-4">
+          <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-tighter border ${data15m?.executionMode === 'LIMIT' ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400' : 'bg-amber-500/20 border-amber-500/40 text-amber-400'}`}>
+            MODE: {data15m?.executionMode || 'TAKER'}
+          </div>
+          <div className="h-4 w-[1px] bg-white/10" />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/40 uppercase font-medium">Open Makers</span>
+            <span className="text-sm font-mono font-bold text-white/90">{data15m?.openLimitOrders || 0}</span>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+          <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest">Live Engine</span>
+        </div>
+      </div>
+
       {/* SYSTEM STALL ALERT (v6.3.4) */}
       {isStale && (
         <div className="bg-red-500/20 border border-red-500/40 p-4 rounded-2xl flex items-center justify-center gap-4 animate-pulse">
