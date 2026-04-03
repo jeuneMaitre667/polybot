@@ -298,6 +298,32 @@ const wsLatencyHistory = [];
 const pollLatencyHistory = [];
 const LATENCY_HISTORY_MAX_SAMPLES = 100;
 
+// v6.3.0 : Self-Healing Watchdog
+let lastHeartbeatMs = Date.now();
+const WATCHDOG_STALL_THRESHOLD_MS = 60_000;
+
+function checkHeartbeat() {
+  const delta = Date.now() - lastHeartbeatMs;
+  if (delta > WATCHDOG_STALL_THRESHOLD_MS) {
+    console.error(`[WATCHDOG] 🚨 ENGINE STALL DETECTED! Delta=${Math.round(delta)}ms. Terminating for PM2 restart...`);
+    // On force la sortie pour que PM2 relance proprement
+    process.exit(1);
+  }
+}
+// Surveillance toutes les 15s
+setInterval(checkHeartbeat, 15_000);
+
+// v6.3.0 : PnL & Performance Cache
+let cachedPerformanceStats = null;
+async function refreshPerformanceStats() {
+  const stats = await calculateSessionStats();
+  if (stats) cachedPerformanceStats = stats;
+}
+// Rafraîchissement toutes les 60s
+setInterval(refreshPerformanceStats, 60_000);
+// Premier appel immédiat
+setTimeout(refreshPerformanceStats, 2000);
+
 function addLatencyHistorySample(type, ms) {
   if (!Number.isFinite(ms) || ms < 0) return;
   const target = type === 'ws' ? wsLatencyHistory : pollLatencyHistory;
@@ -481,6 +507,13 @@ function writeHealth(updates) {
       latencyHistory: {
         ws: wsLatencyHistory,
         poll: pollLatencyHistory
+      },
+      performance: cachedPerformanceStats || {
+        totalVolume: 0,
+        netProfit: 0,
+        winRatePct: 0,
+        tradeCount: 0,
+        updatedAt: new Date().toISOString()
       },
     };
 
@@ -6182,6 +6215,52 @@ function calculatePolymarketTakerFee(price) {
   const basePct = POLYMARKET_FEE_RATE * (1 - price);
   return basePct * FEE_SAFETY_BUFFER;
 }
+/**
+ * v6.3.0 : Analyseur de Performance PnL
+ * Scanne les 500 derniers ordres pour calculer les stats de session.
+ */
+async function calculateSessionStats() {
+  try {
+    if (!fs.existsSync(ORDERS_LOG_FILE)) return null;
+    const lines = fs.readFileSync(ORDERS_LOG_FILE, 'utf8').split('\n').filter(l => l.trim() !== '');
+    const lastLines = lines.slice(-500);
+    
+    let totalVolume = 0;
+    let netProfit = 0;
+    let trades = 0;
+    let wins = 0;
+
+    for (const line of lastLines) {
+      try {
+        const o = JSON.parse(line);
+        if (!o.filledUsdc) continue;
+        
+        trades++;
+        const stake = Number(o.filledUsdc);
+        totalVolume += stake;
+        
+        // Si c'est une sortie (exit/sold), on calcule le profit
+        if (o.message?.includes('sold') || o.message?.includes('Take-profit') || o.message?.includes('Stop-loss')) {
+          const revenue = Number(o.revenue || o.filledUsdc);
+          const profit = revenue - Number(o.originalStakeUsd || stake);
+          netProfit += profit;
+          if (profit > 0) wins++;
+        }
+      } catch (err) { /* ignore malformed lines */ }
+    }
+
+    return {
+      totalVolume: Math.round(totalVolume),
+      netProfit: Number(netProfit.toFixed(2)),
+      winRatePct: trades > 0 ? Math.round((wins / trades) * 100) : 0,
+      tradeCount: trades,
+      updatedAt: new Date().toISOString()
+    };
+  } catch (err) {
+    console.error('[PnL] Error calculating stats:', err.message);
+    return null;
+  }
+}
 
 /**
  * Calcule le seuil GAP adaptatif selon la volatilité actuelle.
@@ -6415,6 +6494,7 @@ async function main() {
   }
   for (;;) {
     try {
+      lastHeartbeatMs = Date.now(); // Mise à jour watchdog
       await run();
     } catch (err) {
       logJson('error', 'Erreur boucle', { error: err.message });

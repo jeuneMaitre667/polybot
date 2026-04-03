@@ -11,6 +11,7 @@ import LatencyTimelineChart from './LatencyTimelineChart';
 import ExposureHeatmap from './ExposureHeatmap';
 import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
 import { useWallet } from '@/context/useWallet.js';
+import { PnLAnalyticsCard } from './PnLAnalyticsCard';
 
 
 
@@ -139,6 +140,11 @@ export function BotOverview() {
             <ExposureHeatmap data={data15m} />
           </div>
         </div>
+      </section>
+
+      {/* SECTION 1.5: OPERATIONAL ANALYTICS (PnL & WATCHDOG) */}
+      <section className="animate-in fade-in slide-in-from-top-4 duration-1000 delay-150">
+        <PnLAnalyticsCard performance={data15m?.performance} />
       </section>
 
       {/* SECTION 2: MARKET SENTINEL GRID */}
