@@ -5254,7 +5254,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
   if (vwapPrice == null) return;
 
-  const asset = signal.asset || 'BTC';
   const spotPrice = calculateConsensusPrice(asset);
   const strikePrice = Number(signal.strike);
 
