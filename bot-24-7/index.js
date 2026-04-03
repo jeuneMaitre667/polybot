@@ -5095,18 +5095,19 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 /** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
-async function tryPlaceOrderForSignal(signal) {
+async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (!signal?.tokenIdToBuy) return;
   const key = getSignalKey(signal);
 
   // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
-  const ofiMultiplier = getOfiThresholdMultiplier(signal.asset || 'BTC', signal.ofiScore || 0, signal.takeSide);
+  const asset = signal.asset || 'BTC';
+  const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
   const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
 
   // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
   logDecision({
     at: new Date().toISOString(),
-    source: 'ws',
+    source,
     asset: signal.asset || 'BTC',
     slug: signal.slug || signal.eventSlug,
     side: signal.takeSide,
@@ -5120,19 +5121,19 @@ async function tryPlaceOrderForSignal(signal) {
 
   if (shouldSkipTradeTiming(signal)) {
     const timingDetails = getTimingForbiddenDetails();
-    recordSkipReason('timing_forbidden', 'ws', {
+    recordSkipReason('timing_forbidden', source, {
       conditionId: key,
       tokenId: signal.tokenIdToBuy,
       takeSide: signal.takeSide,
       bestAskP: pickSignalBestAskP(signal),
       ...timingDetails,
     });
-    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, { ...timingDetails });
+    logSignalInRangeButNoOrder(source, 'timing_forbidden', signal, { ...timingDetails });
     return;
   }
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
     const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
-    logSignalInRangeButNoOrder('ws', r, signal, {});
+    logSignalInRangeButNoOrder(source, r, signal, {});
     return;
   }
 
@@ -5146,20 +5147,20 @@ async function tryPlaceOrderForSignal(signal) {
       correlatedGroup.includes(p.asset) && (p.marketEndMs ? p.marketEndMs > now : true)
     ).length;
     if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
-        console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — skip.`);
-        recordSkipReason('correlation_limit', 'ws', { asset: signal.asset, activeCorrelated });
+        console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — [${source}] skip.`);
+        recordSkipReason('correlation_limit', source, { asset: signal.asset, activeCorrelated });
         return;
     }
   }
 
   const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
   if (cooldownRemainingMs > 0 && !(signal.edge > 0.35)) {
-    recordSkipReason('cooldown_active', 'ws', { conditionId: key, remainingMs: cooldownRemainingMs });
+    recordSkipReason('cooldown_active', source, { conditionId: key, remainingMs: cooldownRemainingMs });
     return;
   }
 
   if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
-    recordSkipReason('degraded_mode_pause', 'ws', { conditionId: key });
+    recordSkipReason('degraded_mode_pause', source, { conditionId: key });
     return;
   }
 
@@ -5253,7 +5254,6 @@ async function tryPlaceOrderForSignal(signal) {
   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
   if (vwapPrice == null) return;
 
-  const asset = signal.asset || 'BTC';
   const spotPrice = calculateConsensusPrice(asset);
   const strikePrice = signal.strike;
   const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
@@ -5272,7 +5272,21 @@ async function tryPlaceOrderForSignal(signal) {
   }
 
   if (netEdge < adjustedThreshold) {
-    recordSkipReason('insufficient_net_edge', 'ws', { netEdge, threshold: adjustedThreshold });
+    // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
+    logDecision({
+        at: new Date().toISOString(),
+        source,
+        asset,
+        slug: signal.slug || signal.eventSlug,
+        side: signal.takeSide,
+        prob: probFairLive,
+        ask: vwapPrice,
+        edge: Number(netEdge.toFixed(4)),
+        strike: signal.strike,
+        ofi: signal.ofiScore || 0,
+        adjThreshold: Number(adjustedThreshold.toFixed(4))
+    });
+    recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
     return;
   }
 
@@ -5311,10 +5325,14 @@ async function tryPlaceOrderForSignal(signal) {
     writeActivePositions(activePositions.slice(-50));
     writeLastOrder(orderData);
     appendOrderLog(orderData);
-    void notifyTelegramTradeSuccess('ws', orderData, simulationTradeEnabled ? null : clobClient);
-      (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+    void notifyTelegramTradeSuccess(source, orderData, simulationTradeEnabled ? null : clobClient);
+    
+    const retryInfo = (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+    const fillConsole = formatFillConsoleSuffix(result);
+    const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+
     console.log(
-      `[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
+      `[${time}] [${source.toUpperCase()}] Ordre placé ${brandEmoji(signal.asset)} ${signal.asset} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(orderData.latencyMs)} ms)${cacheHitInfo}`
     );
   } else {
     const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
@@ -5323,13 +5341,13 @@ async function tryPlaceOrderForSignal(signal) {
       setExecutionCooldown(key, result.error);
       notePolymarketIncidentError('ws_order_failure', result.error);
     }
-    logSignalInRangeButNoOrder('ws', 'place_order_failed', signal, {
+    logSignalInRangeButNoOrder(source, 'place_order_failed', signal, {
       bestAskP: bestAskLive,
       amountUsd: Math.round(amountUsd * 100) / 100,
       error: String(result?.error || '').slice(0, 240),
     });
-    logJson('error', 'Erreur ordre WS', { takeSide: signal.takeSide, error: result.error });
-    console.error(`[${time}] [WS] Erreur ${signal.takeSide}: ${result.error}`);
+    logJson('error', `Erreur ordre ${source.toUpperCase()}`, { takeSide: signal.takeSide, error: result.error });
+    console.error(`[${time}] [${source.toUpperCase()}] Erreur ${signal.takeSide}: ${result.error}`);
   }
 }
 
@@ -5591,24 +5609,17 @@ async function run() {
   let clobClient = null;
 
   try {
-    // Fast-path sécurité: évaluer le SL avant le gros bloc fetchSignals.
     clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
-    
-    // v7.7.0: Global Infrastructure Checks (Once per cycle)
     const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
-    
-    // v7.6.0: Fetch Total Equity for PnL (v7.9.1 Fix: Use global balance)
     let totalUsd = balance;
     try { totalUsd = await calculateTotalValue(clobClient); } catch(_) {}
-    if (totalUsd === 0) totalUsd = balance; // Fallback to balance if PnL engine fails
+    if (totalUsd === 0) totalUsd = balance;
 
-    // v7.7.0: Gas Monitor (POL/MATIC)
     let gasBalance = null;
     try { gasBalance = await checkNativeGasBalance(clobClient); } catch(_) {}
 
-    // v7.7.0: Auto-Redeem (Periodic 12h)
     const lastRedeem = currentHealthState?.lastRedeemAt ? new Date(currentHealthState.lastRedeemAt).getTime() : 0;
-    if (Date.now() - lastRedeem > 43200000) { // 12 hours
+    if (Date.now() - lastRedeem > 43200000) {
         await runAutoRedeem(clobClient);
         writeHealth({ lastRedeemAt: new Date().toISOString() });
     }
@@ -5620,189 +5631,37 @@ async function run() {
       activeConditions: OPEN_LIMIT_ORDERS.size
     }, { totalUsd });
 
+    let totalSignalsCount = 0;
     for (const asset of SUPPORTED_ASSETS) {
       const res = await profiler.measure(`fetchSignals_${asset}`, () => 
-        fetchSignals(asset, { 
-          MARKET_MODE, 
-          getCurrent15mEventSlug, 
-          getCurrentHourlyEventSlug, 
-          FETCH_SIGNALS_CACHE_MS 
-        })
+        fetchSignals(asset, { MARKET_MODE, getCurrent15mEventSlug, getCurrentHourlyEventSlug, FETCH_SIGNALS_CACHE_MS })
       );
       
       const signals = res.signals || [];
+      totalSignalsCount += signals.length;
       const slug = res.slug;
       const hasEvent = res.hasEvent;
 
-      // Priorité 1 : Capture Strike T-Zéro pour Health.json (Isolé)
       if (hasEvent && slug) {
         const state = getAssetState(asset);
-        // Si le slot a changé ou si null, on capture
         if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
            state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, slug);
         }
       }
-      const fetchProfile = res._fetchSignalsProfile ?? null;
-      const signalsCount = signals.length;
       
-      if (signalsCount === 0) {
-        appendSignalDecisionLatencyHistory({
-          source: 'poll',
-          asset,
-          decisionMs: Date.now() - cycleStartMs,
-          reason: 'no_signal',
-          mode: MARKET_MODE,
-          fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
-        });
-        continue;
-      }
+      if (signals.length === 0) continue;
 
-      // Redeem avant le garde-fou place_orders : doit tourner même si AUTO_PLACE_ENABLED=false ou kill switch
       await profiler.measure(`redeem_${asset}`, () => trySimulationPaperRedeem(asset));
 
       if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) continue;
 
-      // Logic for placing orders (v5.4.0)
       await profiler.measure(`place_orders_${asset}`, async () => {
         for (const s of signals) {
-          if (!s.tokenIdToBuy) continue;
-          const key = getSignalKey(s);
-
-          // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
-          const assetOfi = (() => {
-            let total = 0; let count = 0;
-            for (const [tid, o] of ofiState.entries()) {
-              const sig = wsState.tokenToSignal.get(tid);
-              if (sig && sig.asset === asset) {
-                total += (sig.takeSide === 'Up' ? o.ofi : -o.ofi);
-                count++;
-              }
-            }
-            return count > 0 ? total / count : 0;
-          })();
-          const ofiMultiplier = getOfiThresholdMultiplier(asset, assetOfi, s.takeSide);
-          const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
-
-          const signalEdge = s.netGap || s.edge || 0;
-          const tokenPrice = pickSignalBestAskP(s);
-          if (!tokenPrice || tokenPrice <= 0 || tokenPrice >= 1) continue;
-
-          const entrySpotPrice = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
-
-          // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
-          logDecision({
-            at: new Date().toISOString(),
-            source: 'poll',
-            asset,
-            slug: s.slug || s.eventSlug,
-            side: s.takeSide,
-            prob: s.probFairAtEntry,
-            ask: pickSignalBestAskP(s),
-            edge: signalEdge,
-            strike: s.strike,
-            ofi: assetOfi,
-            adjThreshold: Number(adjustedThreshold.toFixed(4))
-          });
-
-          if (getExecutionCooldownRemainingMs(key) > 0) continue;
-          if (placedKeys.has(key)) continue;
-
-          const t0 = Date.now();
-          const timingsMs = { bestAsk: 1, creds: clobClient ? 1 : null, balance: null, book: null, placeOrder: null };
-
-          if (shouldSkipTradeTiming(s)) continue;
-
-          // v5.8.1 Fix: Fetch balance before Kelly sizing
-          const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
-
-          // v7.12.0: Define availableCapital for Kelly logic
-          const activePositions = readActivePositions();
-          const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-          const availableCapital = Math.max(0, (balance || 0) - lockedCapital);
-
-          // --- DYNAMIC STAKE INTEGRATION ---
-          let amountUsd = orderSizeUsd;
-          try {
-            if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
-                amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
-                // --- HARD CAP MIN STAKE (v6.3.5) ---
-                if (amountUsd > 0 && amountUsd < 0.1) amountUsd = 0.1; 
-            } else if (s.optimalStake != null && s.optimalStake > 0) {
-                amountUsd = s.optimalStake;
-            } else if (useBalanceAsSize || simulationTradeEnabled) {
-                amountUsd = balance != null ? balance : orderSizeUsd;
-            }
-            // Final check: Never below 0.1 and MUST be finite
-            if (!Number.isFinite(amountUsd)) amountUsd = 0;
-            if (amountUsd > 0 && amountUsd < 0.1) amountUsd = 0.1;
-          } catch (err) {
-            console.error(`[Error] [${asset}] Erreur calcul Kelly: ${err.message}`);
-            amountUsd = 0.1; // Fallback safe
-          }
-
-          // --- PROFITABILITY FILTER (v6.3.5) ---
-          // Skip if edge < 1.0% (covers 0.72% fee + slippage)
-          if (signalEdge < 0.01) {
-            if (Date.now() % 10 === 0) console.log(`[${asset}] 🛡️ Skip: Edge ${ (signalEdge * 100).toFixed(2) }% < 1% threshold`);
-            continue;
-          }
-
-          // Safety Checks (Multi-Asset)
-          const clDataMain = await getChainlinkPrice(asset);
-          if (clDataMain?.price) lagRecorder.onChainlinkUpdate(asset, clDataMain.price);
-          const safety = isTradeAllowedBySafety(asset, s.strike, clDataMain.price || calculateConsensusPrice(asset));
-          if (!safety.ok) {
-             console.log(`[${asset}] 🛡️ Skip ${s.takeSide}: ${safety.reason}`);
-             continue;
-          }
-
-          placedKeys.add(key);
-          const tPlace0 = Date.now();
-          let result;
-          if (simulationTradeEnabled) {
-            result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: pickSignalBestAskP(s), conditionId: key });
-            if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
-          } else {
-            if (ORDER_EXECUTION_TYPE === 'LIMIT') {
-              result = await placeLimitOrderAtOptimalPrice(s, amountUsd, clobClient);
-            } else {
-              result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, { allowBelowMin: true });
-            }
-          }
-          timingsMs.placeOrder = Date.now() - tPlace0;
-
-          if (result.ok) {
-            const latencyMs = Date.now() - t0;
-            const activePositions = readActivePositions();
-            const orderData = {
-              at: new Date().toISOString(),
-              takeSide: s.takeSide,
-              amountUsd,
-              conditionId: key,
-              tokenId: s.tokenIdToBuy ?? null,
-              latencyMs,
-              underlying: asset,
-              resolved: false,
-              strike: s.strike,
-              edge: signalEdge || 0.05,
-              spotAtEntry: entrySpotPrice,
-              entryTime: new Date().toISOString(),
-              ofiScore: s.ofiScore ?? 0
-            };
-            activePositions.push(orderData);
-            writeActivePositions(activePositions.slice(-100));
-            writeLastOrder(orderData);
-            appendOrderLog(orderData);
-            console.log(`[${asset}] ✅ Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC (latence ~${Math.round(latencyMs)} ms)`);
-          } else {
-            placedKeys.delete(key);
-            console.error(`[${asset}] ❌ Erreur ordre: ${result.error}`);
-          }
+          await tryPlaceOrderForSignal(s, 'poll');
         }
       });
     }
 
-    // Post-cycle cleanup
     await profiler.measure('redeem_global', () => tryRedeemResolvedPositions());
     await profiler.measure('stale_orders_v7', () => checkAndCancelStaleOrders(clobClient));
 
