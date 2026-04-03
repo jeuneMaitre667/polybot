@@ -5800,6 +5800,9 @@ async function run() {
           const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
 
           const signalEdge = s.netGap || s.edge || 0;
+          const tokenPrice = pickSignalBestAskP(s);
+          if (!tokenPrice || tokenPrice <= 0 || tokenPrice >= 1) continue;
+
           const entrySpotPrice = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
 
           // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
@@ -5832,10 +5835,6 @@ async function run() {
           let amountUsd = orderSizeUsd;
           try {
             if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
-                const tokenPrice = pickSignalBestAskP(s);
-                const activePositions = readActivePositions();
-                const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-                const availableCapital = Math.max(0, balance - lockedCapital);
                 amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
                 // --- HARD CAP MIN STAKE (v6.3.5) ---
                 if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0; 
@@ -5844,7 +5843,8 @@ async function run() {
             } else if (useBalanceAsSize || simulationTradeEnabled) {
                 amountUsd = balance != null ? balance : orderSizeUsd;
             }
-            // Final check: Never below 1.0
+            // Final check: Never below 1.0 and MUST be finite
+            if (!Number.isFinite(amountUsd)) amountUsd = 0;
             if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0;
           } catch (err) {
             console.error(`[Error] [${asset}] Erreur calcul Kelly: ${err.message}`);
@@ -6286,10 +6286,12 @@ function getAdaptiveThreshold(vol, baseThreshold = ARBITRAGE_GAP_THRESHOLD) {
  * f* = (edge / odds) * fraction (dynamique via OFI)
  */
 function calculateKellyStake(netGap, tokenPrice, bankroll, ofiScore = 0, side = 'Up') {
-  if (netGap <= 0 || !tokenPrice || tokenPrice <= 0 || tokenPrice >= 1) return 0;
+  if (!Number.isFinite(netGap) || netGap <= 0 || !Number.isFinite(tokenPrice) || tokenPrice <= 0 || tokenPrice >= 1) return 0;
+  if (!Number.isFinite(bankroll) || bankroll <= 0) return 0;
   
   // odds = (1 / price) - 1. Ex: prix 0.54 => odds 0.85
   const odds = (1 / tokenPrice) - 1;
+  if (!Number.isFinite(odds) || odds <= 0) return 0;
   const kelly = netGap / odds;
   
   // Appliquer la fraction dynamique basée sur l'OFI (v5.8.0 / v5.8.2 : Momentum-Weighted Kelly)
