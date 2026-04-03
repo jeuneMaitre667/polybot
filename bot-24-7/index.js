@@ -5253,8 +5253,15 @@ async function tryPlaceOrderForSignal(signal) {
   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
   if (vwapPrice == null) return;
 
-  const POLYMARKET_TAKER_FEE = 0.005;
-  const netEdge = (signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry)) - POLYMARKET_TAKER_FEE;
+  const fairValue = signal.takeSide === 'Up' ? signal.probFairAtEntry : (1 - signal.probFairAtEntry);
+  const netEdge = (fairValue - vwapPrice) - POLYMARKET_TAKER_FEE;
+
+  // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
+  if (vwapPrice > 0.98) {
+    recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset: signal.asset });
+    return;
+  }
+
   if (netEdge < adjustedThreshold) {
     recordSkipReason('insufficient_net_edge', 'ws', { netEdge, threshold: adjustedThreshold });
     return;
@@ -5307,13 +5314,13 @@ async function tryPlaceOrderForSignal(signal) {
       setExecutionCooldown(key, result.error);
       notePolymarketIncidentError('ws_order_failure', result.error);
     }
-    logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
+    logSignalInRangeButNoOrder('ws', 'place_order_failed', signal, {
       bestAskP: bestAskLive,
       amountUsd: Math.round(amountUsd * 100) / 100,
       error: String(result?.error || '').slice(0, 240),
     });
-    logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
-    console.error(`[${time}] [WS] Erreur ${signalWithPrice.takeSide}: ${result.error}`);
+    logJson('error', 'Erreur ordre WS', { takeSide: signal.takeSide, error: result.error });
+    console.error(`[${time}] [WS] Erreur ${signal.takeSide}: ${result.error}`);
   }
 }
 
