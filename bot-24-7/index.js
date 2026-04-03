@@ -531,7 +531,7 @@ function writeHealth(updates) {
       openLimitOrders: OPEN_LIMIT_ORDERS.size,
       executionMode: ORDER_EXECUTION_TYPE,
       rewards: cachedRewardsData,
-      trendHistory: (existingHealth && existingHealth.trendHistory) || []
+      trendHistory: (currentHealthState && currentHealthState.trendHistory) || []
     };
 
     // v7.4.0 Analytics: Store trends every cycle (throttled by 5m in caller usually)
