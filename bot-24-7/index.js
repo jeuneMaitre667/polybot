@@ -264,7 +264,11 @@ const MAX_POSITIONS_PER_ASSET = {
   'SOL': 8
 };
 const MAX_DAILY_LOSS_USDC = 500; 
-const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; // 3%
+const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; 
+
+// v7.12.0: Inventory Skew Constants
+const INVENTORY_CAP = 500; // parts max avant skew
+const SKEW_REDUCTION_OFFSET = 0.005; // 0.5% de réduction du bid
 
 const TARGET_PROFIT = Number(process.env.TARGET_PROFIT) || 0.05;
 const MAX_LOSS = Number(process.env.MAX_LOSS) || 0.10;
@@ -624,6 +628,12 @@ function writeActivePositions(positions) {
   try {
     fs.writeFileSync(ACTIVE_POSITIONS_FILE, JSON.stringify(positions), 'utf8');
   } catch (_) {}
+}
+
+async function getBalance() {
+  const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
+  if (viaClob != null) return viaClob;
+  return getUsdcBalanceRpc();
 }
 
 function readActivePositions() {
@@ -1935,6 +1945,7 @@ async function createSignedLimitOrder(client, userLimitOrder) {
  * v7.0.0 Pivot.
  */
 async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
+  const side = 'bid'; // v7.12.0 Fix
   const asset = signal.underlying || signal.asset || 'BTC';
   const tokenId = signal.tokenIdToBuy;
   
@@ -5564,32 +5575,33 @@ async function tryPlaceOrderForSignal(signal) {
         return;
       }
       writeHealth({ staleWsData: false });
-   // --- QUANT UPDATE v3.9.0 (VWAP & Fees) ---
-   const POLYMARKET_TAKER_FEE = 0.005; // 0.5% buffer
-   const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
-   
-   if (vwapPrice == null) {
-     recordSkipReason('vwap_insufficient_liquidity', 'ws', { conditionId: key });
-     return;
-   }
-   
-   bestAskLive = vwapPrice; // On utilise le VWAP pour toute la suite
-   
-   // On met à jour l'Edge réel après frais
-   const rawEdge = signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry);
-   const netEdge = rawEdge - POLYMARKET_TAKER_FEE;
-   
-   if (netEdge < adjustedThreshold) {
-     recordSkipReason('insufficient_net_edge', 'ws', { conditionId: key, netEdge: netEdge.toFixed(4), threshold: adjustedThreshold.toFixed(4) });
-     return;
-   }
-   
-   signalWithPrice = {
-     ...signal,
-     priceUp: signal.takeSide === 'Up' ? vwapPrice : 1 - vwapPrice,
-     priceDown: signal.takeSide === 'Down' ? vwapPrice : 1 - vwapPrice,
-   };
     }
+
+    // --- QUANT UPDATE v3.9.0 (VWAP & Fees) --- (v7.12.0 Fix: Moved out of the stale-check block)
+    const POLYMARKET_TAKER_FEE = 0.005; // 0.5% buffer
+    const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
+    
+    if (vwapPrice == null) {
+      recordSkipReason('vwap_insufficient_liquidity', 'ws', { conditionId: key });
+      return;
+    }
+    
+    bestAskLive = vwapPrice; // On utilise le VWAP pour toute la suite
+    
+    // On met à jour l'Edge réel après frais
+    const rawEdge = signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry);
+    const netEdge = rawEdge - POLYMARKET_TAKER_FEE;
+    
+    if (netEdge < adjustedThreshold) {
+      recordSkipReason('insufficient_net_edge', 'ws', { conditionId: key, netEdge: netEdge.toFixed(4), threshold: adjustedThreshold.toFixed(4) });
+      return;
+    }
+    
+    signalWithPrice = {
+      ...signal,
+      priceUp: signal.takeSide === 'Up' ? vwapPrice : 1 - vwapPrice,
+      priceDown: signal.takeSide === 'Down' ? vwapPrice : 1 - vwapPrice,
+    };
   } else {
     const tBestAsk0 = Date.now();
     const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
@@ -5865,7 +5877,7 @@ async function tryPlaceOrderForSignal(signal) {
     const activePositions = readActivePositions();
     activePositions.push({
         ...orderData,
-        underlying: 'BTC',
+        underlying: signalWithPrice?.asset || signal.asset || 'BTC', // v7.12.0 Fix
         resolved: false,
         payout: null,
         strike: signal.strike,
@@ -6321,6 +6333,11 @@ async function run() {
           // v5.8.1 Fix: Fetch balance before Kelly sizing
           const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
 
+          // v7.12.0: Define availableCapital for Kelly logic
+          const activePositions = readActivePositions();
+          const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+          const availableCapital = Math.max(0, (balance || 0) - lockedCapital);
+
           // --- DYNAMIC STAKE INTEGRATION ---
           let amountUsd = orderSizeUsd;
           try {
@@ -6420,11 +6437,7 @@ async function run() {
 
     await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
 
-    async function getBalance() {
-      const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
-      if (viaClob != null) return viaClob;
-      return getUsdcBalanceRpc();
-    }
+    // getBalance removed from nested scope (v7.12.0 Fix)
 
   } finally {
     if (CYCLE_PROFILER) profiler.log();
@@ -6669,10 +6682,12 @@ function getDynamicSkew(vol) {
   return -0.06;
 }
 
-function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite) {
+// v7.12.0 Fix: Add asset parameter
+function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite, asset = 'BTC') {
   if (timeToExpirySec <= 0) return currentPrice > strikePrice ? 1.0 : 0.0;
   
   // v3.9.2 : Volatilité Hybride (Max entre 24h et 60min)
+  const state = getAssetState(asset);
   let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
   if (!volOverwrite) {
     const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
