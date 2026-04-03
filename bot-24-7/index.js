@@ -5095,7 +5095,6 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 /** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
-/** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
 async function tryPlaceOrderForSignal(signal) {
   if (!signal?.tokenIdToBuy) return;
   const key = getSignalKey(signal);
@@ -5119,7 +5118,6 @@ async function tryPlaceOrderForSignal(signal) {
     adjThreshold: Number(adjustedThreshold.toFixed(4))
   });
 
-  /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
   if (shouldSkipTradeTiming(signal)) {
     const timingDetails = getTimingForbiddenDetails();
     recordSkipReason('timing_forbidden', 'ws', {
@@ -5133,535 +5131,171 @@ async function tryPlaceOrderForSignal(signal) {
     return;
   }
   if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
-    const r = !walletConfigured
-      ? 'wallet_not_configured'
-      : !autoPlaceEnabled
-        ? 'auto_place_disabled'
-        : killSwitchActive
-          ? 'kill_switch'
-          : 'unknown';
+    const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
     logSignalInRangeButNoOrder('ws', r, signal, {});
     return;
   }
-  // --- Correlation Guard BTC/ETH (v5.4.1) ---
+
+  // --- Correlation Guard BTC/ETH ---
   const MAX_CONCURRENT_CORRELATED_POSITIONS = 1;
   const correlatedGroup = ["BTC", "ETH"];
   if (correlatedGroup.includes(signal.asset)) {
     const activePositions = readActivePositions();
     const now = Date.now();
-    // On considère une position "active" si l'échéance du marché est dans le futur
     const activeCorrelated = activePositions.filter(p => 
-      correlatedGroup.includes(p.asset) && 
-      (p.marketEndMs ? p.marketEndMs > now : true)
+      correlatedGroup.includes(p.asset) && (p.marketEndMs ? p.marketEndMs > now : true)
     ).length;
-
     if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
         console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — skip.`);
         recordSkipReason('correlation_limit', 'ws', { asset: signal.asset, activeCorrelated });
-        logSignalInRangeButNoOrder('ws', 'correlation_limit', signal, { activeCorrelated });
         return;
     }
   }
 
   const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
-  if (cooldownRemainingMs > 0) {
-    if (signal.edge && signal.edge > 0.35) { // 35% (v3.3.2)
-       console.log(`[Flip] 🔄 Cooldown détecté (${Math.round(cooldownRemainingMs)}ms), mais ignoré car Edge massif (${(signal.edge * 100).toFixed(2)}%)...`);
-    } else {
-       recordSkipReason('cooldown_active', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
-       logSignalInRangeButNoOrder('ws', 'cooldown_active', signal, { remainingMs: Math.round(cooldownRemainingMs) });
-       return;
-    }
-  }
-  if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
-    recordSkipReason('degraded_mode', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-    logSignalInRangeButNoOrder('ws', 'degraded_mode_pause', signal, {});
+  if (cooldownRemainingMs > 0 && !(signal.edge > 0.35)) {
+    recordSkipReason('cooldown_active', 'ws', { conditionId: key, remainingMs: cooldownRemainingMs });
     return;
   }
+
+  if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+    recordSkipReason('degraded_mode_pause', 'ws', { conditionId: key });
+    return;
+  }
+
   const t0 = Date.now();
   const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
-  const FLIP_EDGE_THRESHOLD = 0.35; // Seuil d'avantage pour autoriser le changement de côté (v3.3.2)
-  if (placedKeys.has(key)) {
-    if (signal.edge && signal.edge > FLIP_EDGE_THRESHOLD) {
-       console.log(`[Flip] 🔄 Opportunité massive détectée (${(signal.edge * 100).toFixed(2)}% > 35%), contournement du verrou pour ${signal.takeSide}...`);
-    } else {
-       recordSkipReason('already_placed_for_slot', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-       logSignalInRangeButNoOrder('ws', 'already_placed_for_slot', signal, {});
-       return;
-    }
-  }
-  let signalWithPrice = signal;
-  let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
+  let bestAskLive = null;
   const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
+
+  // 1. PHASE PRIX (WS ou REST)
   if (USE_WS_PRICE_ONLY) {
-    // Prix déjà sur le signal (reçu par WS, filtré [MIN_P, MAX_P]). Pas d'appel REST → ~50–150 ms de gagné.
-    const tBestAsk0 = Date.now();
     const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-    if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
-      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-      logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
-      return;
-    }
+    if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) return;
     bestAskLive = wsBestAsk;
-    timingsMs.bestAsk = Math.max(1, Date.now() - tBestAsk0);
-    const wsAgeMs = wsEventAtMs > 0 ? Math.max(0, Date.now() - wsEventAtMs) : (wsLastBidAskAtMs > 0 ? Math.max(0, Date.now() - wsLastBidAskAtMs) : null);
+    timingsMs.bestAsk = 1;
+    const wsAgeMs = wsEventAtMs > 0 ? Date.now() - wsEventAtMs : null;
     if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
       const restAsk = await getBestAsk(signal.tokenIdToBuy);
-      if (restAsk == null || restAsk < MIN_P || restAsk > MAX_P) {
-        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_invalid', signal, {
-          bestAskP: wsBestAsk,
-          wsAgeMs: Math.round(wsAgeMs),
-          restAsk: restAsk != null ? Math.round(restAsk * 1e6) / 1e6 : null,
-        });
-        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
-        setPolymarketDegraded('stale_ws_data', incidentDurationMs);
-        logJson('warn', 'WS stale: revalidation REST indisponible/hors fenêtre, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk });
-        return;
-      }
-      const mismatch = Math.abs(restAsk - wsBestAsk);
-      if (mismatch > wsPriceMismatchMaxP) {
-        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_mismatch', signal, {
-          bestAskP: wsBestAsk,
-          wsAgeMs: Math.round(wsAgeMs),
-          restAsk: Math.round(restAsk * 1e6) / 1e6,
-          mismatch: Math.round(mismatch * 1e6) / 1e6,
-          mismatchMaxP: wsPriceMismatchMaxP,
-        });
-        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
-        setPolymarketDegraded('ws_rest_price_mismatch', incidentDurationMs);
-        logJson('warn', 'WS stale: mismatch WS/REST, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk, restAsk, mismatch });
-        return;
-      }
-      writeHealth({ staleWsData: false });
+      if (!restAsk || Math.abs(restAsk - wsBestAsk) > wsPriceMismatchMaxP) return;
+      bestAskLive = restAsk;
     }
-
-    let clobClient = null;
-    try {
-      const tCreds0 = Date.now();
-      clobClient = await buildClobClientCachedCreds();
-      timingsMs.creds = Math.max(1, Date.now() - tCreds0);
-    } catch (err) {
-      notePolymarketIncidentError('clob_creds', err);
-      logSignalInRangeButNoOrder('ws', 'clob_creds', signal, {
-        bestAskP: bestAskLive,
-        error: String(err?.message || err).slice(0, 240),
-      });
-      console.warn('WebSocket tryPlace: CLOB client:', err.message);
-      return;
-    }
-
-    const tBal0 = Date.now();
-    let balance;
-    if (simulationTradeEnabled) {
-      simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
-      balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
-    } else {
-      const spendableBalance = await getUsdcSpendableViaClob(clobClient);
-      const rpcBalance = (spendableBalance == null || spendableBalance < orderSizeMinUsd) ? await getUsdcBalanceRpc() : null;
-      balance = spendableBalance ?? rpcBalance;
-    }
-    timingsMs.balance = Math.max(1, Date.now() - tBal0);
-
-    // --- SIZING & RISK MANAGEMENT v7.13.6 (Hoisted to fix ReferenceError) ---
-    const balanceForSizing =
-      budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
-    
-    let amountUsd = orderSizeUsd;
-    if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-        const tokenPrice = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-        const activePositions = readActivePositions();
-        const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-        const availableCapital = Math.max(0, balanceForSizing - lockedCapital);
-        
-        amountUsd = calculateKellyStake(signal.netGap, tokenPrice, availableCapital, signal.ofiScore || 0, signal.takeSide);
-    } else {
-        amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
-    }
-
-    const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
-    if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
-      amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
-    }
-
-    if (signal.asset === 'SOL') {
-       amountUsd *= 0.5;
-       console.log(`[Risk] 📉 SOL detected. Reducing stake to ${(amountUsd).toFixed(2)} USDC (0.5x)`);
-    }
-
-    let allowBelowMin = false;
-    let cappedBy = false;
-    if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
-      amountUsd = liquidity;
-      cappedBy = true;
-    }
-    if (useAvgPriceSizing && maxUsdAvg != null && maxUsdAvg > 0 && amountUsd > maxUsdAvg) {
-      amountUsd = maxUsdAvg;
-      cappedBy = true;
-    }
-
-    // --- Safety 3.0 WS : Drift, Circuit Breaker et Corrélation ---
-    const clData = await getChainlinkPrice(signal.asset || 'BTC');
-    if (clData?.price) lagRecorder.onChainlinkUpdate(signal.asset || 'BTC', clData.price);
-    const chainlinkSpotPrice = clData.price;
-    const currentPrice = calculateConsensusPrice(signal.asset || 'BTC');
-    const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, chainlinkSpotPrice || currentPrice);
-    if (!safety.ok) {
-       recordSkipReason('safety_trigger', 'ws', { conditionId: key, reason: safety.reason });
-       logSignalInRangeButNoOrder('ws', 'safety_trigger', signal, { reason: safety.reason });
-       placedKeys.delete(key);
-       return;
-    }
-
-    // v7.9.1: Surgical Exposure Check
-    const activePositionsLog = readActivePositions(); 
-    const assetPositions = activePositionsLog.filter(p => !p.resolved && (p.underlying === signal.asset || p.asset === signal.asset));
-    const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
-
-    if (assetPositions.length >= assetLimit) {
-       recordSkipReason('max_exposure_reached', 'ws', { conditionId: key, asset: signal.asset });
-       logSignalInRangeButNoOrder('ws', 'max_exposure_reached', signal, { activeAssetCount: assetPositions.length, limit: assetLimit });
-       placedKeys.delete(key);
-       return;
-    }
-    amountUsd = applyMaxStakeUsd(amountUsd);
-    const degradedNow = inPolymarketDegradedMode();
-    if (degradedNow && incidentBehavior === 'pause') {
-      amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
-      allowBelowMin = true;
-    }
-    if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
-    if (hasMaxStakeUsd && amountUsd === maxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
-
-    // --- QUANT UPDATE v3.9.0 (VWAP & Fees) ---
-    const POLYMARKET_TAKER_FEE = 0.005; // 0.5% buffer
-    const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
-    
-    if (vwapPrice == null) {
-      recordSkipReason('vwap_insufficient_liquidity', 'ws', { conditionId: key });
-      return;
-    }
-    
-    bestAskLive = vwapPrice; // On utilise le VWAP pour toute la suite
-    
-    // On met à jour l'Edge réel après frais
-    const rawEdge = signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry);
-    const netEdge = rawEdge - POLYMARKET_TAKER_FEE;
-    
-    if (netEdge < adjustedThreshold) {
-      recordSkipReason('insufficient_net_edge', 'ws', { conditionId: key, netEdge: netEdge.toFixed(4), threshold: adjustedThreshold.toFixed(4) });
-      return;
-    }
-    
-    signalWithPrice = {
-      ...signal,
-      priceUp: signal.takeSide === 'Up' ? vwapPrice : 1 - vwapPrice,
-      priceDown: signal.takeSide === 'Down' ? vwapPrice : 1 - vwapPrice,
-    };
   } else {
-    const tBestAsk0 = Date.now();
-    const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
-    timingsMs.bestAsk = Date.now() - tBestAsk0;
-    if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
-      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-      logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
-      return;
-    }
-    bestAskLive = currentBestAsk;
-    signalWithPrice = {
-      ...signal,
-      priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
-      priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
-    };
+    bestAskLive = await getBestAsk(signal.tokenIdToBuy);
+    if (!bestAskLive) return;
   }
-  // Carnet : seulement si relevé historique ou plafonds legacy (sinon inutile avec FAK + worst price).
+
+  // 2. PHASE CONNECTION (CLOB)
+  let clobClient = null;
+  try {
+    const tCreds0 = Date.now();
+    clobClient = await buildClobClientCachedCreds();
+    timingsMs.creds = Math.max(1, Date.now() - tCreds0);
+  } catch (err) {
+    console.warn('WebSocket tryPlace: CLOB client:', err.message);
+    return;
+  }
+
+  // 3. PHASE MESURE (Balance & Book)
+  const tBal0 = Date.now();
+  let balance;
+  if (simulationTradeEnabled) {
+    balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+  } else {
+    balance = (await getUsdcSpendableViaClob(clobClient)) ?? (await getUsdcBalanceRpc());
+  }
+  timingsMs.balance = Math.max(1, Date.now() - tBal0);
+
   let liquidity = null;
   let maxUsdAvg = null;
   if (needLiquidityBook) {
     const tBook0 = Date.now();
     liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
     timingsMs.book = Math.max(1, Date.now() - tBook0);
-    if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
+    if (useAvgPriceSizing && bestAskLive != null) {
       maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
     }
-    const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
-    if (recordLiquidityHistory && miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
-      appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
-      const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
-      recordedLiquidityWindows.set(key, endMs);
-    }
-  } else {
-    timingsMs.book = 1;
   }
 
-    
-    const balanceForSizing =
-    budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
-  
+  // 4. PHASE SIZING (Kelly, SOL, Caps)
+  const balanceForSizing = budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
   let amountUsd = orderSizeUsd;
   if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-      const tokenPrice = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-      // v5.4.1 : Kelly sur capital disponible (Bug de sizing corrigé)
-      const activePositions = readActivePositions();
-      const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-      const availableCapital = Math.max(0, balanceForSizing - lockedCapital);
-      
-      amountUsd = calculateKellyStake(signal.netGap, tokenPrice, availableCapital, signal.ofiScore || 0, signal.takeSide);
-  } else {
-      amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
+    const activePositions = readActivePositions();
+    const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+    amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
+  } else if (useBalanceAsSize) {
+    amountUsd = balanceForSizing ?? orderSizeUsd;
   }
 
-  const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
-  if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
-    amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
-  }
-
-  // v7.9.1: SOL Sizing Reduction (0.5x multiplier)
   if (signal.asset === 'SOL') {
-     amountUsd *= 0.5;
-     console.log(`[Risk] 📉 SOL detected. Reducing stake to ${(amountUsd).toFixed(2)} USDC (0.5x)`);
+    amountUsd *= 0.5;
+    console.log(`[Risk] 📉 SOL detected. Stake adjusted to ${(amountUsd).toFixed(2)} USDC.`);
   }
 
-  let allowBelowMin = false;
-  let cappedBy = false;
-  if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
-    amountUsd = liquidity;
-    cappedBy = true;
-  }
-  if (useAvgPriceSizing && maxUsdAvg != null && maxUsdAvg > 0 && amountUsd > maxUsdAvg) {
-    amountUsd = maxUsdAvg;
-    cappedBy = true;
-  }
-
-  // --- Sérités 3.0 WS : Drift, Circuit Breaker et Corrélation ---
-  const clData = await getChainlinkPrice(signal.asset || 'BTC');
-  if (clData?.price) lagRecorder.onChainlinkUpdate(signal.asset || 'BTC', clData.price);
-  const chainlinkSpotPrice = clData.price;
-  const currentPrice = calculateConsensusPrice(signal.asset || 'BTC');
-  const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, chainlinkSpotPrice || currentPrice);
-  if (!safety.ok) {
-     recordSkipReason('safety_trigger', 'ws', { conditionId: key, reason: safety.reason });
-     logSignalInRangeButNoOrder('ws', 'safety_trigger', signalWithPrice, { reason: safety.reason });
-     placedKeys.delete(key);
-     return;
-  }
-
-  // v7.9.1: Surgical Exposure Check
-  const activePositions = readActivePositions(); 
-  // Filtrer les positions non résolues pour l'actif actuel
-  const assetPositions = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset || p.asset === signal.asset));
-  const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
-
-  if (assetPositions.length >= assetLimit) {
-     recordSkipReason('max_exposure_reached', 'ws', { conditionId: key, asset: signal.asset });
-     logSignalInRangeButNoOrder('ws', 'max_exposure_reached', signalWithPrice, { activeAssetCount: assetPositions.length, limit: assetLimit });
-     placedKeys.delete(key);
-     return;
-  }
+  if (liquidity != null && useLiquidityCap && amountUsd > liquidity) amountUsd = liquidity;
+  if (maxUsdAvg != null && useAvgPriceSizing && amountUsd > maxUsdAvg) amountUsd = maxUsdAvg;
   amountUsd = applyMaxStakeUsd(amountUsd);
-  const degradedNow = inPolymarketDegradedMode();
-  if (degradedNow && incidentBehavior === 'pause') {
-    amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
-    allowBelowMin = true;
-  }
-  if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
-  if (hasMaxStakeUsd && amountUsd === maxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
-  logJson('info', 'Sizing decision', {
-    balance: balance != null ? Math.round(balance * 100) / 100 : null,
-    liquidity: liquidity != null ? Math.round(liquidity * 100) / 100 : null,
-    cappedBy,
-    allowBelowMin,
-    amountUsd: Math.round(amountUsd * 100) / 100,
-    orderSizeMinUsd
-  });
+  // 5. PHASE VALIDATION (Safety, Exposure, VWAP)
+  const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, calculateConsensusPrice(signal.asset || 'BTC'));
+  if (!safety.ok) return;
 
-  // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
-  // Permet d'avoir un breakdown même sans trade réel.
-  if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
-    recordSkipReason('amount_below_min', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-    logSignalInRangeButNoOrder('ws', 'amount_below_min', signalWithPrice, {
-      bestAskP: bestAskLive,
-      amountUsd: Math.round(amountUsd * 100) / 100,
-      orderSizeMinUsd,
-      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
-    });
-    if (shouldLogTradeLatencyAttempt(key)) {
-      logJson('info', 'Trade latency attempt (WS, no order)', {
-        conditionId: key,
-        timingsMs,
-      });
-      appendTradeLatencyHistory({
-        source: 'ws',
-        latencyMs: 0,
-        timingsMs,
-        takeSide: signalWithPrice.takeSide,
-        amountUsd,
-        conditionId: key,
-        tokenId: signalWithPrice.tokenIdToBuy,
-      });
-    }
-    placedKeys.delete(key); // sécurité: ne pas bloquer un éventuel trade si le wallet change
+  const activePositions = readActivePositions();
+  const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
+  if (activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length >= assetLimit) return;
+
+  if (amountUsd < orderSizeMinUsd) {
+    logSignalInRangeButNoOrder('ws', 'amount_below_min', signal, { amountUsd, balance });
     return;
   }
-  if (!(amountUsd > 0)) {
-    recordSkipReason('amount_zero_after_clamp', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
-    logSignalInRangeButNoOrder('ws', 'amount_zero_after_clamp', signalWithPrice, {
-      bestAskP: bestAskLive,
-      amountUsd: Math.round((amountUsd || 0) * 100) / 100,
-      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
-    });
+
+  const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
+  if (vwapPrice == null) return;
+
+  const POLYMARKET_TAKER_FEE = 0.005;
+  const netEdge = (signal.takeSide === 'Up' ? signal.probFairAtEntry - vwapPrice : vwapPrice - (1 - signal.probFairAtEntry)) - POLYMARKET_TAKER_FEE;
+  if (netEdge < adjustedThreshold) {
+    recordSkipReason('insufficient_net_edge', 'ws', { netEdge, threshold: adjustedThreshold });
     return;
   }
-  // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
-  if (useMarketOrder && clobClient && !simulationTradeEnabled) {
-    try {
-      const worstPrice = marketWorstPriceP;
-      const userMarketOrder = { tokenID: signalWithPrice.tokenIdToBuy, amount: amountUsd, side: Side.BUY, price: worstPrice };
-      const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
-      const cacheKey = getPreSignCacheKey(signalWithPrice, amountUsd);
-      preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
-    } catch (e) {
-      logJson('info', 'WS: pré-signature ordre (non bloquant)', { error: e?.message });
-    }
-  }
+
+  // 6. PHASE EXECUTION
   placedKeys.add(key);
   const tPlace0 = Date.now();
   let result;
   if (simulationTradeEnabled) {
-    const simFill = simulationTrade.buildSimulatedBuyFill({
-      amountUsd,
-      bestAskP: bestAskLive,
-      conditionId: key,
-    });
-    if (!simFill.ok) {
-      placedKeys.delete(key);
-      timingsMs.placeOrder = Date.now() - tPlace0;
-      logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
-        bestAskP: bestAskLive,
-        amountUsd: Math.round(amountUsd * 100) / 100,
-        error: String(simFill.error || '').slice(0, 240),
-      });
-      return;
-    }
-    simulationTrade.adjustPaperBalance(BOT_DIR, -simFill.filledUsdc);
-    result = simFill;
+    result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: vwapPrice, conditionId: key });
+    if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
   } else {
-    result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, {
-      allowBelowMin,
-      forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
-      maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
-    });
+    result = await placeMarketOrderWithPartialFillRetries(signal, amountUsd, clobClient, { forceSingleAttempt: inPolymarketDegradedMode() });
   }
   timingsMs.placeOrder = Date.now() - tPlace0;
-  const time = new Date().toISOString();
-  if (result.ok) {
-    const latencyMs = Date.now() - t0;
-    if (latencyMs >= executionDelayAlertMs) {
-      writeHealth({ executionDelayed: true, executionDelayedAt: time });
-      setPolymarketDegraded('execution_delayed', incidentDurationMs);
-    } else {
-      writeHealth({ executionDelayed: false });
-    }
-    writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
-    
-    // v7.8.0: Flash Balance Refresh after Sell (TP/SL)
-    if (pickFillFieldsForLog(result).side === 'sell') {
-       console.log(`[Flash] ⚡ Sell detected. Forcing immediate balance refresh...`);
-       getBalance().then(b => writeHealth({ balance: b.toFixed(2) }));
-    }
 
-    const fillLog = pickFillFieldsForLog(result);
-    const marketEndMs = parseMarketEndDateToMs(signalWithPrice?.endDate);
+  if (result.ok) {
+    const time = new Date().toISOString();
     const orderData = {
       at: time,
-      asset: signalWithPrice.asset || 'BTC',
-      slug: signalWithPrice.slug || null,
-      takeSide: signalWithPrice.takeSide,
+      asset: signal.asset || 'BTC',
+      underlying: signal.asset || 'BTC',
+      takeSide: signal.takeSide,
       amountUsd,
       conditionId: key,
-      strike: signalWithPrice.strike,
-      spotAtEntry: chainlinkSpotPrice || calculateConsensusPrice(signalWithPrice.asset || 'BTC'),
-      tokenId: signalWithPrice.tokenIdToBuy ?? null,
+      strike: signal.strike,
+      tokenId: signal.tokenIdToBuy,
       orderID: result.orderID,
-      preSignCacheHit: result.preSignCacheHit,
-      partialFillRetries: result.partialFillRetries ?? 0,
-      orderIDs: result.orderIDs,
-      clobSignerAddress: wallet?.address ?? null,
-      clobSignatureType: CLOB_SIGNATURE_TYPE,
-      clobFunderAddress: clobFunderAddress ?? null,
-      ...(signalWithPrice?.eventSlug ? { eventSlug: String(signalWithPrice.eventSlug).slice(0, 120) } : {}),
-      ...(marketEndMs != null ? { marketEndMs } : {}),
-      latencyMs,
+      latencyMs: Date.now() - t0,
       timingsMs,
-      ...fillLog,
-      edge: signalWithPrice.netGap || signalWithPrice.edge || 0.05,
-      probFairAtEntry: signalWithPrice.probFairAtEntry ?? null,
-      binancePriceAtEntry: signalWithPrice.binancePriceAtEntry ?? null,
-      ...(result.simulationTrade ? { simulationTrade: true } : {}),
+      ...pickFillFieldsForLog(result),
+      edge: netEdge,
+      simulationTrade: !!result.simulationTrade
     };
 
-    // 5.0.0 : Enregistrement de la position enrichie
-    const oppositeTokenId = signal.takeSide === 'Up' ? signal.tokenIdDown : signal.tokenIdUp;
-    const oppositePrice = latestPrices.get(oppositeTokenId)?.bestBid || null;
-
-    const activePositions = readActivePositions();
-    activePositions.push({
-        ...orderData,
-        underlying: signalWithPrice?.asset || signal.asset || 'BTC', // v7.12.0 Fix
-        resolved: false,
-        payout: null,
-        strike: signal.strike,
-        spotAtEntry: chainlinkSpotPrice || calculateConsensusPrice(signal.asset || 'BTC'),
-        netGapAtEntry: signal.netGap,
-        entryFair: signal.probFairAtEntry ?? null,
-        entryOppositePrice: oppositePrice,
-        entryTime: time,
-        ofiScore: signal.ofiScore ?? 0
-    });
-    writeActivePositions(activePositions.slice(-50)); // Garder les 50 derniers
-
+    activePositions.push({ ...orderData, resolved: false, entryTime: time });
+    writeActivePositions(activePositions.slice(-50));
     writeLastOrder(orderData);
     appendOrderLog(orderData);
     void notifyTelegramTradeSuccess('ws', orderData, simulationTradeEnabled ? null : clobClient);
-    void notifyTelegramLatencyAbnormal({
-      source: 'ws',
-      conditionId: key,
-      orderID: result.orderID,
-      latencyMs,
-      timingsMs,
-    });
-    logJson('info', 'Ordre placé (WS)', {
-      takeSide: signalWithPrice.takeSide,
-      amountUsd,
-      orderID: result.orderID,
-      latencyMs,
-      timingsMs,
-      preSignCacheHit: result.preSignCacheHit,
-      partialFillRetries: result.partialFillRetries ?? 0,
-      orderIDs: result.orderIDs,
-      ...fillLog,
-    });
-    logSignalInRangeButNoOrder('ws', 'order_placed', signalWithPrice, {
-      bestAskP: bestAskLive,
-      amountUsd: Math.round(amountUsd * 100) / 100,
-      orderID: result.orderID,
-    });
-    appendTradeLatencyHistory({
-      source: 'ws',
-      latencyMs,
-      timingsMs,
-      takeSide: signalWithPrice.takeSide,
-      amountUsd,
-      conditionId: key,
-      tokenId: signalWithPrice.tokenIdToBuy,
-      orderID: result.orderID,
-      preSignCacheHit: result.preSignCacheHit ?? false,
-    });
-    const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
-    const fillConsole = formatFillConsoleSuffix(result);
-    const retryInfo =
       (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
     console.log(
       `[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
