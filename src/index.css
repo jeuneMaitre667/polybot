@@ -185,19 +185,19 @@ body {
     --font-sans: 'Syne', sans-serif;
   }
   * {
-    @apply border-border;
+    border-color: var(--border);
   }
   *:focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
   body {
-    @apply text-foreground;
+    color: var(--foreground);
     background: var(--bg-base) !important;
     min-height: 100vh;
   }
   html {
-    @apply font-sans;
+    font-family: var(--font-sans);
   }
   /* Masquer les flèches (spinner) des champs number */
   input[type="number"]::-webkit-inner-spin-button,

@@ -116,13 +116,18 @@ export function BotOverview() {
     return wsMs > 0 ? { ms: wsMs } : pollMs > 0 ? { ms: pollMs } : null;
   }, [activeLatency]);
 
-  // --- STALENESS DETECTOR (v6.3.4) ---
-  const isStale = useMemo(() => {
-    if (!data15m?.timestamp) return false;
-    const now = Date.now();
-    const diff = now - data15m.timestamp;
-    return diff > 300_000; // 5 minutes
-  }, [data15m?.timestamp]);
+  // --- STALENESS DETECTOR (v6.3.4-fixed) ---
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  
+  // Met à jour l'horloge interne toutes les 60 secondes pour rafraîchir le statut "Stale"
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const isStale = data15m?.timestamp 
+    ? (currentTime - data15m.timestamp > 300_000) 
+    : false;
 
   if (!statusUrl && !statusUrl15m) {
     return (
