@@ -5237,6 +5237,33 @@ async function tryPlaceOrderForSignal(signal) {
       writeHealth({ staleWsData: false });
     }
 
+    let clobClient = null;
+    try {
+      const tCreds0 = Date.now();
+      clobClient = await buildClobClientCachedCreds();
+      timingsMs.creds = Math.max(1, Date.now() - tCreds0);
+    } catch (err) {
+      notePolymarketIncidentError('clob_creds', err);
+      logSignalInRangeButNoOrder('ws', 'clob_creds', signal, {
+        bestAskP: bestAskLive,
+        error: String(err?.message || err).slice(0, 240),
+      });
+      console.warn('WebSocket tryPlace: CLOB client:', err.message);
+      return;
+    }
+
+    const tBal0 = Date.now();
+    let balance;
+    if (simulationTradeEnabled) {
+      simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+      balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+    } else {
+      const spendableBalance = await getUsdcSpendableViaClob(clobClient);
+      const rpcBalance = (spendableBalance == null || spendableBalance < orderSizeMinUsd) ? await getUsdcBalanceRpc() : null;
+      balance = spendableBalance ?? rpcBalance;
+    }
+    timingsMs.balance = Math.max(1, Date.now() - tBal0);
+
     // --- SIZING & RISK MANAGEMENT v7.13.6 (Hoisted to fix ReferenceError) ---
     const balanceForSizing =
       budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
@@ -5368,33 +5395,8 @@ async function tryPlaceOrderForSignal(signal) {
     timingsMs.book = 1;
   }
 
-  let clobClient = null;
-  try {
-    const tCreds0 = Date.now();
-    clobClient = await buildClobClientCachedCreds();
-    timingsMs.creds = Math.max(1, Date.now() - tCreds0);
-  } catch (err) {
-    notePolymarketIncidentError('clob_creds', err);
-    logSignalInRangeButNoOrder('ws', 'clob_creds', signal, {
-      bestAskP: bestAskLive,
-      error: String(err?.message || err).slice(0, 240),
-    });
-    console.warn('WebSocket tryPlace: CLOB client:', err.message);
-    return;
-  }
-  const tBal0 = Date.now();
-  let balance;
-  if (simulationTradeEnabled) {
-    simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
-    balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
-  } else {
-    const spendableBalance = await getUsdcSpendableViaClob(clobClient);
-    const rpcBalance = (spendableBalance == null || spendableBalance < orderSizeMinUsd) ? await getUsdcBalanceRpc() : null;
-    balance = spendableBalance ?? rpcBalance;
-  }
-  timingsMs.balance = Math.max(1, Date.now() - tBal0);
-  
-  const balanceForSizing =
+    
+    const balanceForSizing =
     budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
   
   let amountUsd = orderSizeUsd;
