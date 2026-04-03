@@ -535,7 +535,7 @@ function writeHealth(updates) {
     };
 
     // v7.4.0 Analytics: Store trends every cycle (throttled by 5m in caller usually)
-    const maxReward = cachedRewardsData ? Math.max(...(cachedRewardsData.map(r => Number(r.reward_percentage) || 0))) : 0;
+    const maxReward = (cachedRewardsData && Array.isArray(cachedRewardsData)) ? Math.max(...(cachedRewardsData.map(r => Number(r.reward_percentage) || 0))) : 0;
     const currentVol = (fullState.performance && fullState.performance.totalVolume) || 0;
     
     // Only push if time passed > 5m or first point
@@ -1940,7 +1940,10 @@ async function fetchRewardsUserPercentages(clobClient) {
   try {
     // v7.3.0: Using native SDK method for 100% reliable rewards monitor
     const res = await clobClient.getRewardPercentages();
-    return res;
+    // v7.4.3: Robust array detection for various SDK/API return formats
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray(res.data)) return res.data;
+    return [];
   } catch (err) {
     if (err.message.includes('403') || err.message.includes('401')) {
        // Silently fail if auth is not ready yet

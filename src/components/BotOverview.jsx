@@ -155,7 +155,7 @@ export function BotOverview() {
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-indigo-400 uppercase font-medium">Rewards</span>
             <span className="text-sm font-mono font-bold text-indigo-400">
-              {data15m?.rewards ? `${Math.max(...(data15m.rewards.map(r => Number(r.reward_percentage) || 0))).toFixed(1)}%` : '---'}
+              {data15m?.rewards && Array.isArray(data15m.rewards) ? `${Math.max(...(data15m.rewards.map(r => Number(r.reward_percentage) || 0))).toFixed(1)}%` : '---'}
             </span>
           </div>
         </div>
