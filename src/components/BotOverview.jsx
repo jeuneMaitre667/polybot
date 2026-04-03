@@ -153,9 +153,16 @@ export function BotOverview() {
           </div>
           <div className="h-4 w-[1px] bg-white/10" />
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-indigo-400 uppercase font-medium">Rewards</span>
-            <span className="text-sm font-mono font-bold text-indigo-400">
-              {data15m?.rewards && Array.isArray(data15m.rewards) ? `${Math.max(...(data15m.rewards.map(r => Number(r.reward_percentage) || 0))).toFixed(1)}%` : '---'}
+            <span className="text-[10px] text-emerald-400 uppercase font-medium">Total Power</span>
+            <span className="text-sm font-mono font-bold text-emerald-400">
+               {data15m?.totalUsd ? `$${Number(data15m.totalUsd).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}` : '---'}
+            </span>
+          </div>
+          <div className="h-4 w-[1px] bg-white/10" />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-amber-400 uppercase font-medium">Gas</span>
+            <span className={`text-sm font-mono font-bold ${data15m?.gasBalance < 0.5 ? 'text-red-500 animate-pulse' : 'text-amber-400'}`}>
+               {data15m?.gasBalance ? `${data15m.gasBalance} POL` : '---'}
             </span>
           </div>
         </div>
@@ -168,7 +175,7 @@ export function BotOverview() {
 
       {/* v7.4.0 Performance Trend Chart */}
       {data15m?.trendHistory && data15m.trendHistory.length > 1 && (
-        <div className="mx-4 max-w-7xl">
+        <div className="mx-4 max-w-7xl mb-8">
           <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 backdrop-blur-3xl overflow-hidden transition-all hover:bg-white/[0.04]">
             <div className="flex items-center justify-between mb-6 px-2">
               <div>
@@ -228,6 +235,56 @@ export function BotOverview() {
                     fill="url(#colorRew)" 
                     strokeWidth={2}
                     animationDuration={2000}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v7.6.0 Total Equity / PnL Trend */}
+      {data15m?.equityHistory && data15m.equityHistory.length > 1 && (
+        <div className="mx-4 max-w-7xl">
+          <div className="p-6 rounded-3xl bg-indigo-500/[0.03] border border-indigo-500/10 backdrop-blur-3xl overflow-hidden transition-all hover:bg-indigo-500/[0.05]">
+            <div className="flex items-center justify-between mb-6 px-2">
+              <div>
+                <h3 className="text-[9px] font-bold uppercase tracking-[0.3em] text-indigo-400/50 mb-1">Mark-to-Market Valuation</h3>
+                <h2 className="text-xs font-bold text-white/70">Total Equity (USDC + Shares)</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shadow-[0_0_10px_rgba(129,140,248,0.5)]" />
+                <span className="text-[9px] uppercase font-bold text-white/40 tracking-widest">Net Wealth (USD)</span>
+              </div>
+            </div>
+            
+            <div className="h-[100px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data15m.equityHistory} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorEq" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#818cf8" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#818cf8" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'rgba(15, 23, 42, 0.95)', 
+                      borderRadius: '16px', 
+                      border: '1px solid rgba(255,255,255,0.05)', 
+                      fontSize: '11px',
+                      backdropFilter: 'blur(12px)'
+                    }}
+                    formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Equity']}
+                  />
+                  <Area 
+                    type="stepAfter" 
+                    dataKey="v" 
+                    stroke="#818cf8" 
+                    fillOpacity={1} 
+                    fill="url(#colorEq)" 
+                    strokeWidth={2}
+                    animationDuration={1000}
                   />
                 </AreaChart>
               </ResponsiveContainer>

@@ -256,8 +256,14 @@ const strikeHistoryCacheMap = new Map(); // Cache de Strike par Slug pour le mod
 const KELLY_FRACTION = Number(process.env.KELLY_FRACTION) || 0.25; // Quarter-Kelly
 const KELLY_MAX_BANKROLL_PCT = Number(process.env.KELLY_MAX_BANKROLL_PCT) || 0.25;
 const ABSOLUTE_MAX_STAKE_USD = Number(process.env.ABSOLUTE_MAX_STAKE_USD) || 200; // Cap absolu (v5.8.0)
-const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 10;
-const MAX_DAILY_LOSS_USDC = 500; // Libération v3.7.0 pour le Match 16:45
+const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 15;
+// v7.9.1: Per-asset exposure limits (Surgical Calibration)
+const MAX_POSITIONS_PER_ASSET = {
+  'BTC': 15,
+  'ETH': 15,
+  'SOL': 8
+};
+const MAX_DAILY_LOSS_USDC = 500; 
 const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; // 3%
 
 const TARGET_PROFIT = Number(process.env.TARGET_PROFIT) || 0.05;
@@ -471,7 +477,7 @@ let currentHealthState = {
 };
 
 /** Met à jour health.json (lu par status-server). */
-function writeHealth(updates) {
+function writeHealth(updates, extra = {}) {
   try {
     // 1. Fusionner avec l'état en mémoire
     currentHealthState = { 
@@ -531,7 +537,8 @@ function writeHealth(updates) {
       openLimitOrders: OPEN_LIMIT_ORDERS.size,
       executionMode: ORDER_EXECUTION_TYPE,
       rewards: cachedRewardsData,
-      trendHistory: (currentHealthState && currentHealthState.trendHistory) || []
+      trendHistory: (currentHealthState && currentHealthState.trendHistory) || [],
+      equityHistory: (currentHealthState && currentHealthState.equityHistory) || []
     };
 
     // v7.4.0 Analytics: Store trends every cycle (throttled by 5m in caller usually)
@@ -547,6 +554,19 @@ function writeHealth(updates) {
             rew: maxReward
         });
         if (fullState.trendHistory.length > 100) fullState.trendHistory.shift();
+    }
+
+    // v7.6.0 PnL Logic: Store equity trends (v7.7.1: Robustness fix)
+    const extraVal = typeof extra !== 'undefined' ? extra : {};
+    if (extraVal && extraVal.totalUsd) {
+       const lastEq = fullState.equityHistory[fullState.equityHistory.length - 1];
+       if (!lastEq || (Date.now() - new Date(lastEq.t).getTime() > 300000)) {
+           fullState.equityHistory.push({
+               t: new Date().toISOString(),
+               v: Number(extraVal.totalUsd).toFixed(2)
+           });
+           if (fullState.equityHistory.length > 100) fullState.equityHistory.shift();
+       }
     }
 
     // 3. Écriture atomique
@@ -608,12 +628,45 @@ function writeActivePositions(positions) {
 
 function readActivePositions() {
   try {
+    if (!fs.existsSync(ACTIVE_POSITIONS_FILE)) return [];
     const raw = fs.readFileSync(ACTIVE_POSITIONS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (_) {
     return [];
   }
+}
+
+async function updateActivePositionsFromFill(fill) {
+   try {
+      const positions = readActivePositions();
+      console.log(`[Sync] 📡 Fill detected (${fill.side}). Updating active positions...`);
+      
+      if (fill.side === 'buy' || fill.side === 'BUY') {
+         positions.push({
+            at: new Date().toISOString(),
+            side: fill.side,
+            asset: fill.asset,
+            underlying: fill.asset,
+            amountUsd: Number(fill.filledUsdc || fill.size * fill.price || 0),
+            price: Number(fill.price),
+            tokenId: fill.asset_id || fill.tokenId,
+            resolved: false
+         });
+      } else {
+         // Sell: On marque la position correspondante comme résolue (simplifié: on retire la plus ancienne)
+         const idx = positions.findIndex(p => !p.resolved && (p.underlying === fill.asset || p.tokenId === fill.asset_id));
+         if (idx !== -1) positions.splice(idx, 1);
+      }
+      
+      fs.writeFileSync(ACTIVE_POSITIONS_FILE, JSON.stringify(positions, null, 2));
+      // Force immediate balance refresh
+      getBalance().then(b => writeHealth({ balance: b.toFixed(2) }));
+      return true;
+   } catch (err) {
+      console.error(`[Sync] ❌ Update failed: ${err.message}`);
+      return false;
+   }
 }
 
 function recordStopLossMetric(event, payload = {}) {
@@ -1527,6 +1580,95 @@ const executionCooldownByCondition = new Map(); // conditionId/eventSlug -> next
 const stopLossNextAttemptByCondition = new Map(); // conditionId -> timestamp ms
 let wsLastBidAskAtMs = 0;
 const lastSkipReasonThrottle = new Map(); // reason|source -> ts
+const marketConfigCache = new Map(); // tokenId -> { tickSize: string, minOrderSize: number }
+const equityHistory = []; // { t: ISO, v: USD }
+
+async function calculateTotalValue(clobClient) {
+  try {
+    const balRes = await clobClient.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+    let totalUsd = Number(balRes.balance) || 0;
+    
+    // Scan active assets (simpler list for latency)
+    for (const [tokenId, config] of marketConfigCache.entries()) {
+       try {
+          const res = await clobClient.getBalanceAllowance({ token_id: tokenId });
+          const bal = Number(res.balance) || 0;
+          if (bal > 0) {
+             const book = await clobClient.getOrderBook(tokenId);
+             const price = (book.bids && book.bids.length > 0) ? Number(book.bids[0].price) : 0.5;
+             totalUsd += (bal * price);
+          }
+       } catch (_) {}
+    }
+    return totalUsd;
+  } catch (err) {
+    return 0;
+  }
+}
+
+function detectWhales(asset, side, book) {
+   const threshold = 1000; // $1,000
+   const levels = side === 'bid' ? book.bids : book.asks;
+   for (const level of (levels || []).slice(0, 5)) {
+      const value = Number(level.size) * Number(level.price);
+      if (value > threshold) {
+         console.log(`[${asset}] 🐳 WHALE ALERT: ${side.toUpperCase()} of $${value.toFixed(0)} at ${level.price}¢`);
+         if (telegramTradeAlertsEnabled) {
+            sendTelegramAlert(`🐳 *WHALE ALERT*\nAsset: ${asset}\nSide: ${side.toUpperCase()}\nValue: $${value.toFixed(0)}\nPrice: ${level.price}¢`);
+         }
+         return true;
+      }
+   }
+   return false;
+}
+
+let lastGasAlertAt = 0;
+async function checkNativeGasBalance(clobClient) {
+  try {
+    const address = await clobClient.signer.getAddress();
+    const balanceBN = await clobClient.signer.getBalance();
+    const balance = Number(balanceBN) / 1e18; // POL/MATIC has 18 decimals
+    
+    if (balance < 0.5 && (Date.now() - lastGasAlertAt > 3600000)) {
+       console.warn(`[Gas] ⛽ CRITICAL: Low POL/MATIC balance (${balance.toFixed(4)}). Refill wallet!`);
+       if (telegramTradeAlertsEnabled) {
+          sendTelegramAlert(`⛽ *CRITICAL GAS ALERT*\nWallet: ${address.slice(0,6)}...${address.slice(-4)}\nBalance: ${balance.toFixed(4)} POL\n*Action*: The bot might stop trading soon. Refill MATIC/POL!`);
+       }
+       lastGasAlertAt = Date.now();
+    }
+    return balance;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function runAutoRedeem(clobClient) {
+   try {
+      console.log(`[Redeem] ♻️ Starting automated profit conversion...`);
+      // v7.10.1: Correction pour l'appel SDK ClobClient
+      const res = await clobClient.postRedeem(); 
+      console.log(`[Redeem] ✅ Success: ${JSON.stringify(res)}`);
+      if (telegramTradeAlertsEnabled) {
+          sendTelegramAlert(`♻️ *AUTO-REDEEM SUCCESS*\nProfit converted to USDC successfully.`);
+      }
+      return true;
+   } catch (err) {
+      console.error(`[Redeem] ❌ Fail: ${err.message}`);
+      return false;
+   }
+}
+
+async function getMarketConfig(clobClient, tokenId) {
+  if (marketConfigCache.has(tokenId)) return marketConfigCache.get(tokenId);
+  try {
+    const tickSize = await clobClient.getTickSize(tokenId);
+    const config = { tickSize: tickSize || '0.001', minOrderSize: 0.1 };
+    marketConfigCache.set(tokenId, config);
+    return config;
+  } catch (err) {
+    return { tickSize: '0.001', minOrderSize: 0.1 };
+  }
+}
 
 /** État global du Rate-Limit CLOB/Cloudflare (Blindage 2026) */
 let last425ErrorAt = 0; // v5.3.0 (Blindage 2026) : Détection redémarrage moteur Polymarket
@@ -1828,29 +1970,54 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
        }
     } catch (_) {}
 
-    // 3. Calculate Maker Price (Best Bid + 0.001 - inventorySkew)
-    const limitPrice = Number((bestBid + 0.001 - inventorySkew).toFixed(3));
+    // v7.5.0: Compliance (Dynamic Tick Size & GTD Expiry)
+    const config = await getMarketConfig(clobClient, tokenId);
+    const tickNum = parseFloat(config.tickSize);
+    const decimals = config.tickSize.includes('.') ? config.tickSize.split('.')[1].length : 0;
+
+    // v7.6.0: Whale Sentinel
+    detectWhales(asset, 'bid', book);
+    detectWhales(asset, 'ask', book);
+
+    // v7.8.0: Pre-Expiration Safety (T-90s)
+    const state = getAssetState(asset);
+    if (state.currentSlotStrike) {
+       const endTime = state.currentSlotStrike.endMs;
+       const remaining = endTime - Date.now();
+       if (remaining > 0 && remaining < 90000) { // < 90s
+          logJson('warn', `🛡️ [${asset}] Pre-Expiration Safety (T-90s): Halt quoting.`, { remainingMs: remaining });
+          return null; 
+       }
+    }
+
+    // 3. Calculate Maker Price (Best Bid + Tick - inventorySkew)
+    // v7.8.0: Symmetric Skewing (Shift both Bid and Ask when overloaded)
+    const bidPrice = Number((bestBid + tickNum - inventorySkew).toFixed(decimals));
+    const askPrice = Number((bestAsk - tickNum - inventorySkew).toFixed(decimals));
     
-    // 4. Round amount to 0.1 tokens (Polymarket min)
+    const limitPrice = side === 'bid' ? bidPrice : askPrice;
+    
+    // 4. Round amount to min_order_size (usually 0.1 tokens)
     const rawTokens = amountUsd / limitPrice;
     const tokens = Math.floor(rawTokens * 10) / 10;
     
-    console.log(`[${asset}] [DEBUG] Limit Order Calculation: $${amountUsd} / ${limitPrice} = ${tokens} tokens (raw: ${rawTokens.toFixed(4)})`);
+    console.log(`[${asset}] [DEBUG] Limit Order Calculation (Tick: ${config.tickSize}): $${amountUsd} / ${limitPrice} = ${tokens} tokens`);
 
-    if (tokens < 0.1 || !Number.isFinite(tokens)) return { ok: false, error: 'Amount too low or invalid for limit order' };
+    if (tokens < config.minOrderSize || !Number.isFinite(tokens)) return { ok: false, error: 'Amount too low for limit order' };
 
     const userLimitOrder = {
       tokenId,
       price: limitPrice,
       side: Side.BUY,
       size: tokens,
-      feeRateBps: 0, // Maker is zero
+      feeRateBps: 0,
+      expiration: Math.floor(Date.now() / 1000) + 60 + 300 // v7.5.0: 5m GTD safety window
     };
 
     const signedOrder = await createSignedLimitOrder(clobClient, userLimitOrder);
     
-    // GTC (Good-Til-Canceled), deferExec=false, postOnly=true (absolute maker-only)
-    const result = await clobClient.postOrder(signedOrder, OrderType.GTC, false, true);
+    // v7.5.0: Switch to GTD (Good-Til-Date) for absolute safety
+    const result = await clobClient.postOrder(signedOrder, OrderType.GTD, false, true);
 
     if (result.success && result.orderID) {
       OPEN_LIMIT_ORDERS.set(signal.conditionId, {
@@ -1958,8 +2125,9 @@ async function checkAndCancelStaleOrders(clobClient) {
   // v7.4.0: Detect Fills via SDK comparison
   let activeOrderIds = new Set();
   try {
-     const openClobOrders = await clobClient.getOpenOrders();
-     activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
+    const res = await clobClient.getOpenOrders();
+    const openClobOrders = Array.isArray(res) ? res : (res?.data || []);
+    activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
   } catch (err) {
      warnClobClientIfThrottled(`[Monitor] Could not fetch active CLOB orders: ${err.message}`);
      return; // Safety: don't delete anything if we can't verify status
@@ -5505,6 +5673,12 @@ async function tryPlaceOrderForSignal(signal) {
     amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
   }
 
+  // v7.9.1: SOL Sizing Reduction (0.5x multiplier)
+  if (signal.asset === 'SOL') {
+     amountUsd *= 0.5;
+     console.log(`[Risk] 📉 SOL detected. Reducing stake to ${(amountUsd).toFixed(2)} USDC (0.5x)`);
+  }
+
   let allowBelowMin = false;
   let cappedBy = false;
   if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
@@ -5529,11 +5703,15 @@ async function tryPlaceOrderForSignal(signal) {
      return;
   }
 
-  const activePositions = readActivePositions();
-  const hasBtcExposure = activePositions.some(p => p.resolved === false && p.underlying === 'BTC');
-  if (hasBtcExposure && MAX_CONCURRENT_BTC_EXPOSURE > 0 && activePositions.length >= MAX_CONCURRENT_BTC_EXPOSURE) {
-     recordSkipReason('max_exposure_reached', 'ws', { conditionId: key });
-     logSignalInRangeButNoOrder('ws', 'max_exposure_reached', signalWithPrice, { activeCount: activePositions.length });
+  // v7.9.1: Surgical Exposure Check
+  const activePositions = readActivePositions(); 
+  // Filtrer les positions non résolues pour l'actif actuel
+  const assetPositions = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset || p.asset === signal.asset));
+  const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
+
+  if (assetPositions.length >= assetLimit) {
+     recordSkipReason('max_exposure_reached', 'ws', { conditionId: key, asset: signal.asset });
+     logSignalInRangeButNoOrder('ws', 'max_exposure_reached', signalWithPrice, { activeAssetCount: assetPositions.length, limit: assetLimit });
      placedKeys.delete(key);
      return;
   }
@@ -5643,6 +5821,13 @@ async function tryPlaceOrderForSignal(signal) {
       writeHealth({ executionDelayed: false });
     }
     writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
+    
+    // v7.8.0: Flash Balance Refresh after Sell (TP/SL)
+    if (pickFillFieldsForLog(result).side === 'sell') {
+       console.log(`[Flash] ⚡ Sell detected. Forcing immediate balance refresh...`);
+       getBalance().then(b => writeHealth({ balance: b.toFixed(2) }));
+    }
+
     const fillLog = pickFillFieldsForLog(result);
     const marketEndMs = parseMarketEndDateToMs(signalWithPrice?.endDate);
     const orderData = {
@@ -5786,6 +5971,13 @@ function sendWsSubscribe(ws, tokenIds) {
       type: 'book',
       assets_ids: tokenIds,
     }));
+    // v7.10.0: Abonnement aux Fills en temps réel
+    if (walletConfigured && wallet) {
+      ws.send(JSON.stringify({
+        type: 'orders',
+        user: wallet.address.toLowerCase()
+      }));
+    }
   } catch (err) {
     console.warn('WS send subscribe:', err.message);
   }
@@ -5828,7 +6020,7 @@ function startClobWs() {
     wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
     wsPingTimer = setInterval(() => { if (clobWs?.readyState === WebSocket.OPEN) clobWs.ping(); }, WS_PING_INTERVAL_MS);
   });
-  clobWs.on('message', (raw) => {
+  clobWs.on('message', async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
       
@@ -5877,6 +6069,18 @@ function startClobWs() {
         state.prevAskSize = askSize;
         ofiState.set(assetId, state);
         return;
+      }
+
+      // --- Traitement des Fills en temps réel (v7.10.0) ---
+      if (data?.event_type === 'fill' || data?.event_type === 'order_fill') {
+         const fill = data.fill || data;
+         const assetId = String(fill.asset_id || '');
+         const sig = wsState.tokenToSignal.get(assetId);
+         await updateActivePositionsFromFill({
+            ...fill,
+            asset: sig?.asset || 'BTC'
+         });
+         return;
       }
 
       if (data?.event_type !== 'best_bid_ask') {
@@ -5996,6 +6200,32 @@ async function run() {
     // Fast-path sécurité: évaluer le SL avant le gros bloc fetchSignals.
     clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
     
+    // v7.7.0: Global Infrastructure Checks (Once per cycle)
+    const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
+    
+    // v7.6.0: Fetch Total Equity for PnL (v7.9.1 Fix: Use global balance)
+    let totalUsd = balance;
+    try { totalUsd = await calculateTotalValue(clobClient); } catch(_) {}
+    if (totalUsd === 0) totalUsd = balance; // Fallback to balance if PnL engine fails
+
+    // v7.7.0: Gas Monitor (POL/MATIC)
+    let gasBalance = null;
+    try { gasBalance = await checkNativeGasBalance(clobClient); } catch(_) {}
+
+    // v7.7.0: Auto-Redeem (Periodic 12h)
+    const lastRedeem = currentHealthState?.lastRedeemAt ? new Date(currentHealthState.lastRedeemAt).getTime() : 0;
+    if (Date.now() - lastRedeem > 43200000) { // 12 hours
+        await runAutoRedeem(clobClient);
+        writeHealth({ lastRedeemAt: new Date().toISOString() });
+    }
+
+    writeHealth({
+      balance: balance.toFixed(2),
+      totalUsd: totalUsd.toFixed(2),
+      gasBalance: gasBalance != null ? gasBalance.toFixed(4) : '—',
+      activeConditions: OPEN_LIMIT_ORDERS.size
+    }, { totalUsd });
+
     for (const asset of SUPPORTED_ASSETS) {
       const res = await profiler.measure(`fetchSignals_${asset}`, () => 
         fetchSignals(asset, { 
@@ -6097,18 +6327,18 @@ async function run() {
             if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
                 amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
                 // --- HARD CAP MIN STAKE (v6.3.5) ---
-                if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0; 
+                if (amountUsd > 0 && amountUsd < 0.1) amountUsd = 0.1; 
             } else if (s.optimalStake != null && s.optimalStake > 0) {
                 amountUsd = s.optimalStake;
             } else if (useBalanceAsSize || simulationTradeEnabled) {
                 amountUsd = balance != null ? balance : orderSizeUsd;
             }
-            // Final check: Never below 1.0 and MUST be finite
+            // Final check: Never below 0.1 and MUST be finite
             if (!Number.isFinite(amountUsd)) amountUsd = 0;
-            if (amountUsd > 0 && amountUsd < 1.0) amountUsd = 1.0;
+            if (amountUsd > 0 && amountUsd < 0.1) amountUsd = 0.1;
           } catch (err) {
             console.error(`[Error] [${asset}] Erreur calcul Kelly: ${err.message}`);
-            amountUsd = 1.0; // Fallback safe
+            amountUsd = 0.1; // Fallback safe
           }
 
           // --- PROFITABILITY FILTER (v6.3.5) ---
