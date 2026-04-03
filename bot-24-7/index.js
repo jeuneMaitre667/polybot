@@ -119,7 +119,7 @@ import {
 } from './gammaUpDownOrder.js';
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
-import { getChainlinkPrice, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
+import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
 import { fetchSignals, getSignalKey, shouldSkipTradeTiming } from './signal-engine.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -5828,21 +5828,23 @@ async function run() {
           // v5.8.1 Fix: Fetch balance before Kelly sizing
           const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
 
-          // --- DYNAMIC STAKE INTEGRATION (v5.4.0 / v5.8.0 : Kelly) ---
+          // --- DYNAMIC STAKE INTEGRATION ---
           let amountUsd = orderSizeUsd;
-          if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
-              const tokenPrice = pickSignalBestAskP(s);
-              // v5.8.0 : Kelly sur disponible avec momentum
-              const activePositions = readActivePositions();
-              const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-              const availableCapital = Math.max(0, balance - lockedCapital);
-              
-              amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
-          } else if (s.optimalStake != null && s.optimalStake > 0) {
-              amountUsd = s.optimalStake;
-              console.log(`[${asset}] 🚀 Utilisation Stake Optimal: ${amountUsd.toFixed(2)} USDC`);
-          } else if (useBalanceAsSize || simulationTradeEnabled) {
-              amountUsd = balance != null ? balance : orderSizeUsd;
+          try {
+            if (USE_KELLY_SIZING && balance != null && (s.netGap != null || s.edge != null)) {
+                const tokenPrice = pickSignalBestAskP(s);
+                const activePositions = readActivePositions();
+                const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+                const availableCapital = Math.max(0, balance - lockedCapital);
+                amountUsd = calculateKellyStake(s.netGap || s.edge, tokenPrice, availableCapital, assetOfi, s.takeSide);
+            } else if (s.optimalStake != null && s.optimalStake > 0) {
+                amountUsd = s.optimalStake;
+            } else if (useBalanceAsSize || simulationTradeEnabled) {
+                amountUsd = balance != null ? balance : orderSizeUsd;
+            }
+          } catch (err) {
+            console.error(`[Error] [${asset}] Erreur calcul Kelly: ${err.message}`);
+            amountUsd = orderSizeUsd; // Fallback safe
           }
 
           // Safety Checks (Multi-Asset)

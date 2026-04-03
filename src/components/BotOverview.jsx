@@ -116,6 +116,14 @@ export function BotOverview() {
     return wsMs > 0 ? { ms: wsMs } : pollMs > 0 ? { ms: pollMs } : null;
   }, [activeLatency]);
 
+  // --- STALENESS DETECTOR (v6.3.4) ---
+  const isStale = useMemo(() => {
+    if (!data15m?.timestamp) return false;
+    const now = Date.now();
+    const diff = now - data15m.timestamp;
+    return diff > 300_000; // 5 minutes
+  }, [data15m?.timestamp]);
+
   if (!statusUrl && !statusUrl15m) {
     return (
       <div className="p-8 text-center opacity-50 font-mono text-sm">
@@ -126,6 +134,19 @@ export function BotOverview() {
 
   return (
     <div className="layout app-root space-y-12">
+      {/* SYSTEM STALL ALERT (v6.3.4) */}
+      {isStale && (
+        <div className="bg-red-500/20 border border-red-500/40 p-4 rounded-2xl flex items-center justify-center gap-4 animate-pulse">
+          <div className="w-3 h-3 bg-red-500 rounded-full shadow-[0_0_12px_rgba(239,68,68,0.8)]" />
+          <span className="text-red-400 font-bold uppercase tracking-widest text-sm">
+            CRITICAL: System Stall Detected (Stale Health Data)
+          </span>
+          <span className="text-red-400/60 font-mono text-xs uppercase">
+            Last Update: {new Date(data15m.timestamp).toLocaleTimeString()}
+          </span>
+        </div>
+      )}
+
       {/* SECTION 1: GLOBAL RISK SENTINEL */}
       <section className="animate-in fade-in slide-in-from-top-4 duration-700">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

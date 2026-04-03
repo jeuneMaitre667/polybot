@@ -107,3 +107,11 @@ export function getChainlinkHealthStats(asset = 'BTC') {
   const cache = assetCaches[asset.toUpperCase()];
   return { lastPrice: cache?.price, source: cache?.source, rpc: lastWinningRpc };
 }
+
+/** 
+ * Accès synchrone au dernier prix en cache (v6.3.4 Fix)
+ */
+export function getChainlinkPriceCached(asset = 'BTC') {
+  const cleanAsset = String(asset).toUpperCase();
+  return assetCaches[cleanAsset]?.price || null;
+}
