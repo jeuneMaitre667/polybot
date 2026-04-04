@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { 
     SUPPORTED_ASSETS, 
     MARKET_MODE, 
@@ -13,8 +14,8 @@ import {
     FEE_SAFETY_BUFFER
 } from './config.js';
 
-const __dirname = path.resolve();
-const STRIKES_FILE = path.join(__dirname, 'bot-24-7', 'boundary-strikes.json');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STRIKES_FILE = path.join(__dirname, 'boundary-strikes.json');
 
 /**
  * Moteur de Signaux Polymarket (v5.4.0)
