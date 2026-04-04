@@ -244,7 +244,7 @@ let chainlinkAgeMs = 0; // v5.2.0 : Pour le logging
 
 const ARBITRAGE_GAP_THRESHOLD = Number(process.env.ARBITRAGE_GAP_THRESHOLD) || 0.05;
 const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.40;
-const POLYMARKET_FEE_RATE = 0.072; // Taux officiel pour Crypto (Crypto Fee Rate)
+const POLYMARKET_FEE_RATE = 0.02; // Taux réaliste 2026 pour Crypto (Peak taker ~1.8%)
 const FEE_SAFETY_BUFFER = 1.05; // Marge de sécurité 5% (Blindage 2026)
 const DEFAULT_STAKE_USDC = 300; 
 
@@ -5312,7 +5312,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
     signal.probFairAtEntry = probFairLive;
     const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
-    const netEdge = (fairValue - vwapPrice) - 0.005; 
+    // v9.1.0 : Alignement sur les frais réels (7.2%) pour valider l'edge net
+    const actualFee = POLYMARKET_FEE_RATE * (1 - vwapPrice);
+    const netEdge = (fairValue - vwapPrice) - actualFee - 0.002; // 0.2% slippage buffer
 
     // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
     if (vwapPrice > 0.98) {
