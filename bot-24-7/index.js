@@ -5160,10 +5160,19 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (!signal?.tokenIdToBuy) return;
-  const asset = signal.asset || 'BTC';
+  
+  // v7.16.30 : Robust asset extraction from slug
+  const slug = signal.slug || signal.eventSlug || '';
+  let asset = signal.asset;
+  if (!asset) {
+      if (slug.includes('btc')) asset = 'BTC';
+      else if (slug.includes('eth')) asset = 'ETH';
+      else if (slug.includes('sol')) asset = 'SOL';
+      else asset = 'BTC'; // Final fallback
+  }
+
   // v7.16.0 : Unified Strike Injection (Poll & WS)
   if (signal.strike == null) {
-      const slug = signal.slug || signal.eventSlug;
       const start = signal.m?.startDate || signal.startDate;
       signal.strike = lookupBoundaryStrikeLocal(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
   }
