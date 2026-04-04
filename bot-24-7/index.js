@@ -5827,14 +5827,17 @@ async function run() {
            const interval = slug.includes('15m') ? '15m' : '1h';
            const curBinance = perpState.get(asset).binance;
            
-           if (curBinance) {
+           console.log(`[${asset}] 🔍 Anchor Diagnostics: spot=${curBinance}, slot=${slug}`);
+           
+           if (curBinance && Number.isFinite(curBinance)) {
               state.binanceRefPrice = curBinance;
               state.binanceRefAtMs = Date.now();
               console.log(`[${asset}] ⚓ Late Anchor: Recovered Base 0 from Spot: ${curBinance}.`);
            } else {
-              console.log(`[${asset}] 🔄 Momentum Recovery: Fetching opening price for ${slug}...`);
+              console.log(`[${asset}] 🔄 Momentum Recovery: Fetching klines for ${slug}...`);
               const openPrice = await fetchBinanceSlotOpeningPrice(asset, interval);
-              if (openPrice) {
+              console.log(`[${asset}] 🔄 Klines result: ${openPrice}`);
+              if (openPrice && Number.isFinite(openPrice)) {
                 state.binanceRefPrice = openPrice;
                 state.binanceRefAtMs = Date.now();
                 console.log(`[${asset}] ⚓ Historical Base 0 recovered: ${openPrice}. Momentum active.`);
