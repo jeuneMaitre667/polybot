@@ -28,7 +28,7 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
 import axios from 'axios';
 import crypto from 'crypto';
 import { 
@@ -4060,7 +4060,9 @@ async function buildClobClientCachedCreds() {
       getMarket: async () => ({}),
       createOrder: async () => ({}),
       cancelOrder: async () => ({}),
-      getOrders: async () => []
+      getOrders: async () => [],
+      getOpenOrders: async () => [], // v10.1 : Stub pour diagnostic dashboard
+      getRewardPercentages: async () => [] // v10.1 : Stub pour diagnostic dashboard
     };
   }
 
