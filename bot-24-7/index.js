@@ -5601,11 +5601,11 @@ function createCycleProfiler() {
 
 const CYCLE_PROFILER = process.env.CYCLE_PROFILER === '1' || process.env.CYCLE_PROFILER === 'true';
 
-/** v7.16.9 : Capture globale des strikes indépendante (toutes les 60s) */
-setInterval(async () => {
+/** v7.16.10 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
+const runBoundaryCapture = async () => {
     try {
         const mins = new Date().getMinutes();
-        if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
+        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
             lastBoundaryMinute = mins;
             for (const asset of SUPPORTED_ASSETS) {
                 const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
@@ -5613,7 +5613,9 @@ setInterval(async () => {
             }
         }
     } catch (_) {}
-}, 60000);
+};
+setInterval(runBoundaryCapture, 60000);
+runBoundaryCapture(); // Exécution immédiate au démarrage
 
 async function run() {
   // Sécurité 2.1.2 : Maintenance Polymarket (Option B : Blindage 2026)
