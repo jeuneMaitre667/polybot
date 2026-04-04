@@ -82,7 +82,7 @@ export async function fetchSignals(asset, context = {}) {
                 slug,
                 conditionId: m.conditionId,
                 tokenIdToBuy: tokenIdToBuy,
-                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line)),
+                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), slug),
                 takeSide,
                 priceUp: yesPrice,
                 priceDown: noPrice,
@@ -187,19 +187,32 @@ export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
     }
 }
 
-function lookupBoundaryStrike(asset, startDateStr, apiLine) {
+function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     if (Number.isFinite(apiLine) && apiLine > 0) return apiLine;
     
     try {
-        if (!startDateStr) return null;
-        const startTime = new Date(startDateStr).getTime();
+        let startTime = null;
+        
+        // v7.15.3 : Extraire l'Epoch du slug (ex: ...-1775265300)
+        if (marketSlug && marketSlug.includes('-')) {
+            const parts = marketSlug.split('-');
+            const lastPart = parts[parts.length - 1];
+            if (/^\d+$/.test(lastPart)) {
+                startTime = parseInt(lastPart) * 1000;
+            }
+        }
+        
+        // Fallback sur startDateStr si pas de slug (mais Gamma startDate est souvent erroné pour 15m)
+        if (!startTime && startDateStr) startTime = new Date(startDateStr).getTime();
+        if (!startTime) return null;
+
         const key = `${startTime}_${asset}`;
         
         if (fs.existsSync(STRIKES_FILE)) {
             const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
             if (data[key]) {
                 const captured = data[key];
-                console.log(`[Strike] Found locally captured strike for ${asset} (${startDateStr}): ${captured}`);
+                console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${key}): ${captured}`);
                 return captured;
             }
         }
