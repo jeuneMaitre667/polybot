@@ -5780,7 +5780,7 @@ async function run() {
     try {
       if (wallet?.provider) {
         currentBlock = await wallet.provider.getBlockNumber();
-        logJson('debug', 'RPC: Diagnostic Check', { currentBlock, provider: wallet.provider.connection.url });
+        logJson('debug', 'RPC: Diagnostic Check', { currentBlock });
       }
     } catch (e) {
       logJson('error', 'RPC: Connection Failure', { error: e.message });
