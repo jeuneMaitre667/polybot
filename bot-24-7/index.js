@@ -5617,6 +5617,19 @@ async function run() {
     return;
   }
 
+  // v7.15.2 : Boundary Strike Capture (00, 15, 30, 45) - Moved to start for better timing
+  const nowTrigger = new Date();
+  const mins = nowTrigger.getMinutes();
+  if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
+      lastBoundaryMinute = mins;
+      for (const asset of SUPPORTED_ASSETS) {
+          const price = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
+          if (price > 0) {
+              saveBoundaryStrike(asset, price);
+          }
+      }
+  }
+
   const cycleStartMs = Date.now();
   const profiler = createCycleProfiler();
   let clobClient = null;
@@ -5690,19 +5703,6 @@ async function run() {
     }
 
     await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
-
-    // v7.15.0 : Boundary Strike Capture (00, 15, 30, 45)
-    const nowTrigger = new Date();
-    const mins = nowTrigger.getMinutes();
-    if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
-        lastBoundaryMinute = mins;
-        for (const asset of SUPPORTED_ASSETS) {
-            const price = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
-            if (price > 0) {
-                saveBoundaryStrike(asset, price);
-            }
-        }
-    }
 
     // getBalance removed from nested scope (v7.12.0 Fix)
 
