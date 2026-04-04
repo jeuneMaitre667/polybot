@@ -162,6 +162,9 @@ function saveBoundaryStrikeLocal(asset, price) {
         data[key] = price;
         fs.writeFileSync(STRIKES_FILE, JSON.stringify(data, null, 2));
         console.log(`[Strike] ${asset} saved internally: ${price} (Slot: ${slot})`);
+        
+        // v7.16.58 : Hydrater l'état en mémoire pour le reporting health.json
+        getAssetState(asset).currentSlotStrike = { price: price, slotSlug: String(slot) };
     } catch (e) {
         console.error('[Strike] Save Error:', e.message);
     }
@@ -169,30 +172,29 @@ function saveBoundaryStrikeLocal(asset, price) {
 
 function lookupBoundaryStrikeLocal(asset, startTime) {
     try {
-        const tsNominal = String(startTime);
-        const normalizedTs = tsNominal.length === 10 ? tsNominal + '000' : tsNominal;
-        const targetKey = `${normalizedTs}_${asset.trim().toUpperCase()}`;
+        if (!fs.existsSync(STRIKES_FILE)) return null;
         
-        if (!fs.existsSync(STRIKES_FILE)) {
-            console.warn(`[Strike] File not found at: ${STRIKES_FILE}`);
-            return null;
-        }
+        // v7.16.61 : Diagnostic lourd des clés
+        const cleanAsset = asset.trim().toUpperCase();
+        const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
+        const key = `${ms}_${cleanAsset}`;
         
         const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
-        const cleanTarget = targetKey.replace(/[^0-9A-Z_]/gi, '');
+        const strike = data[key];
         
-        for (const k of Object.keys(data)) {
-            if (k.replace(/[^0-9A-Z_]/gi, '') === cleanTarget) {
-                const val = data[k];
-                console.log(`[Strike] SUCCESS! asset=${asset}, strike=${val}, key=${k}`);
-                return val;
-            }
+        if (strike) {
+            console.log(`[Strike] [HIT] ${key}: ${strike}`);
+            return strike;
         }
-        console.warn(`[Strike] FAIL match for ${targetKey}. Available keys: ${Object.keys(data).length}`);
+        
+        // v7.16.61 : En cas de MISS, lister les clés disponibles
+        const availableKeys = Object.keys(data).join(', ');
+        console.warn(`[Strike] [MISS] key="${key}" (startTime=${startTime}). Dispo: [${availableKeys}]`);
+        return null;
     } catch (e) {
         console.error('[Strike] Lookup Error:', e.message);
+        return null;
     }
-    return null;
 }
 
 let lastBoundaryMinute = null;
@@ -211,10 +213,24 @@ const runBoundaryCapture = async () => {
         console.log(`[Strike] Lancement de la capture (Minute: ${m})...`);
         for (const asset of SUPPORTED_ASSETS) {
             const res = await captureStrikeAtSlotOpen(asset, `init_${Date.now()}`);
-            if (res && res.price) {
-                saveBoundaryStrikeLocal(asset, res.price);
+            let p = res && res.price ? res.price : 0;
+            let source = 'chainlink_polygon';
+
+            // v7.16.57 : Fallback au Consensus Perp (Binance/OKX/Hyper) si Chainlink échoue ou est trop lent
+            if (p <= 0) {
+                p = calculateConsensusPrice(asset);
+                source = 'consensus_perp_fallback';
+                if (p > 0) {
+                    console.warn(`[Strike] [${asset}] Chainlink indisponible/stale. Utilisation du Consensus Perp: $${p.toFixed(2)}`);
+                }
+            }
+
+            if (p > 0) {
+                saveBoundaryStrikeLocal(asset, p);
+                // Log enrichi pour le monitoring
+                console.log(`[Strike] SUCCESS asset=${asset} price=${p.toFixed(2)} source=${source}`);
             } else {
-                console.warn(`[Strike] Échec capture pour ${asset}.`);
+                console.error(`[Strike] ÉCHEC CRITIQUE: Aucune source de prix pour ${asset}.`);
             }
         }
     } catch (e) {

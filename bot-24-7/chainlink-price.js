@@ -92,8 +92,8 @@ export async function getChainlinkPrice(asset = 'BTC') {
     const result = await Promise.any(promises);
     assetCaches[cleanAsset] = result;
     lastWinningRpc = result.rpcLabel;
-    // v7.16.54 : Seuil de fraîcheur augmenté à 600s (Chainlink L2 peut avoir des battements lents)
-    return { ...result, stale: result.ageSec > 600 };
+    // v7.16.57 : Seuil de fraîcheur réduit à 60s (Demande utilisateur pour éviter strike décalé)
+    return { ...result, stale: result.ageSec > 60 };
   } catch (err) {
     console.warn(`[Chainlink] [${cleanAsset}] Tous les RPC ont échoué ou prix invalide ! tentative de récupération depuis le cache.`);
     if (cache.price != null) return { ...cache, stale: true, source: 'chainlink_stale_cache' };
