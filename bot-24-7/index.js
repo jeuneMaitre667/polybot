@@ -551,7 +551,9 @@ function writeHealth(updates, extra = {}) {
             }
             return count > 0 ? total / count : 0;
           })(),
-          strikeLocked: state.currentSlotStrike?.isOfficial || false
+          strikeLocked: state.currentSlotStrike?.isOfficial || false,
+          binanceRefPrice: state.binanceRefPrice || null,
+          binanceRefAtMs: state.binanceRefAtMs || null
         }])
       ),
       lastRateLimitInfo: typeof lastRateLimitInfo !== 'undefined' ? lastRateLimitInfo : null,
