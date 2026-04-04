@@ -151,7 +151,7 @@ const perpState = new Map([
 /** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
 const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
 
-function saveBoundaryStrike(asset, price) {
+function saveBoundaryStrikeLocal(asset, price) {
     try {
         let data = {};
         if (fs.existsSync(STRIKES_FILE)) {
@@ -167,7 +167,7 @@ function saveBoundaryStrike(asset, price) {
     }
 }
 
-function lookupLocalStrike(asset, startTime) {
+function lookupBoundaryStrikeLocal(asset, startTime) {
     try {
         if (!fs.existsSync(STRIKES_FILE)) return null;
         const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
@@ -175,7 +175,7 @@ function lookupLocalStrike(asset, startTime) {
         if (ts.length === 10) ts += '000';
         const targetKey = `${ts}_${asset.trim().toUpperCase()}`;
         
-        // Match résilient v7.16.26
+        // Match résilient v7.16.28
         const cleanTarget = targetKey.replace(/[^0-9A-Z_]/gi, '');
         for (const k of Object.keys(data)) {
             if (k.replace(/[^0-9A-Z_]/gi, '') === cleanTarget) {
@@ -201,7 +201,7 @@ const runBoundaryCapture = async () => {
             for (const asset of SUPPORTED_ASSETS) {
                 const res = await getChainlinkPrice(asset);
                 const p = res?.price || calculateConsensusPrice(asset);
-                if (p > 0) saveBoundaryStrike(asset, p);
+                if (p > 0) saveBoundaryStrikeLocal(asset, p);
             }
         }
     } catch (e) {
@@ -5165,7 +5165,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (signal.strike == null) {
       const slug = signal.slug || signal.eventSlug;
       const start = signal.m?.startDate || signal.startDate;
-      signal.strike = lookupLocalStrike(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
+      signal.strike = lookupBoundaryStrikeLocal(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
   }
   const key = getSignalKey(signal);
 
