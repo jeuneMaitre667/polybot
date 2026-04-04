@@ -6,10 +6,12 @@ import {
     SUPPORTED_ASSETS, 
     MARKET_MODE, 
     GAMMA_EVENT_BY_SLUG_URL,
-    BITCOIN_UP_DOWN_15M_SLUG,
-    BITCOIN_UP_DOWN_SLUG,
-    ETHEREUM_UP_DOWN_15M_SLUG,
-    SOLANA_UP_DOWN_15M_SLUG,
+    BITCOIN_UP_OR_DOWN_1H_PREFIX,
+    ETHEREUM_UP_OR_DOWN_1H_PREFIX,
+    SOLANA_UP_OR_DOWN_1H_PREFIX,
+    BITCOIN_UPDOWN_15M_PREFIX,
+    ETHEREUM_UPDOWN_15M_PREFIX,
+    SOLANA_UPDOWN_15M_PREFIX,
     POLYMARKET_FEE_RATE,
     FEE_SAFETY_BUFFER
 } from './config.js';
@@ -112,11 +114,13 @@ export async function fetchSignals(asset, context = {}) {
 
 function getSlotSlugForAsset(asset) {
     if (MARKET_MODE === '15m') {
-        if (asset === 'BTC') return BITCOIN_UP_DOWN_15M_SLUG;
-        if (asset === 'ETH') return ETHEREUM_UP_DOWN_15M_SLUG;
-        if (asset === 'SOL') return SOLANA_UP_DOWN_15M_SLUG;
+        if (asset === 'BTC') return BITCOIN_UPDOWN_15M_PREFIX;
+        if (asset === 'ETH') return ETHEREUM_UPDOWN_15M_PREFIX;
+        if (asset === 'SOL') return SOLANA_UPDOWN_15M_PREFIX;
     }
-    return BITCOIN_UP_DOWN_SLUG;
+    if (asset === 'ETH') return ETHEREUM_UP_OR_DOWN_1H_PREFIX;
+    if (asset === 'SOL') return SOLANA_UP_OR_DOWN_1H_PREFIX;
+    return BITCOIN_UP_OR_DOWN_1H_PREFIX;
 }
 
 /**
@@ -194,18 +198,21 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     
     try {
         let startTime = null;
-        
-        // v7.15.3 : Extraire l'Epoch du slug (ex: ...-1775265300)
+        // v9.8.12 : Priorité ABSOLUE au timestamp extrait du slug pour le matching 15m
         if (marketSlug && marketSlug.includes('-')) {
             const parts = marketSlug.split('-');
             const lastPart = parts[parts.length - 1];
             if (/^\d+$/.test(lastPart)) {
                 startTime = parseInt(lastPart) * 1000;
+                console.log(`[Strike] Extracted slot time from slug for ${asset}: ${startTime}`);
             }
         }
         
-        // Fallback sur startDateStr si pas de slug (mais Gamma startDate est souvent erroné pour 15m)
-        if (!startTime && startDateStr) startTime = new Date(startDateStr).getTime();
+        // Fallback sur startDateStr uniquement si pas de slug
+        if (!startTime && startDateStr) {
+            startTime = new Date(startDateStr).getTime();
+        }
+        
         if (!startTime) return null;
 
         // v7.16.21 : Normalisation Ms (13 digits) vs Sec (10 digits)
@@ -218,19 +225,29 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
             const data = JSON.parse(raw);
             // v7.16.8 : Recherche absolue (loose match pour éviter tout caractère invisible)
+            // v9.8.11 : Recherche par ID ou par Timestamp (fallback)
             const cleanKey = Object.keys(data).find(k => {
                 const k1 = k.replace(/[^0-9A-Z_]/gi, '');
                 const k2 = targetKey.replace(/[^0-9A-Z_]/gi, '');
-                // console.log(`[Strike] Comparing k1: ${k1} vs k2: ${k2}`);
                 return k1 === k2 && k1.length > 0;
             });
+            
+            if (!cleanKey && asset.includes('BTC')) {
+                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne récente (+- 2 min)
+                const now = Date.now();
+                const nearbyKey = Object.keys(data).find(k => {
+                    const ts = parseInt(k.split('_')[0]);
+                    return Math.abs(ts - now) < 120000 && k.includes(asset);
+                });
+                if (nearbyKey) return data[nearbyKey];
+            }
             
             if (cleanKey) {
                 const captured = data[cleanKey];
                 console.log(`[Strike] MATCH for ${asset}: ${captured} (Key: ${targetKey})`);
                 return captured;
             } else {
-                console.warn(`[Strike] NO MATCH for ${asset} (${targetKey}). Available: ${Object.keys(data).join(',')}`);
+                console.warn(`[Strike] NO MATCH for ${asset} (${targetKey}). Available: ${Object.keys(data).slice(-5).join(',')}`);
             }
         } else {
             console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
