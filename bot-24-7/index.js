@@ -28,7 +28,8 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
+import lagRecorder from './lag-recorder.js';
 import axios from 'axios';
 import crypto from 'crypto';
 import { 
