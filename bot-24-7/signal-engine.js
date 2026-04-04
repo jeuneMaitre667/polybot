@@ -207,17 +207,19 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         if (!startTime && startDateStr) startTime = new Date(startDateStr).getTime();
         if (!startTime) return null;
 
-        const key = `${startTime}_${asset}`;
+        const targetKey = `${startTime}_${asset.trim().toUpperCase()}`;
         
         if (fs.existsSync(STRIKES_FILE)) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
             const data = JSON.parse(raw);
-            if (data[key]) {
-                const captured = data[key];
-                console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${key}): ${captured}`);
+            // v7.16.1 : Recherche résiliente (match insensible aux espaces)
+            const cleanKey = Object.keys(data).find(k => k.trim() === targetKey);
+            if (cleanKey) {
+                const captured = data[cleanKey];
+                console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${targetKey}): ${captured}`);
                 return captured;
             } else {
-                console.log(`[Strike] Key not found: ${key}. Available keys: ${Object.keys(data).join(', ')}`);
+                console.log(`[Strike] Key not found: ${targetKey}. Available keys: [${Object.keys(data).map(k => '"' + k + '"').join(', ')}]`);
             }
         } else {
             console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
