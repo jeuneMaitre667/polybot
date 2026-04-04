@@ -5820,15 +5820,25 @@ async function run() {
            console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curBinance}.`);
 
            state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, slug);
-        } else if (state.binanceRefPrice === null) {
-           // v10.2 : Fallback de démarrage à froid (récupération de l'ouverture du créneau actuel)
+        }
+        
+        // v10.5 : Robustesse - Si l'ancrage initial a échoué (curBinance null), on réessaie ou on fetch l'historique
+        if (state.binanceRefPrice === null) {
            const interval = slug.includes('15m') ? '15m' : '1h';
-           console.log(`[${asset}] 🔄 Cold Start: Fetching opening price for ${slug}...`);
-           const openPrice = await fetchBinanceSlotOpeningPrice(asset, interval);
-           if (openPrice) {
-             state.binanceRefPrice = openPrice;
-             state.binanceRefAtMs = Date.now(); // Date approximative du fetch
-             console.log(`[${asset}] ⚓ Historical Base 0 recovered: ${openPrice}. Momentum active.`);
+           const curBinance = perpState.get(asset).binance;
+           
+           if (curBinance) {
+              state.binanceRefPrice = curBinance;
+              state.binanceRefAtMs = Date.now();
+              console.log(`[${asset}] ⚓ Late Anchor: Recovered Base 0 from Spot: ${curBinance}.`);
+           } else {
+              console.log(`[${asset}] 🔄 Momentum Recovery: Fetching opening price for ${slug}...`);
+              const openPrice = await fetchBinanceSlotOpeningPrice(asset, interval);
+              if (openPrice) {
+                state.binanceRefPrice = openPrice;
+                state.binanceRefAtMs = Date.now();
+                console.log(`[${asset}] ⚓ Historical Base 0 recovered: ${openPrice}. Momentum active.`);
+              }
            }
         }
       }
