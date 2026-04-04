@@ -5601,21 +5601,6 @@ function createCycleProfiler() {
 
 const CYCLE_PROFILER = process.env.CYCLE_PROFILER === '1' || process.env.CYCLE_PROFILER === 'true';
 
-/** v7.16.10 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
-const runBoundaryCapture = async () => {
-    try {
-        const mins = new Date().getMinutes();
-        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
-            lastBoundaryMinute = mins;
-            for (const asset of SUPPORTED_ASSETS) {
-                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
-                if (p > 0) saveBoundaryStrike(asset, p);
-            }
-        }
-    } catch (_) {}
-};
-setInterval(runBoundaryCapture, 60000);
-runBoundaryCapture(); // Exécution immédiate au démarrage
 
 async function run() {
   // Sécurité 2.1.2 : Maintenance Polymarket (Option B : Blindage 2026)
@@ -6305,5 +6290,25 @@ async function main() {
     await new Promise((r) => setTimeout(r, pollMs));
   }
 }
+
+/** v7.16.11 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
+const runBoundaryCapture = async () => {
+    try {
+        const mins = new Date().getMinutes();
+        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
+            lastBoundaryMinute = mins;
+            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL @ ${new Date().toISOString()}`);
+            for (const asset of SUPPORTED_ASSETS) {
+                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
+                if (p > 0) saveBoundaryStrike(asset, p);
+            }
+        }
+    } catch (e) {
+        console.error('[Strike] ERROR in background capture:', e.message);
+    }
+};
+
+setInterval(runBoundaryCapture, 60000);
+runBoundaryCapture(); // Exécution immédiate au démarrage
 
 main();
