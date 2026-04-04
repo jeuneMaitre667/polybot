@@ -37,5 +37,12 @@ export const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLAT
 export const POLYMARKET_FEE_RATE = 0; // v9.3.6: Maker Strategy (Zero Fee)
 export const FEE_SAFETY_BUFFER = 1.05;
 
+// v10.6 : Momentum CDF Strategy Window
+export const ENTRY_WINDOW = {
+  minSecondsRemaining: 15,
+  maxSecondsRemaining: 120, // Fenêtre optimale T-90s environ
+  minDeltaPct: 0.0003,      // 0.03 %
+};
+
 // Thresholds
 

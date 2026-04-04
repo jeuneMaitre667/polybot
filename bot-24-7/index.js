@@ -42,7 +42,8 @@ import {
   POLYMARKET_FEE_RATE,
   ARBITRAGE_GAP_THRESHOLD,
   BTC_ANNUALIZED_VOLATILITY,
-  FEE_SAFETY_BUFFER
+  FEE_SAFETY_BUFFER,
+  ENTRY_WINDOW
 } from './config.js';
 
 // --- v9.6.0 Simulation & Diagnostics ---
@@ -5372,6 +5373,35 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
     if (!safety.ok) return;
 
+    const spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
+    if (spotPrice <= 0) {
+      recordSkipReason('missing_spot_price', source, { asset, spotPrice });
+      return;
+    }
+
+    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
+    const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
+
+    // --- v10.6 : Momentum Timing Guard (T-90s à T-15s) ---
+    if (secondsLeft < ENTRY_WINDOW.minSecondsRemaining || secondsLeft > ENTRY_WINDOW.maxSecondsRemaining) {
+      return; // Trop tôt ou trop tard pour un edge optimal
+    }
+
+    const state = getAssetState(asset || signal.asset || 'BTC');
+    if (!state || !state.binanceRefPrice) return;
+
+    const deltaPct = (spotPrice / state.binanceRefPrice) - 1;
+    if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
+      return; // Signal trop faible (bruit)
+    }
+
+    const strikePrice = Number(signal.strike);
+    const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+    console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
+
+    // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
+    signal.probFairAtEntry = probFairLive;
+
     const activePositions = readActivePositions();
     const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
     const currentCount = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length;
@@ -5389,8 +5419,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     console.log(`[Trace] 06 VWAP Result: ${vwapPrice}`);
     if (vwapPrice == null) return;
 
-    const spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
-    const strikePrice = Number(signal.strike);
     console.log(`[Trace] 07 Data: spot=${spotPrice} strike=${strikePrice}`);
 
     if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
@@ -5398,25 +5426,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       return;
     }
     
-    if (spotPrice <= 0) {
-      recordSkipReason('missing_spot_price', source, { asset, spotPrice });
-      return;
-    }
-
-    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
-    const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
-    
-    // v10.4 : Diagnostic Momentum
-    const state = getAssetState(asset || signal.asset || 'BTC');
-    if (state.binanceRefPrice) {
-      const currentDelta = ((spotPrice / state.binanceRefPrice) - 1) * 100;
-      console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${currentDelta.toFixed(3)}%`);
-    }
-
-    const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-
-    // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
-    signal.probFairAtEntry = probFairLive;
     const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
     // v9.1.0 : Alignement sur les frais réels (7.2%) pour valider l'edge net
     const actualFee = POLYMARKET_FEE_RATE * (1 - vwapPrice);
@@ -6100,16 +6109,48 @@ function calculateAnnualizedVolatility(prices) {
 }
 
 /**
- * Calculateur de Probabilité Théorique (Loi Normale CDF)
- * @param {number} currentPrice Prix actuel du BTC
- * @param {number} strikePrice Prix cible du marché
- * @param {number} timeToExpirySec Temps restant en secondes
- * @param {number} vol Volatilité annualisée (ex: 0.20)
- * @returns {number} Probabilité de finir au dessus (0.0 à 1.0)
+ * v10.6 : Moteur CDF Log-Normal (Momentum Delta)
+ * Calcule la probabilité de réussite d'un slot UP en fonction du décalage (Lead-Lag).
  */
-/**
- * Calcule la probabilité "Fair" avec ajustement de Skew.
- */
+function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite, asset = 'BTC') {
+  if (timeToExpirySec <= 0) return currentPrice > strikePrice ? 1.0 : 0.0;
+
+  const state = getAssetState(asset);
+  const secondsRemaining = Math.max(1, timeToExpirySec);
+
+  // v10.6 : Modèle Momentum Log-Normal de Juste Valeur
+  if (state.binanceRefPrice && Number.isFinite(state.binanceRefPrice)) {
+    // 1. Calcul du Delta % par rapport à l'ancrage T-zéro
+    const deltaPct = (currentPrice / state.binanceRefPrice) - 1;
+    
+    // 2. Récupération de la Volatilité (Annualisée)
+    let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
+    if (!volOverwrite) {
+      const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
+      const realized = Number(state.vol) || 0;
+      vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
+    }
+
+    // 3. Modèle CDF Normal : P(S_T > K)
+    // d = (Distance en %) / (Volatilité sur le temps restant)
+    const timeInYears = secondsRemaining / (365 * 24 * 3600);
+    const volRemaining = vol * Math.sqrt(timeInYears);
+    
+    // Si la vol restante est nulle (quasi-fin de slot), on renvoie 1 ou 0
+    if (volRemaining <= 1e-9) return currentPrice > strikePrice ? 1.0 : 0.0;
+
+    const d = deltaPct / volRemaining;
+    return normalCDF(d);
+  }
+
+  // Fallback classique (Log-Diff) si binanceRefPrice est absent
+  const vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
+  const timeInYears = timeToExpirySec / (365 * 24 * 3600);
+  const sqrtT = Math.sqrt(timeInYears);
+  const d1 = (Math.log(currentPrice / strikePrice)) / (vol * sqrtT);
+  return normalCDF(d1);
+}
+
 /**
  * Calcule la Volatilité Parkinson (24h) basée sur le High/Low de Binance.
  * Plus robuste qu'une simple constante car s'adapte à la peur du marché.
