@@ -162,7 +162,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
  */
 export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
     try {
-        const data = fs.existsSync(STRIKES_FILE) ? JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8')) : {};
+        const data = fs.existsSync(STRIKES_FILE) ? JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8') || '{}') : {};
         // Normaliser le timestamp à la borne la plus proche (passée)
         const date = new Date(timestamp);
         date.setSeconds(0);
@@ -176,13 +176,13 @@ export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
         
         // Garder seulement les 48 dernières heures (3 actifs * 4 par heure * 48h = 576 entrées)
         const keys = Object.keys(data).sort();
-        if (keys.length > 600) {
-            const keysToDelete = keys.slice(0, keys.length - 600);
+        if (keys.length > 800) {
+            const keysToDelete = keys.slice(0, keys.length - 800);
             keysToDelete.forEach(k => delete data[k]);
         }
         
         fs.writeFileSync(STRIKES_FILE, JSON.stringify(data, null, 2));
-        console.log(`[Strike] Captured boundary for ${asset}: ${price} @ ${date.toISOString()}`);
+        console.log(`[Strike] SUCCESSFULLY saved boundary for ${asset}: ${price} @ ${date.toISOString()} (Key: ${key})`);
     } catch (err) {
         console.error('[Strike] Error saving boundary:', err.message);
     }
