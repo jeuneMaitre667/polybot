@@ -5167,19 +5167,24 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (!signal?.tokenIdToBuy) return;
   
-  // v7.16.30 : Robust asset extraction from slug
+  // v7.16.32 : Robust asset and timestamp extraction
   const slug = signal.slug || signal.eventSlug || '';
   let asset = signal.asset;
   if (!asset) {
       if (slug.includes('btc')) asset = 'BTC';
       else if (slug.includes('eth')) asset = 'ETH';
       else if (slug.includes('sol')) asset = 'SOL';
-      else asset = 'BTC'; // Final fallback
+      else asset = 'BTC';
   }
 
   // v7.16.0 : Unified Strike Injection (Poll & WS)
   if (signal.strike == null) {
-      const start = signal.m?.startDate || signal.startDate;
+      let start = signal.m?.startDate || signal.startDate;
+      if (!start && slug.includes('-')) {
+          const parts = slug.split('-');
+          const lastPart = parts[parts.length - 1];
+          if (/^\d{10,}$/.test(lastPart)) start = lastPart;
+      }
       signal.strike = lookupBoundaryStrikeLocal(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
   }
   const key = getSignalKey(signal);
