@@ -129,6 +129,9 @@ import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from
 import * as simulationTrade from './simulationTrade.js';
 import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
 import { fetchSignals, getSignalKey, shouldSkipTradeTiming, lookupBoundaryStrike } from './signal-engine.js';
+import { getStrike, saveStrike } from './src/core/strike-manager.js';
+import { calculateConsensusPrice, getUnifiedFairValue } from './src/core/price-engine.js';
+import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -149,53 +152,8 @@ const perpState = new Map([
 ]);
 
 /** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
+// v8.0.0 : Logic moved to src/core/strike-manager.js
 const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
-
-function saveBoundaryStrikeLocal(asset, price) {
-    try {
-        let data = {};
-        if (fs.existsSync(STRIKES_FILE)) {
-            data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
-        }
-        const slot = Math.floor(Date.now() / 900000) * 900000;
-        const key = `${slot}_${asset.trim().toUpperCase()}`;
-        data[key] = price;
-        fs.writeFileSync(STRIKES_FILE, JSON.stringify(data, null, 2));
-        console.log(`[Strike] ${asset} saved internally: ${price} (Slot: ${slot})`);
-        
-        // v7.16.58 : Hydrater l'état en mémoire pour le reporting health.json
-        getAssetState(asset).currentSlotStrike = { price: price, slotSlug: String(slot) };
-    } catch (e) {
-        console.error('[Strike] Save Error:', e.message);
-    }
-}
-
-function lookupBoundaryStrikeLocal(asset, startTime) {
-    try {
-        if (!fs.existsSync(STRIKES_FILE)) return null;
-        
-        // v7.16.61 : Diagnostic lourd des clés
-        const cleanAsset = asset.trim().toUpperCase();
-        const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
-        const key = `${ms}_${cleanAsset}`;
-        
-        const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
-        const strike = data[key];
-        
-        if (strike) {
-            console.log(`[Strike] [HIT] ${key}: ${strike}`);
-            return strike;
-        }
-        
-        // v7.16.61 : En cas de MISS, lister les clés disponibles
-        const availableKeys = Object.keys(data).join(', ');
-        console.warn(`[Strike] [MISS] key="${key}" (startTime=${startTime}). Dispo: [${availableKeys}]`);
-        return null;
-    } catch (e) {
-        console.error('[Strike] Lookup Error:', e.message);
-        return null;
-    }
-}
 
 let lastBoundaryMinute = null;
 const runBoundaryCapture = async () => {
@@ -213,22 +171,11 @@ const runBoundaryCapture = async () => {
         console.log(`[Strike] Lancement de la capture (Minute: ${m})...`);
         for (const asset of SUPPORTED_ASSETS) {
             const res = await captureStrikeAtSlotOpen(asset, `init_${Date.now()}`);
-            let p = res && res.price ? res.price : 0;
-            let source = 'chainlink_polygon';
+            const { price, source } = getUnifiedFairValue(asset, res, perpState);
 
-            // v7.16.57 : Fallback au Consensus Perp (Binance/OKX/Hyper) si Chainlink échoue ou est trop lent
-            if (p <= 0) {
-                p = calculateConsensusPrice(asset);
-                source = 'consensus_perp_fallback';
-                if (p > 0) {
-                    console.warn(`[Strike] [${asset}] Chainlink indisponible/stale. Utilisation du Consensus Perp: $${p.toFixed(2)}`);
-                }
-            }
-
-            if (p > 0) {
-                saveBoundaryStrikeLocal(asset, p);
-                // Log enrichi pour le monitoring
-                console.log(`[Strike] SUCCESS asset=${asset} price=${p.toFixed(2)} source=${source}`);
+            if (price > 0) {
+                saveStrike(asset, price);
+                console.log(`[Strike] SUCCESS asset=${asset} price=${price.toFixed(2)} source=${source}`);
             } else {
                 console.error(`[Strike] ÉCHEC CRITIQUE: Aucune source de prix pour ${asset}.`);
             }
@@ -245,44 +192,7 @@ const ACTIVE_REDEMPTIONS = new Set();
 let lastRewardsFetch = 0;
 let cachedRewardsData = null;
 
-let binanceBtcPrice = 0; // Legacy global (v5.4.1: will be prioritized by current asset in perpState)
-let binanceLastUpdateMs = 0;
-let okxBtcPrice = 0;
-let okxLastUpdateMs = 0;
-let hyperliquidBtcPrice = 0;
-let hyperliquidLastUpdateMs = 0;
-
-/**
- * Calculateur de prix de consensus multi-actifs (v5.4.1)
- * Combine Binance, OKX et Hyperliquid pour l'actif demandé.
- */
-function calculateConsensusPrice(asset = 'BTC') {
-  const p = perpState.get(asset);
-  if (!p) return 0;
-  
-  const now = Date.now();
-  const sources = [];
-  
-  // Binance (Weight 1)
-  if (p.binance > 0 && (now - p.binanceTs) < 30000) sources.push(p.binance);
-  // OKX (Weight 1)
-  if (p.okx > 0 && (now - p.okxTs) < 30000) sources.push(p.okx);
-  // Hyperliquid (Weight 1)
-  if (p.hyper > 0 && (now - p.hyperTs) < 30000) sources.push(p.hyper);
-  
-  if (sources.length === 0) return 0;
-  
-  const avg = sources.reduce((a, b) => a + b, 0) / sources.length;
-  
-  // --- Price Sanity Guard (v7.16.38) ---
-  const SANITY_MIN = { BTC: 40000, ETH: 1500, SOL: 40 };
-  if (avg < (SANITY_MIN[asset] || 0)) {
-      console.warn(`[Price] Consensus ${asset} price ${avg.toFixed(2)} below sanity threshold. REJECTED.`);
-      return 0;
-  }
-
-  return avg;
-}
+// v8.0.0 : Legacy Price Consensus Cleanup (Replaced by src/core/price-engine.js)
 
 
 let binanceWs = null;
@@ -1788,21 +1698,7 @@ async function checkNativeGasBalance(clobClient) {
   }
 }
 
-async function runAutoRedeem(clobClient) {
-   try {
-      console.log(`[Redeem] ♻️ Starting automated profit conversion...`);
-      // v7.10.1: Correction pour l'appel SDK ClobClient
-      const res = await clobClient.postRedeem(); 
-      console.log(`[Redeem] ✅ Success: ${JSON.stringify(res)}`);
-      if (telegramTradeAlertsEnabled) {
-          sendTelegramAlert(`♻️ *AUTO-REDEEM SUCCESS*\nProfit converted to USDC successfully.`);
-      }
-      return true;
-   } catch (err) {
-      console.error(`[Redeem] ❌ Fail: ${err.message}`);
-      return false;
-   }
-}
+// runAutoRedeem removed (broken SDK call and redundant with tryRedeemResolvedPositions)
 
 async function getMarketConfig(clobClient, tokenId) {
   if (marketConfigCache.has(tokenId)) return marketConfigCache.get(tokenId);
@@ -1860,6 +1756,12 @@ function recordSkipReason(reason, source = 'unknown', details = {}) {
     };
   }
   writeHealth(healthPayload);
+  try {
+    const obj = { at: skipAtIso, reason: r, source: s, ...safeDetails };
+    fs.appendFileSync(DECISION_LOG_FILE, JSON.stringify(obj) + '\n', 'utf8');
+  } catch (e) {
+    // Silence error to avoid infinite loop if disk is full
+  }
 }
 
 
@@ -2269,9 +2171,15 @@ async function fetchRewardsUserPercentages(clobClient) {
 }
 
 async function checkAndCancelStaleOrders(clobClient) {
+  console.log(`[CrashAudit] typeof clobClient: ${typeof clobClient} | isNull: ${clobClient === null} | isUndefined: ${clobClient === undefined}`);
+  if (!clobClient) {
+      console.warn('[CrashAudit] REJECTED: clobClient is falsy');
+      return;
+  }
   // v7.4.0: Detect Fills via SDK comparison
   let activeOrderIds = new Set();
   try {
+    console.log(`[CrashAudit] Calling getOpenOrders with current state...`);
     const res = await clobClient.getOpenOrders();
     const openClobOrders = Array.isArray(res) ? res : (res?.data || []);
     activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
@@ -4642,9 +4550,11 @@ async function getActiveMarketTokensForWs() {
 
     const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
     let events = gammaOut.events;
+    console.log(`[WS-Sub] 🔍 Assets=${asset} | slugMatch=${slugMatch} | Events found=${events.length}`);
     if (MARKET_MODE === '15m') {
       const r = await resolve15mEventsForTrading(events, Date.now(), asset);
       events = r.events;
+      console.log(`[WS-Sub] 🔍 Resolved 15m for ${asset}: Strategy=${r.resolveStrategy} | Count=${events.length} | Slug=${r.expectedSlug}`);
     }
 
     for (const ev of events) {
@@ -4693,6 +4603,7 @@ async function getActiveMarketTokensForWs() {
   for (const asset of SUPPORTED_ASSETS) {
     await collectForAsset(asset);
   }
+  console.log(`[WS-Sub] ✅ Total Subscription Map size: ${tokenToSignal.size} tokens.`);
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
@@ -5206,281 +5117,296 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
-  if (!signal?.tokenIdToBuy) return;
-  
-  // v7.16.32 : Robust asset and timestamp extraction
-  const slug = signal.slug || signal.eventSlug || '';
-  let asset = signal.asset;
-  if (!asset) {
-      if (slug.includes('btc')) asset = 'BTC';
-      else if (slug.includes('eth')) asset = 'ETH';
-      else if (slug.includes('sol')) asset = 'SOL';
-      else asset = 'BTC';
-  }
-
-  // v7.16.0 : Unified Strike Injection (Poll & WS)
-  if (signal.strike == null) {
-      let start = signal.m?.startDate || signal.startDate;
-      if (!start && slug.includes('-')) {
-          const parts = slug.split('-');
-          const lastPart = parts[parts.length - 1];
-          if (/^\d{10,}$/.test(lastPart)) start = lastPart;
-      }
-      signal.strike = lookupBoundaryStrikeLocal(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
-  }
-  const key = getSignalKey(signal);
-
-  // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
-  const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
-  const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
-
-
-  if (shouldSkipTradeTiming(signal)) {
-    const timingDetails = getTimingForbiddenDetails();
-    recordSkipReason('timing_forbidden', source, {
-      conditionId: key,
-      tokenId: signal.tokenIdToBuy,
-      takeSide: signal.takeSide,
-      bestAskP: pickSignalBestAskP(signal),
-      ...timingDetails,
-    });
-    logSignalInRangeButNoOrder(source, 'timing_forbidden', signal, { ...timingDetails });
-    return;
-  }
-  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
-    const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
-    logSignalInRangeButNoOrder(source, r, signal, {});
-    return;
-  }
-
-  // --- Correlation Guard BTC/ETH ---
-  const MAX_CONCURRENT_CORRELATED_POSITIONS = 1;
-  const correlatedGroup = ["BTC", "ETH"];
-  if (correlatedGroup.includes(signal.asset)) {
-    const activePositions = readActivePositions();
-    const now = Date.now();
-    const activeCorrelated = activePositions.filter(p => 
-      correlatedGroup.includes(p.asset) && (p.marketEndMs ? p.marketEndMs > now : true)
-    ).length;
-    if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
-        console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — [${source}] skip.`);
-        recordSkipReason('correlation_limit', source, { asset: signal.asset, activeCorrelated });
-        return;
-    }
-  }
-
-  const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
-  if (cooldownRemainingMs > 0 && !(signal.edge > 0.35)) {
-    recordSkipReason('cooldown_active', source, { conditionId: key, remainingMs: cooldownRemainingMs });
-    return;
-  }
-
-  if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
-    recordSkipReason('degraded_mode_pause', source, { conditionId: key });
-    return;
-  }
-
-  const t0 = Date.now();
-  const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
-  let bestAskLive = null;
-  const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
-
-  // 1. PHASE PRIX (WS ou REST)
-  if (USE_WS_PRICE_ONLY) {
-    const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-    if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) return;
-    bestAskLive = wsBestAsk;
-    timingsMs.bestAsk = 1;
-    const wsAgeMs = wsEventAtMs > 0 ? Date.now() - wsEventAtMs : null;
-    if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
-      const restAsk = await getBestAsk(signal.tokenIdToBuy);
-      if (!restAsk || Math.abs(restAsk - wsBestAsk) > wsPriceMismatchMaxP) return;
-      bestAskLive = restAsk;
-    }
-  } else {
-    bestAskLive = await getBestAsk(signal.tokenIdToBuy);
-    if (!bestAskLive) return;
-  }
-
-  // 2. PHASE CONNECTION (CLOB)
-  let clobClient = null;
   try {
-    const tCreds0 = Date.now();
-    clobClient = await buildClobClientCachedCreds();
-    timingsMs.creds = Math.max(1, Date.now() - tCreds0);
-  } catch (err) {
-    console.warn('WebSocket tryPlace: CLOB client:', err.message);
-    return;
-  }
-
-  // 3. PHASE MESURE (Balance & Book)
-  const tBal0 = Date.now();
-  let balance;
-  if (simulationTradeEnabled) {
-    balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
-  } else {
-    balance = (await getUsdcSpendableViaClob(clobClient)) ?? (await getUsdcBalanceRpc());
-  }
-  timingsMs.balance = Math.max(1, Date.now() - tBal0);
-
-  let liquidity = null;
-  let maxUsdAvg = null;
-  if (needLiquidityBook) {
-    const tBook0 = Date.now();
-    liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
-    timingsMs.book = Math.max(1, Date.now() - tBook0);
-    if (useAvgPriceSizing && bestAskLive != null) {
-      maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
-    }
-  }
-
-  // 4. PHASE SIZING (Kelly, SOL, Caps)
-  const balanceForSizing = budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
-  let amountUsd = orderSizeUsd;
-  if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-    const activePositions = readActivePositions();
-    const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-    amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
-  } else if (useBalanceAsSize) {
-    amountUsd = balanceForSizing ?? orderSizeUsd;
-  }
-
-  if (signal.asset === 'SOL') {
-    amountUsd *= 0.5;
-    console.log(`[Risk] 📉 SOL detected. Stake adjusted to ${(amountUsd).toFixed(2)} USDC.`);
-  }
-
-  if (liquidity != null && useLiquidityCap && amountUsd > liquidity) amountUsd = liquidity;
-  if (maxUsdAvg != null && useAvgPriceSizing && amountUsd > maxUsdAvg) amountUsd = maxUsdAvg;
-  amountUsd = applyMaxStakeUsd(amountUsd);
-
-  // 5. PHASE VALIDATION (Safety, Exposure, VWAP)
-  const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, calculateConsensusPrice(signal.asset || 'BTC'));
-  if (!safety.ok) return;
-
-  const activePositions = readActivePositions();
-  const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
-  if (activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length >= assetLimit) return;
-
-  if (amountUsd < orderSizeMinUsd) {
-    logSignalInRangeButNoOrder('ws', 'amount_below_min', signal, { amountUsd, balance });
-    return;
-  }
-
-  const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
-  if (vwapPrice == null) return;
-
-  const spotPrice = calculateConsensusPrice(asset);
-  const strikePrice = Number(signal.strike);
-
-  if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
-    recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
-    return;
-  }
-  
-  if (spotPrice <= 0) {
-    recordSkipReason('missing_spot_price', source, { asset, spotPrice });
-    return;
-  }
-
-  const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
-  const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
-  const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-
-  // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
-  signal.probFairAtEntry = probFairLive;
-  const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
-  const netEdge = (fairValue - vwapPrice) - 0.005; 
-
-  // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
-  if (vwapPrice > 0.98) {
-    recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset });
-    return;
-  }
-
-  // v7.16.13 : Sécurité Profitabilité (1% net minimum après frais)
-  if (netEdge < 0.01) {
-    recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.01 });
-    return;
-  }
-
-  if (netEdge < adjustedThreshold) {
-    // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
-    logDecision({
-        at: new Date().toISOString(),
-        source,
-        asset,
-        slug: signal.slug || signal.eventSlug,
-        side: signal.takeSide,
-        prob: probFairLive,
-        ask: vwapPrice,
-        edge: Number(netEdge.toFixed(4)),
-        strike: signal.strike,
-        ofi: signal.ofiScore || 0,
-        adjThreshold: Number(adjustedThreshold.toFixed(4))
-    });
-    recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
-    return;
-  }
-
-  // 6. PHASE EXECUTION
-  placedKeys.add(key);
-  const tPlace0 = Date.now();
-  let result;
-  if (simulationTradeEnabled) {
-    result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: vwapPrice, conditionId: key });
-    if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
-  } else {
-    result = await placeMarketOrderWithPartialFillRetries(signal, amountUsd, clobClient, { forceSingleAttempt: inPolymarketDegradedMode() });
-  }
-  timingsMs.placeOrder = Date.now() - tPlace0;
-
-  if (result.ok) {
-    const time = new Date().toISOString();
-    const orderData = {
-      at: time,
-      asset: signal.asset || 'BTC',
-      underlying: signal.asset || 'BTC',
-      takeSide: signal.takeSide,
-      amountUsd,
-      conditionId: key,
-      strike: signal.strike,
-      tokenId: signal.tokenIdToBuy,
-      orderID: result.orderID,
-      latencyMs: Date.now() - t0,
-      timingsMs,
-      ...pickFillFieldsForLog(result),
-      edge: netEdge,
-      simulationTrade: !!result.simulationTrade
-    };
-
-    activePositions.push({ ...orderData, resolved: false, entryTime: time });
-    writeActivePositions(activePositions.slice(-50));
-    writeLastOrder(orderData);
-    appendOrderLog(orderData);
-    void notifyTelegramTradeSuccess(source, orderData, simulationTradeEnabled ? null : clobClient);
+    if (!signal?.tokenIdToBuy) return;
     
-    const retryInfo = (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
-    const fillConsole = formatFillConsoleSuffix(result);
-    const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
-
-    console.log(
-      `[${time}] [${source.toUpperCase()}] Ordre placé ${brandEmoji(signal.asset)} ${signal.asset} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(orderData.latencyMs)} ms)${cacheHitInfo}`
-    );
-  } else {
-    const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
-    if (!isInsufficient) placedKeys.delete(key);
-    if (isRetryableExecutionError(result?.error) || isInsufficient) {
-      setExecutionCooldown(key, result.error);
-      notePolymarketIncidentError('ws_order_failure', result.error);
+    // v7.16.32 : Robust asset and timestamp extraction
+    const slug = signal.slug || signal.eventSlug || '';
+    let asset = signal.asset;
+    if (!asset) {
+        if (slug.includes('btc')) asset = 'BTC';
+        else if (slug.includes('eth')) asset = 'ETH';
+        else if (slug.includes('sol')) asset = 'SOL';
+        else asset = 'BTC';
     }
-    logSignalInRangeButNoOrder(source, 'place_order_failed', signal, {
-      bestAskP: bestAskLive,
-      amountUsd: Math.round(amountUsd * 100) / 100,
-      error: String(result?.error || '').slice(0, 240),
-    });
-    logJson('error', `Erreur ordre ${source.toUpperCase()}`, { takeSide: signal.takeSide, error: result.error });
-    console.error(`[${time}] [${source.toUpperCase()}] Erreur ${signal.takeSide}: ${result.error}`);
+
+    // v7.16.0 : Unified Strike Injection (Poll & WS)
+    if (signal.strike == null) {
+        let start = signal.m?.startDate || signal.startDate;
+        if (!start && slug.includes('-')) {
+            const parts = slug.split('-');
+            const lastPart = parts[parts.length - 1];
+            if (/^\d{10,}$/.test(lastPart)) start = lastPart;
+        }
+        signal.strike = getStrike(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
+    }
+    const key = getSignalKey(signal);
+
+    // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
+    const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
+    const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
+
+
+    if (shouldSkipTradeTiming(signal)) {
+      const timingDetails = getTimingForbiddenDetails();
+      recordSkipReason('timing_forbidden', source, {
+        conditionId: key,
+        tokenId: signal.tokenIdToBuy,
+        takeSide: signal.takeSide,
+        bestAskP: pickSignalBestAskP(signal),
+        ...timingDetails,
+      });
+      logSignalInRangeButNoOrder(source, 'timing_forbidden', signal, { ...timingDetails });
+      return;
+    }
+    if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
+      const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
+      logSignalInRangeButNoOrder(source, r, signal, {});
+      return;
+    }
+
+    // --- Correlation Guard BTC/ETH ---
+    const MAX_CONCURRENT_CORRELATED_POSITIONS = 1;
+    const correlatedGroup = ["BTC", "ETH"];
+    if (correlatedGroup.includes(signal.asset)) {
+      const activePositions = readActivePositions();
+      const now = Date.now();
+      const activeCorrelated = activePositions.filter(p => 
+        correlatedGroup.includes(p.asset) && (p.marketEndMs ? p.marketEndMs > now : true)
+      ).length;
+      if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
+          console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — [${source}] skip.`);
+          recordSkipReason('correlation_limit', source, { asset: signal.asset, activeCorrelated });
+          return;
+      }
+    }
+
+    const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
+    if (cooldownRemainingMs > 0 && !(signal.edge > 0.35)) {
+      recordSkipReason('cooldown_active', source, { conditionId: key, remainingMs: cooldownRemainingMs });
+      return;
+    }
+
+    if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+      recordSkipReason('degraded_mode_pause', source, { conditionId: key });
+      return;
+    }
+
+    const t0 = Date.now();
+    const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
+    let bestAskLive = null;
+    const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
+
+    // 1. PHASE PRIX (WS ou REST)
+    if (USE_WS_PRICE_ONLY) {
+      const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
+      if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) return;
+      bestAskLive = wsBestAsk;
+      timingsMs.bestAsk = 1;
+      const wsAgeMs = wsEventAtMs > 0 ? Date.now() - wsEventAtMs : null;
+      if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
+        const restAsk = await getBestAsk(signal.tokenIdToBuy);
+        if (!restAsk || Math.abs(restAsk - wsBestAsk) > wsPriceMismatchMaxP) return;
+        bestAskLive = restAsk;
+      }
+    } else {
+      bestAskLive = await getBestAsk(signal.tokenIdToBuy);
+      if (!bestAskLive) return;
+    }
+
+    // 2. PHASE CONNECTION (CLOB)
+    let clobClient = null;
+    try {
+      const tCreds0 = Date.now();
+      clobClient = await buildClobClientCachedCreds();
+      timingsMs.creds = Math.max(1, Date.now() - tCreds0);
+    } catch (err) {
+      console.warn('WebSocket tryPlace: CLOB client:', err.message);
+      return;
+    }
+
+    // 3. PHASE MESURE (Balance & Book)
+    const tBal0 = Date.now();
+    let balance;
+    if (simulationTradeEnabled) {
+      balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+    } else {
+      balance = (await getUsdcSpendableViaClob(clobClient)) ?? (await getUsdcBalanceRpc());
+    }
+    timingsMs.balance = Math.max(1, Date.now() - tBal0);
+
+    let liquidity = null;
+    let maxUsdAvg = null;
+    if (needLiquidityBook) {
+      const tBook0 = Date.now();
+      liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+      timingsMs.book = Math.max(1, Date.now() - tBook0);
+      if (useAvgPriceSizing && bestAskLive != null) {
+        maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
+      }
+    }
+
+    // 4. PHASE SIZING (Kelly, SOL, Caps)
+    const balanceForSizing = budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
+    let amountUsd = orderSizeUsd;
+    if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
+      const activePositions = readActivePositions();
+      const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+      amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
+    } else if (useBalanceAsSize) {
+      amountUsd = balanceForSizing ?? orderSizeUsd;
+    }
+
+    if (signal.asset === 'SOL') {
+      console.log(`[Risk] 📉 SOL detected. Type of amountUsd: ${typeof amountUsd}, Value: ${amountUsd}`);
+      amountUsd *= 0.5;
+      console.log(`[Risk] 📉 SOL stake adjusted to ${(Number(amountUsd) || 0).toFixed(2)} USDC.`);
+    }
+
+    console.log(`[Trace] 00 Starting phase validation for ${signal.asset} (Amount: ${amountUsd})...`);
+    if (liquidity != null && useLiquidityCap && amountUsd > liquidity) amountUsd = liquidity;
+    if (maxUsdAvg != null && useAvgPriceSizing && amountUsd > maxUsdAvg) amountUsd = maxUsdAvg;
+    amountUsd = applyMaxStakeUsd(amountUsd);
+
+    // 5. PHASE VALIDATION (Safety, Exposure, VWAP)
+    console.log(`[Trace] 01 Safety Check starting for ${signal.asset}...`);
+    const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, calculateConsensusPrice(signal.asset || 'BTC', perpState));
+    console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
+    if (!safety.ok) return;
+
+    const activePositions = readActivePositions();
+    const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
+    const currentCount = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length;
+    console.log(`[Trace] 03 Exposure Check: ${currentCount}/${assetLimit} positions active for ${signal.asset}`);
+    if (currentCount >= assetLimit) return;
+
+    if (amountUsd < orderSizeMinUsd) {
+      console.log(`[Trace] 04 Amount Below Min: ${amountUsd.toFixed(2)} < ${orderSizeMinUsd}`);
+      logSignalInRangeButNoOrder('ws', 'amount_below_min', signal, { amountUsd, balance });
+      return;
+    }
+
+    console.log(`[Trace] 05 VWAP Calc starting...`);
+    const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
+    console.log(`[Trace] 06 VWAP Result: ${vwapPrice}`);
+    if (vwapPrice == null) return;
+
+    const spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
+    const strikePrice = Number(signal.strike);
+    console.log(`[Trace] 07 Data: spot=${spotPrice} strike=${strikePrice}`);
+
+    if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
+      recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
+      return;
+    }
+    
+    if (spotPrice <= 0) {
+      recordSkipReason('missing_spot_price', source, { asset, spotPrice });
+      return;
+    }
+
+    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
+    const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
+    const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+
+    // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
+    signal.probFairAtEntry = probFairLive;
+    const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
+    const netEdge = (fairValue - vwapPrice) - 0.005; 
+
+    // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
+    if (vwapPrice > 0.98) {
+      recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset });
+      return;
+    }
+
+    // v7.16.13 : Sécurité Profitabilité (1% net minimum après frais)
+    if (netEdge < 0.01) {
+      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.01 });
+      return;
+    }
+
+    if (netEdge < adjustedThreshold) {
+      // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
+      logDecision({
+          at: new Date().toISOString(),
+          source,
+          asset,
+          slug: signal.slug || signal.eventSlug,
+          side: signal.takeSide,
+          prob: probFairLive,
+          ask: vwapPrice,
+          edge: Number(netEdge.toFixed(4)),
+          strike: signal.strike,
+          ofi: signal.ofiScore || 0,
+          adjThreshold: Number(adjustedThreshold.toFixed(4))
+      });
+      recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
+      return;
+    }
+
+    // 6. PHASE EXECUTION
+    placedKeys.add(key);
+    const tPlace0 = Date.now();
+    let result;
+    if (simulationTradeEnabled) {
+      result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: vwapPrice, conditionId: key });
+      if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
+    } else {
+      result = await placeMarketOrderWithPartialFillRetries(signal, amountUsd, clobClient, { forceSingleAttempt: inPolymarketDegradedMode() });
+    }
+    timingsMs.placeOrder = Date.now() - tPlace0;
+
+    if (result.ok) {
+      const time = new Date().toISOString();
+      const orderData = {
+        at: time,
+        asset: signal.asset || 'BTC',
+        underlying: signal.asset || 'BTC',
+        takeSide: signal.takeSide,
+        amountUsd,
+        conditionId: key,
+        strike: signal.strike,
+        tokenId: signal.tokenIdToBuy,
+        orderID: result.orderID,
+        latencyMs: Date.now() - t0,
+        timingsMs,
+        ...pickFillFieldsForLog(result),
+        edge: netEdge,
+        simulationTrade: !!result.simulationTrade
+      };
+
+      activePositions.push({ ...orderData, resolved: false, entryTime: time });
+      writeActivePositions(activePositions.slice(-50));
+      writeLastOrder(orderData);
+      appendOrderLog(orderData);
+      void notifyTelegramTradeSuccess(source, orderData, simulationTradeEnabled ? null : clobClient);
+      
+      const retryInfo = (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+      const fillConsole = formatFillConsoleSuffix(result);
+      const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+
+      console.log(
+        `[${time}] [${source.toUpperCase()}] Ordre placé ${brandEmoji(signal.asset)} ${signal.asset} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(orderData.latencyMs)} ms)${cacheHitInfo}`
+      );
+    } else {
+      const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
+      if (!isInsufficient) placedKeys.delete(key);
+      if (isRetryableExecutionError(result?.error) || isInsufficient) {
+        setExecutionCooldown(key, result.error);
+        notePolymarketIncidentError('ws_order_failure', result.error);
+      }
+      logSignalInRangeButNoOrder(source, 'place_order_failed', signal, {
+        bestAskP: bestAskLive,
+        amountUsd: Math.round(amountUsd * 100) / 100,
+        error: String(result?.error || '').slice(0, 240),
+      });
+      logJson('error', `Erreur ordre ${source.toUpperCase()}`, { takeSide: signal.takeSide, error: result.error });
+      console.error(`[${time}] [${source.toUpperCase()}] Erreur ${signal.takeSide}: ${result.error}`);
+    }
+  } catch (err) {
+    console.error(`[Fatal] ❌ Crash in tryPlaceOrderForSignal: ${err.message}`);
+    logJson('error', 'Fatal crash in tryPlaceOrderForSignal', { error: err.message, stack: err.stack });
   }
 }
 
@@ -5639,34 +5565,17 @@ function startClobWs() {
         return;
       }
       wsLastBidAskAtMs = Date.now();
-      if (wsLastBidAskAtMs - wsLastBidAskHealthWriteMs >= 2000) {
-        wsLastBidAskHealthWriteMs = wsLastBidAskAtMs;
-        writeHealth({ wsLastBidAskAt: new Date(wsLastBidAskAtMs).toISOString() });
-      }
-      
-      // v6.2.0 : Capturer la latence WS (approximative via temps système depuis dernier message si dispo)
-      // Note: Polymarket n'envoie pas de TS serveur précis dans best_bid_ask, on log juste l'activité.
-      addLatencyHistorySample('ws', 20); // Placeholder "santé" active
       const assetId = String(data.asset_id ?? '');
       const bestAsk = parseFloat(data.best_ask);
       const bestBid = parseFloat(data.best_bid);
 
-      if (assetId && Number.isFinite(bestBid)) {
-        latestPrices.set(assetId, { bestBid, bestAsk });
-        
-        // v5.1.0 : Capture du lag Polymarket (CLOB)
-        // On récupère les prix des deux côtés (Up/Down) pour consigner l'état du carnet
-        const sig = wsState.tokenToSignal.get(assetId);
-        if (sig) {
-            const upP = latestPrices.get(sig.tokenIdUp)?.bestAsk || 0;
-            const downP = latestPrices.get(sig.tokenIdDown)?.bestAsk || 0;
-            lagRecorder.onPolyUpdate(sig.asset || 'BTC', upP, downP);
-        }
+      const sig = wsState.tokenToSignal.get(assetId);
+      if (!sig) {
+          // console.trace(`[WS] No signal mapped for assetId=${assetId}`); // Don't spam
+          return;
       }
 
-      if (!assetId || !Number.isFinite(bestAsk) || bestAsk < MIN_P || bestAsk > MAX_P) return;
-      const sig = wsState.tokenToSignal.get(assetId);
-      if (!sig) return;
+      console.log(`[WS] 📩 Received msg for ${sig.asset} | tokenId=${assetId} | Price=${bestAsk}`);
 
       // Injection de l'OFI dans le signal
       const assetOfi = ofiState.get(assetId)?.ofi || 0;
@@ -5679,9 +5588,14 @@ function startClobWs() {
       };
       let entry = wsDebounceTimers.get(assetId);
       if (entry) clearTimeout(entry.timeoutId);
-      const timeoutId = setTimeout(() => {
+      const timeoutId = setTimeout(async () => {
         wsDebounceTimers.delete(assetId);
-        tryPlaceOrderForSignal({ ...signal, _wsReceivedAtMs: wsLastBidAskAtMs });
+        try {
+          await tryPlaceOrderForSignal({ ...signal, _wsReceivedAtMs: wsLastBidAskAtMs });
+        } catch (err) {
+          console.error(`[WS] ❌ Silent failure in tryPlaceOrderForSignal: ${err.message}`);
+          logJson('error', 'Silent failure in WS handler', { error: err.message, stack: err.stack });
+        }
       }, WS_DEBOUNCE_MS);
       wsDebounceTimers.set(assetId, { timeoutId, signal });
     } catch (_) {}
@@ -5757,7 +5671,7 @@ async function run() {
 
     const lastRedeem = currentHealthState?.lastRedeemAt ? new Date(currentHealthState.lastRedeemAt).getTime() : 0;
     if (Date.now() - lastRedeem > 43200000) {
-        await runAutoRedeem(clobClient);
+        // Redundant auto-redeem removed (logic handled by tryRedeemResolvedPositions)
         writeHealth({ lastRedeemAt: new Date().toISOString() });
     }
 
@@ -6031,7 +5945,9 @@ function calculateParkinsonVol(high, low) {
  */
 async function calculateVWAPPrice(tokenId, amountUsd, clobClient) {
   try {
+    console.log(`[VWAP] Fetching book for ${tokenId}...`);
     const book = await clobClient.getOrderBook(tokenId);
+    console.log(`[VWAP] Book received. Asks: ${book?.asks?.length || 0}`);
     if (!book || !book.asks || book.asks.length === 0) return null;
     
     let remainingUsd = amountUsd;
@@ -6241,8 +6157,10 @@ function isTradeAllowedBySafety(asset, strike, currentPrice) {
   if (strike && currentPrice > 0) {
     const drift = Math.abs(currentPrice - strike) / strike;
     if (drift > STRIKE_DRIFT_THRESHOLD) {
+      const msg = `[Safety] 🚩 REJECTED: ${asset} Strike Drift excessive (${(drift * 100).toFixed(2)}% > ${STRIKE_DRIFT_THRESHOLD * 100}%) | Spot: ${currentPrice.toFixed(2)} | Strike: ${Number(strike).toFixed(2)}`;
+      console.warn(msg);
       logJson('warn', `[${asset}] Trade rejeté (Drift Strike excessif)`, { strike, currentPrice, drift });
-      return { ok: false, reason: `Strike Drift (${(drift * 100).toFixed(1)}% > ${STRIKE_DRIFT_THRESHOLD * 100}%)` };
+      return { ok: false, reason: msg };
     }
   }
 
@@ -6254,6 +6172,17 @@ function isTradeAllowedBySafety(asset, strike, currentPrice) {
   
   return { ok: true };
 }
+
+function logDecision(obj) {
+  try {
+    const line = JSON.stringify(obj) + '\n';
+    fs.appendFileSync(DECISION_LOG_FILE, line, 'utf8');
+    console.log(`[Decision] Logged to ${path.basename(DECISION_LOG_FILE)}: ${obj.asset} edge=${obj.edge}`);
+  } catch (e) {
+    console.error(`[Decision] ❌ Erreur écriture log: ${e.message}`);
+  }
+}
+
 
 function normalCDF(x) {
   const t = 1 / (1 + 0.2316419 * Math.abs(x));
@@ -6290,14 +6219,6 @@ function extractStrikeFromQuestion(question) {
   return candidates[0];
 }
 
-/**
- * Journalise chaque décision du bot pour calibration.
- */
-function logDecision(data) {
-  try {
-    fs.appendFileSync(DECISION_LOG_FILE, JSON.stringify(data) + '\n', 'utf8');
-  } catch (_) {}
-}
 
 async function main() {
   loadOpenOrders(); // v7.1.0 Persistence

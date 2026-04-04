@@ -138,9 +138,17 @@ class LagRecorder {
             if (err) console.warn(`[LAG][${asset}] Erreur écriture JSONL:`, err.message);
         });
 
-        // Feedback minimaliste dans la console
-        const lagTxt = record.lag_poly_vs_perp != null ? `${record.lag_poly_vs_perp.toFixed(3)}s` : 'N/A';
-        console.log(`[LAG][${asset}] 🛰️ ${source} | window=${lagTxt} | move=${record.move_pct > 0 ? '+' : ''}${record.move_pct}% | poly_up=${state.polyUpPrice?.toFixed(3)}`);
+        // Throttling console feedback (v8.1.1 : Quiet mode)
+        const lastLogTs = this._getState(asset).lastConsoleLogTs || 0;
+        const nowMs = Date.now();
+        const significantMove = Math.abs(record.move_pct) > 0.05;
+        const timeoutReached = (nowMs - lastLogTs) > 120000; // 2 minutes
+
+        if (significantMove || timeoutReached) {
+            const lagTxt = record.lag_poly_vs_perp != null ? `${record.lag_poly_vs_perp.toFixed(3)}s` : 'N/A';
+            console.log(`[LAG][${asset}] 🛰️ ${source} | window=${lagTxt} | move=${record.move_pct > 0 ? '+' : ''}${record.move_pct}% | poly_up=${state.polyUpPrice?.toFixed(3)}`);
+            this._getState(asset).lastConsoleLogTs = nowMs;
+        }
     }
 }
 
