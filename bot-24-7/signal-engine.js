@@ -210,12 +210,17 @@ function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         const key = `${startTime}_${asset}`;
         
         if (fs.existsSync(STRIKES_FILE)) {
-            const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
+            const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
+            const data = JSON.parse(raw);
             if (data[key]) {
                 const captured = data[key];
                 console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${key}): ${captured}`);
                 return captured;
+            } else {
+                console.log(`[Strike] Key not found: ${key}. Available keys: ${Object.keys(data).join(', ')}`);
             }
+        } else {
+            console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
         }
     } catch (err) {
         console.error('[Strike] Error lookup:', err.message);
