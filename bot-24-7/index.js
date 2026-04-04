@@ -148,14 +148,53 @@ const perpState = new Map([
   ['SOL', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
 ]);
 
-/** v7.16.14 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
+/** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
+const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
+
+function saveBoundaryStrike(asset, price) {
+    try {
+        let data = {};
+        if (fs.existsSync(STRIKES_FILE)) {
+            data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
+        }
+        const slot = Math.floor(Date.now() / 900000) * 900000;
+        const key = `${slot}_${asset.trim().toUpperCase()}`;
+        data[key] = price;
+        fs.writeFileSync(STRIKES_FILE, JSON.stringify(data, null, 2));
+        console.log(`[Strike] ${asset} saved internally: ${price} (Slot: ${slot})`);
+    } catch (e) {
+        console.error('[Strike] Save Error:', e.message);
+    }
+}
+
+function lookupLocalStrike(asset, startTime) {
+    try {
+        if (!fs.existsSync(STRIKES_FILE)) return null;
+        const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
+        let ts = String(startTime);
+        if (ts.length === 10) ts += '000';
+        const targetKey = `${ts}_${asset.trim().toUpperCase()}`;
+        
+        // Match résilient v7.16.26
+        const cleanTarget = targetKey.replace(/[^0-9A-Z_]/gi, '');
+        for (const k of Object.keys(data)) {
+            if (k.replace(/[^0-9A-Z_]/gi, '') === cleanTarget) {
+                console.log(`[Strike] MATCH for ${asset}: ${data[k]} (Target: ${targetKey})`);
+                return data[k];
+            }
+        }
+    } catch (e) {
+        console.error('[Strike] Lookup Error:', e.message);
+    }
+    return null;
+}
+
 let lastBoundaryMinute = null;
 const runBoundaryCapture = async () => {
     try {
         const mins = new Date().getMinutes();
         const currentSlot = Math.floor(Date.now() / 900000) * 900000;
         
-        // v7.16.25 : Capture si on est sur une frontière OU si le démarrage est récent (null)
         if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
             lastBoundaryMinute = mins;
             console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL (Slot: ${currentSlot}) @ ${new Date().toISOString()}`);
@@ -170,7 +209,7 @@ const runBoundaryCapture = async () => {
     }
 };
 setInterval(runBoundaryCapture, 60000);
-setTimeout(runBoundaryCapture, 5000); // v7.16.25 : Démarrage rapide (5s)
+setTimeout(runBoundaryCapture, 5000); // v7.16.26 : Démarrage rapide (5s)
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
@@ -5126,7 +5165,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (signal.strike == null) {
       const slug = signal.slug || signal.eventSlug;
       const start = signal.m?.startDate || signal.startDate;
-      signal.strike = lookupBoundaryStrike(asset, start, null, slug);
+      signal.strike = lookupLocalStrike(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
   }
   const key = getSignalKey(signal);
 
