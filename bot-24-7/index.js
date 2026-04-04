@@ -5944,13 +5944,11 @@ function startBinanceWs() {
         const asset = data.s.replace('USDT', '').toUpperCase();
         const price = parseFloat(data.p);
         
-        // --- Sanity Log (v7.16.38) ---
-        if (asset === 'ETH' || asset === 'SOL') {
+        // --- v10.8 : Diagnostics complets pour les 3 assets ---
+        if (price != null) {
             const last = perpState.get(asset).binance || 0;
-            if (Math.abs(price - last) > 0.01) {
-            if (price != null) {
-                console.log(`[Price] Binance ${asset}: ${price.toFixed(2)}`);
-            }
+            if (Math.abs(price - last) > 0.05) { // Un peu plus de calme (0.05$)
+               console.log(`[Binance] ${asset} Update: $${price.toFixed(2)}`);
             }
         }
 
