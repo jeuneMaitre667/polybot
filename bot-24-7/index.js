@@ -128,7 +128,7 @@ import {
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
 import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
-import { fetchSignals, getSignalKey, shouldSkipTradeTiming } from './signal-engine.js';
+import { fetchSignals, getSignalKey, shouldSkipTradeTiming, saveBoundaryStrike } from './signal-engine.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -5370,6 +5370,8 @@ const virtualWatchEntries = new Map();
 const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
+/** v7.15.0 : mémorisation de la minute capturée (00, 15, 30, 45). */
+let lastBoundaryMinute = null;
 
 // ——— WebSocket CLOB (temps réel) ———
 const wsState = { tokenToSignal: new Map(), tokenIds: [] };
@@ -5688,6 +5690,19 @@ async function run() {
     }
 
     await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
+
+    // v7.15.0 : Boundary Strike Capture (00, 15, 30, 45)
+    const nowTrigger = new Date();
+    const mins = nowTrigger.getMinutes();
+    if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
+        lastBoundaryMinute = mins;
+        for (const asset of SUPPORTED_ASSETS) {
+            const price = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
+            if (price > 0) {
+                saveBoundaryStrike(asset, price);
+            }
+        }
+    }
 
     // getBalance removed from nested scope (v7.12.0 Fix)
 

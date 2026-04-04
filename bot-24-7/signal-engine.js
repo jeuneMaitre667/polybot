@@ -1,4 +1,5 @@
-import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 import { 
     SUPPORTED_ASSETS, 
     MARKET_MODE, 
@@ -10,6 +11,9 @@ import {
     POLYMARKET_FEE_RATE,
     FEE_SAFETY_BUFFER
 } from './config.js';
+
+const __dirname = path.resolve();
+const STRIKES_FILE = path.join(__dirname, 'bot-24-7', 'boundary-strikes.json');
 
 /**
  * Moteur de Signaux Polymarket (v5.4.0)
@@ -77,7 +81,7 @@ export async function fetchSignals(asset, context = {}) {
                 slug,
                 conditionId: m.conditionId,
                 tokenIdToBuy: tokenIdToBuy,
-                strike: parseFloat(m.line),
+                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line)),
                 takeSide,
                 priceUp: yesPrice,
                 priceDown: noPrice,
@@ -149,5 +153,57 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
     // Frais inclus
     const netStake = optimal / (1 + (POLYMARKET_FEE_RATE * FEE_SAFETY_BUFFER));
     return Math.floor(netStake * 100) / 100;
+}
 
+/**
+ * Persistance des prix aux bornes (00, 15, 30, 45).
+ */
+export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
+    try {
+        const data = fs.existsSync(STRIKES_FILE) ? JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8')) : {};
+        // Normaliser le timestamp à la borne la plus proche (passée)
+        const date = new Date(timestamp);
+        date.setSeconds(0);
+        date.setMilliseconds(0);
+        const minutes = date.getMinutes();
+        const boundaryMinutes = Math.floor(minutes / 15) * 15;
+        date.setMinutes(boundaryMinutes);
+        
+        const key = `${date.getTime()}_${asset}`;
+        data[key] = price;
+        
+        // Garder seulement les 48 dernières heures (3 actifs * 4 par heure * 48h = 576 entrées)
+        const keys = Object.keys(data).sort();
+        if (keys.length > 600) {
+            const keysToDelete = keys.slice(0, keys.length - 600);
+            keysToDelete.forEach(k => delete data[k]);
+        }
+        
+        fs.writeFileSync(STRIKES_FILE, JSON.stringify(data, null, 2));
+        console.log(`[Strike] Captured boundary for ${asset}: ${price} @ ${date.toISOString()}`);
+    } catch (err) {
+        console.error('[Strike] Error saving boundary:', err.message);
+    }
+}
+
+function lookupBoundaryStrike(asset, startDateStr, apiLine) {
+    if (Number.isFinite(apiLine) && apiLine > 0) return apiLine;
+    
+    try {
+        if (!startDateStr) return null;
+        const startTime = new Date(startDateStr).getTime();
+        const key = `${startTime}_${asset}`;
+        
+        if (fs.existsSync(STRIKES_FILE)) {
+            const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
+            if (data[key]) {
+                const captured = data[key];
+                console.log(`[Strike] Found locally captured strike for ${asset} (${startDateStr}): ${captured}`);
+                return captured;
+            }
+        }
+    } catch (err) {
+        console.error('[Strike] Error lookup:', err.message);
+    }
+    return null;
 }
