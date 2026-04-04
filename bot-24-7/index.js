@@ -5601,6 +5601,20 @@ function createCycleProfiler() {
 
 const CYCLE_PROFILER = process.env.CYCLE_PROFILER === '1' || process.env.CYCLE_PROFILER === 'true';
 
+/** v7.16.9 : Capture globale des strikes indépendante (toutes les 60s) */
+setInterval(async () => {
+    try {
+        const mins = new Date().getMinutes();
+        if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
+            lastBoundaryMinute = mins;
+            for (const asset of SUPPORTED_ASSETS) {
+                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
+                if (p > 0) saveBoundaryStrike(asset, p);
+            }
+        }
+    } catch (_) {}
+}, 60000);
+
 async function run() {
   // Sécurité 2.1.2 : Maintenance Polymarket (Option B : Blindage 2026)
   if (isMaintenanceWindow() || isCooldown425()) {
@@ -5609,18 +5623,7 @@ async function run() {
     return;
   }
 
-  // v7.16.4 : Boundary Strike Capture (00, 15, 30, 45) - Added hydration guard (await)
-  const nowTrigger = new Date();
-  const mins = nowTrigger.getMinutes();
-  if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
-      lastBoundaryMinute = mins;
-      for (const asset of SUPPORTED_ASSETS) {
-          const price = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
-          if (price > 0) {
-              saveBoundaryStrike(asset, price);
-          }
-      }
-  }
+  // (Capture removed from run() v7.16.9)
 
   const cycleStartMs = Date.now();
   const profiler = createCycleProfiler();
