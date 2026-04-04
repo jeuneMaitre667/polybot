@@ -5787,7 +5787,6 @@ async function run() {
 
     const lastRedeem = currentHealthState?.lastRedeemAt ? new Date(currentHealthState.lastRedeemAt).getTime() : 0;
     if (Date.now() - lastRedeem > 43200000) {
-        // Redundant auto-redeem removed (logic handled by tryRedeemResolvedPositions)
         writeHealth({ lastRedeemAt: new Date().toISOString() });
     }
 
@@ -5819,7 +5818,14 @@ async function run() {
            state.binanceRefAtMs = Date.now();
            console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curBinance}.`);
 
-           state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, slug);
+           const strikeData = await captureStrikeAtSlotOpen(asset, slug);
+           state.currentSlotStrike = strikeData;
+           
+           // v10.7 : Archiver le strike pour le signal-engine (Indispensable pour le trading réel)
+           if (strikeData && strikeData.price && Number.isFinite(strikeData.price)) {
+             saveStrike(asset, strikeData.price);
+             console.log(`[${asset}] 🏁 Momentum base established: $${strikeData.price}`);
+           }
         }
         
         // v10.5 : Robustesse - Si l'ancrage initial a échoué (curBinance null), on réessaie ou on fetch l'historique
