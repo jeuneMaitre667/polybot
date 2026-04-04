@@ -208,7 +208,11 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         if (!startTime && startDateStr) startTime = new Date(startDateStr).getTime();
         if (!startTime) return null;
 
-        const targetKey = `${startTime}_${asset.trim().toUpperCase()}`;
+        // v7.16.21 : Normalisation Ms (13 digits) vs Sec (10 digits)
+        let normalizedTime = String(startTime);
+        if (normalizedTime.length === 10) normalizedTime += '000';
+        
+        const targetKey = `${normalizedTime}_${asset.trim().toUpperCase()}`;
         
         if (fs.existsSync(STRIKES_FILE)) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
