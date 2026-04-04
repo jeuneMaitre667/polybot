@@ -169,20 +169,26 @@ function saveBoundaryStrikeLocal(asset, price) {
 
 function lookupBoundaryStrikeLocal(asset, startTime) {
     try {
-        if (!fs.existsSync(STRIKES_FILE)) return null;
-        const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
-        let ts = String(startTime);
-        if (ts.length === 10) ts += '000';
-        const targetKey = `${ts}_${asset.trim().toUpperCase()}`;
+        const tsNominal = String(startTime);
+        const normalizedTs = tsNominal.length === 10 ? tsNominal + '000' : tsNominal;
+        const targetKey = `${normalizedTs}_${asset.trim().toUpperCase()}`;
         
-        // Match résilient v7.16.28
+        if (!fs.existsSync(STRIKES_FILE)) {
+            console.warn(`[Strike] File not found at: ${STRIKES_FILE}`);
+            return null;
+        }
+        
+        const data = JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8'));
         const cleanTarget = targetKey.replace(/[^0-9A-Z_]/gi, '');
+        
         for (const k of Object.keys(data)) {
             if (k.replace(/[^0-9A-Z_]/gi, '') === cleanTarget) {
-                console.log(`[Strike] MATCH for ${asset}: ${data[k]} (Target: ${targetKey})`);
-                return data[k];
+                const val = data[k];
+                console.log(`[Strike] SUCCESS! asset=${asset}, strike=${val}, key=${k}`);
+                return val;
             }
         }
+        console.warn(`[Strike] FAIL match for ${targetKey}. Available keys: ${Object.keys(data).length}`);
     } catch (e) {
         console.error('[Strike] Lookup Error:', e.message);
     }
