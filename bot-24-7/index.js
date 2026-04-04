@@ -175,7 +175,7 @@ const runBoundaryCapture = async () => {
 
             if (price > 0) {
                 saveStrike(asset, price);
-                console.log(`[Strike] SUCCESS asset=${asset} price=${price.toFixed(2)} source=${source}`);
+                console.log(`[Strike] SUCCESS asset=${asset} price=${(price != null ? price.toFixed(2) : '0.00')} source=${source}`);
             } else {
                 console.error(`[Strike] ÉCHEC CRITIQUE: Aucune source de prix pour ${asset}.`);
             }
@@ -189,6 +189,7 @@ setTimeout(runBoundaryCapture, 5000); // v7.16.26 : Démarrage rapide (5s)
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
+let clobClient = null; // v9.2.2 : Global scope fix for background tasks
 let lastRewardsFetch = 0;
 let cachedRewardsData = null;
 
@@ -244,7 +245,7 @@ let chainlinkAgeMs = 0; // v5.2.0 : Pour le logging
 
 const ARBITRAGE_GAP_THRESHOLD = Number(process.env.ARBITRAGE_GAP_THRESHOLD) || 0.05;
 const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.40;
-const POLYMARKET_FEE_RATE = 0.02; // Taux réaliste 2026 pour Crypto (Peak taker ~1.8%)
+const POLYMARKET_FEE_RATE = 0.018; // Taux réaliste 2026 pour Crypto (Peak taker ~1.8%)
 const FEE_SAFETY_BUFFER = 1.05; // Marge de sécurité 5% (Blindage 2026)
 const DEFAULT_STAKE_USDC = 300; 
 
@@ -587,7 +588,7 @@ function writeHealth(updates, extra = {}) {
        if (!lastEq || (Date.now() - new Date(lastEq.t).getTime() > 300000)) {
            fullState.equityHistory.push({
                t: new Date().toISOString(),
-               v: Number(extraVal.totalUsd).toFixed(2)
+               v: (extraVal.totalUsd != null ? Number(extraVal.totalUsd).toFixed(2) : "0.00")
            });
            if (fullState.equityHistory.length > 100) fullState.equityHistory.shift();
        }
@@ -702,7 +703,7 @@ async function updateActivePositionsFromFill(fill) {
       
       fs.writeFileSync(ACTIVE_POSITIONS_FILE, JSON.stringify(positions, null, 2));
       // Force immediate balance refresh
-      getBalance().then(b => writeHealth({ balance: b.toFixed(2) }));
+      getBalance().then(b => (b != null ? writeHealth({ balance: b.toFixed(2) }) : null));
       return true;
    } catch (err) {
       console.error(`[Sync] ❌ Update failed: ${err.message}`);
@@ -3347,7 +3348,7 @@ async function runStopLossPass() {
   if (stopLossPassBusy) return null;
   stopLossPassBusy = true;
   try {
-    let clobClient = null;
+    clobClient = null;
     try {
       clobClient = await buildClobClientCachedCreds();
     } catch (err) {
@@ -5215,7 +5216,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     }
 
     // 2. PHASE CONNECTION (CLOB)
-    let clobClient = null;
+    clobClient = null;
     try {
       const tCreds0 = Date.now();
       clobClient = await buildClobClientCachedCreds();
@@ -5338,10 +5339,10 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
           side: signal.takeSide,
           prob: probFairLive,
           ask: vwapPrice,
-          edge: Number(netEdge.toFixed(4)),
+          edge: (netEdge != null ? Number(netEdge.toFixed(4)) : 0),
           strike: signal.strike,
           ofi: signal.ofiScore || 0,
-          adjThreshold: Number(adjustedThreshold.toFixed(4))
+          adjThreshold: (adjustedThreshold != null ? Number(adjustedThreshold.toFixed(4)) : 0)
       });
       recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
       return;
@@ -5659,7 +5660,7 @@ async function run() {
 
   const cycleStartMs = Date.now();
   const profiler = createCycleProfiler();
-  let clobClient = null;
+  clobClient = null;
 
   try {
     clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());

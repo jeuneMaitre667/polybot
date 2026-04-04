@@ -93,8 +93,8 @@ export function buildSimulatedBuyFill({ amountUsd, bestAskP, conditionId }) {
   if (!Number.isFinite(ask) || ask <= 0 || ask >= 1) return { ok: false, error: 'best ask invalide pour PAPER' };
   if (!Number.isFinite(usd) || usd <= 0) return { ok: false, error: 'montant invalide' };
   const filledUsdc = Math.round(usd * 100) / 100;
-  // v9.2.1 : Déduction des frais Polymarket réels (Corrected to 2.0%)
-  const netUsdc = filledUsdc * (1 - 0.02);
+  // v9.2.2 : Déduction des frais Polymarket réels (Corrected to 1.8% for Crypto Taker Peak)
+  const netUsdc = filledUsdc * (1 - 0.018);
   const filledOutcomeTokens = netUsdc / ask;
   return {
     ok: true,
