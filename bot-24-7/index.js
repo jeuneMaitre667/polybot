@@ -6291,7 +6291,7 @@ async function main() {
   }
 }
 
-/** v7.16.11 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
+/** v7.16.12 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
 const runBoundaryCapture = async () => {
     try {
         const mins = new Date().getMinutes();
@@ -6309,6 +6309,6 @@ const runBoundaryCapture = async () => {
 };
 
 setInterval(runBoundaryCapture, 60000);
-runBoundaryCapture(); // Exécution immédiate au démarrage
+runBoundaryCapture(); // Exécution immédiate au démarrage (AVANT la boucle principale)
 
 main();
