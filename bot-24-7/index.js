@@ -153,9 +153,12 @@ let lastBoundaryMinute = null;
 const runBoundaryCapture = async () => {
     try {
         const mins = new Date().getMinutes();
+        const currentSlot = Math.floor(Date.now() / 900000) * 900000;
+        
+        // v7.16.25 : Capture si on est sur une frontière OU si le démarrage est récent (null)
         if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
             lastBoundaryMinute = mins;
-            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL @ ${new Date().toISOString()}`);
+            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL (Slot: ${currentSlot}) @ ${new Date().toISOString()}`);
             for (const asset of SUPPORTED_ASSETS) {
                 const res = await getChainlinkPrice(asset);
                 const p = res?.price || calculateConsensusPrice(asset);
@@ -167,7 +170,7 @@ const runBoundaryCapture = async () => {
     }
 };
 setInterval(runBoundaryCapture, 60000);
-setTimeout(runBoundaryCapture, 10000); // v7.16.15 : Délai initial (10s) pour laisser l'RPC s'hydrater
+setTimeout(runBoundaryCapture, 5000); // v7.16.25 : Démarrage rapide (5s)
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
