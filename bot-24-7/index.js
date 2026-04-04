@@ -128,7 +128,7 @@ import {
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
 import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
-import { fetchSignals, getSignalKey, shouldSkipTradeTiming, saveBoundaryStrike } from './signal-engine.js';
+import { fetchSignals, getSignalKey, shouldSkipTradeTiming, saveBoundaryStrike, lookupBoundaryStrike } from './signal-engine.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
@@ -5097,27 +5097,19 @@ const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
   if (!signal?.tokenIdToBuy) return;
+  const asset = signal.asset || 'BTC';
+  // v7.16.0 : Unified Strike Injection (Poll & WS)
+  if (signal.strike == null) {
+      const slug = signal.slug || signal.eventSlug;
+      const start = signal.m?.startDate || signal.startDate;
+      signal.strike = lookupBoundaryStrike(asset, start, null, slug);
+  }
   const key = getSignalKey(signal);
 
   // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
-  const asset = signal.asset || 'BTC';
   const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
   const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
 
-  // --- LOG DECISION MATRIX (v5.6.7 / v5.7.1) ---
-  logDecision({
-    at: new Date().toISOString(),
-    source,
-    asset: signal.asset || 'BTC',
-    slug: signal.slug || signal.eventSlug,
-    side: signal.takeSide,
-    prob: signal.probFairAtEntry || signal.priceUp || signal.priceDown,
-    ask: pickSignalBestAskP(signal),
-    edge: signal.netGap || signal.edge,
-    strike: signal.strike,
-    ofi: signal.ofiScore || 0,
-    adjThreshold: Number(adjustedThreshold.toFixed(4))
-  });
 
   if (shouldSkipTradeTiming(signal)) {
     const timingDetails = getTimingForbiddenDetails();

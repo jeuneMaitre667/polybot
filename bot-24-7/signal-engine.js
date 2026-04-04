@@ -188,7 +188,7 @@ export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
     }
 }
 
-function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
+export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     if (Number.isFinite(apiLine) && apiLine > 0) return apiLine;
     
     try {
