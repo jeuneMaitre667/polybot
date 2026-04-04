@@ -148,6 +148,26 @@ const perpState = new Map([
   ['SOL', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
 ]);
 
+/** v7.16.14 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
+let lastBoundaryMinute = null;
+const runBoundaryCapture = async () => {
+    try {
+        const mins = new Date().getMinutes();
+        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
+            lastBoundaryMinute = mins;
+            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL @ ${new Date().toISOString()}`);
+            for (const asset of SUPPORTED_ASSETS) {
+                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
+                if (p > 0) saveBoundaryStrike(asset, p);
+            }
+        }
+    } catch (e) {
+        console.error('[Strike] ERROR in background capture:', e.message);
+    }
+};
+setInterval(runBoundaryCapture, 60000);
+runBoundaryCapture(); 
+
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
 let lastRewardsFetch = 0;
@@ -5274,6 +5294,12 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     return;
   }
 
+  // v7.16.13 : Sécurité Profitabilité (1% net minimum après frais)
+  if (netEdge < 0.01) {
+    recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.01 });
+    return;
+  }
+
   if (netEdge < adjustedThreshold) {
     // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
     logDecision({
@@ -5362,8 +5388,7 @@ const virtualWatchEntries = new Map();
 const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
-/** v7.15.0 : mémorisation de la minute capturée (00, 15, 30, 45). */
-let lastBoundaryMinute = null;
+/** (lastBoundaryMinute moved to top v7.16.14) */
 
 // ——— WebSocket CLOB (temps réel) ———
 const wsState = { tokenToSignal: new Map(), tokenIds: [] };
@@ -6290,25 +6315,5 @@ async function main() {
     await new Promise((r) => setTimeout(r, pollMs));
   }
 }
-
-/** v7.16.12 : Capture globale des strikes indépendante (toutes les 60s + immédiat au boot) */
-const runBoundaryCapture = async () => {
-    try {
-        const mins = new Date().getMinutes();
-        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
-            lastBoundaryMinute = mins;
-            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL @ ${new Date().toISOString()}`);
-            for (const asset of SUPPORTED_ASSETS) {
-                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
-                if (p > 0) saveBoundaryStrike(asset, p);
-            }
-        }
-    } catch (e) {
-        console.error('[Strike] ERROR in background capture:', e.message);
-    }
-};
-
-setInterval(runBoundaryCapture, 60000);
-runBoundaryCapture(); // Exécution immédiate au démarrage (AVANT la boucle principale)
 
 main();
