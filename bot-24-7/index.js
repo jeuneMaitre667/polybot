@@ -5609,10 +5609,10 @@ async function run() {
     return;
   }
 
-  // v7.15.2 : Boundary Strike Capture (00, 15, 30, 45) - Moved to start for better timing
+  // v7.16.2 : Boundary Strike Capture (00, 15, 30, 45) - Added cold-start condition
   const nowTrigger = new Date();
   const mins = nowTrigger.getMinutes();
-  if ([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) {
+  if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
       lastBoundaryMinute = mins;
       for (const asset of SUPPORTED_ASSETS) {
           const price = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
