@@ -212,8 +212,13 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         if (fs.existsSync(STRIKES_FILE)) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
             const data = JSON.parse(raw);
-            // v7.16.1 : Recherche résiliente (match insensible aux espaces)
-            const cleanKey = Object.keys(data).find(k => k.trim() === targetKey);
+            // v7.16.8 : Recherche absolue (loose match pour éviter tout caractère invisible)
+            const cleanKey = Object.keys(data).find(k => {
+                const k1 = k.replace(/[^0-9A-Z_]/gi, '');
+                const k2 = targetKey.replace(/[^0-9A-Z_]/gi, '');
+                return k1 === k2 && k1.length > 0;
+            });
+            
             if (cleanKey) {
                 const captured = data[cleanKey];
                 console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${targetKey}): ${captured}`);
