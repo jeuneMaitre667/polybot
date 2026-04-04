@@ -368,6 +368,8 @@ function checkHeartbeat() {
     // On force la sortie pour que PM2 relance proprement
     process.exit(1);
   }
+  // v10.1 : Forcer la mise à jour du dashboard toutes les 15s
+  writeHealth({});
 }
 // Surveillance toutes les 15s
 setInterval(checkHeartbeat, 15_000);
