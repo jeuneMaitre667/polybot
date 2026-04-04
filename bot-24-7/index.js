@@ -166,7 +166,7 @@ const runBoundaryCapture = async () => {
     }
 };
 setInterval(runBoundaryCapture, 60000);
-runBoundaryCapture(); 
+setTimeout(runBoundaryCapture, 10000); // v7.16.15 : Délai initial (10s) pour laisser l'RPC s'hydrater
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();

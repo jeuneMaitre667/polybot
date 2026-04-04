@@ -14,8 +14,9 @@ import {
     FEE_SAFETY_BUFFER
 } from './config.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STRIKES_FILE = path.join(__dirname, 'boundary-strikes.json');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const STRIKES_FILE = path.resolve(__dirname, 'boundary-strikes.json');
 
 /**
  * Moteur de Signaux Polymarket (v5.4.0)
