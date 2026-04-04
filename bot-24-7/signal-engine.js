@@ -221,15 +221,16 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
             const cleanKey = Object.keys(data).find(k => {
                 const k1 = k.replace(/[^0-9A-Z_]/gi, '');
                 const k2 = targetKey.replace(/[^0-9A-Z_]/gi, '');
+                // console.log(`[Strike] Comparing k1: ${k1} vs k2: ${k2}`);
                 return k1 === k2 && k1.length > 0;
             });
             
             if (cleanKey) {
                 const captured = data[cleanKey];
-                console.log(`[Strike] Found locally captured strike for ${asset} (Key: ${targetKey}): ${captured}`);
+                console.log(`[Strike] MATCH for ${asset}: ${captured} (Key: ${targetKey})`);
                 return captured;
             } else {
-                console.log(`[Strike] Key not found: ${targetKey}. Available keys: [${Object.keys(data).map(k => '"' + k + '"').join(', ')}]`);
+                console.warn(`[Strike] NO MATCH for ${asset} (${targetKey}). Available: ${Object.keys(data).join(',')}`);
             }
         } else {
             console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
