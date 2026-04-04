@@ -368,8 +368,8 @@ function checkHeartbeat() {
     // On force la sortie pour que PM2 relance proprement
     process.exit(1);
   }
-  // v10.1 : Forcer la mise à jour du dashboard toutes les 15s
-  writeHealth({});
+  // v10.1 : Diagnostic Mémoire forcé
+  writeHealth({ forceAudit: true });
 }
 // Surveillance toutes les 15s
 setInterval(checkHeartbeat, 15_000);
@@ -527,6 +527,11 @@ function writeHealth(updates, extra = {}) {
       ...updates, 
       at: new Date().toISOString() 
     };
+    // v10.1 : Diagnostic Mémoire
+    if (updates.forceAudit || Math.random() < 0.01) {
+       console.log("[DEBUG][Health] Map Keys:", [...perpState.keys()]);
+       console.log("[DEBUG][Health] BTC Spot:", perpState.get('BTC')?.binance);
+    }
 
     // 2. Enrichir avec les données globales actuelles (v5.6.1)
     const fullState = {
