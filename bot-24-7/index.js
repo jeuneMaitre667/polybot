@@ -28,7 +28,7 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
-import { WebSocket } from 'ws';
+import WebSocket from 'ws';
 import axios from 'axios';
 import crypto from 'crypto';
 import { 
@@ -6003,7 +6003,9 @@ function startOkxWs() {
           lagRecorder.onPerpUpdate(asset, price);
         }
       }
-    } catch (_) {}
+    } catch (err) {
+       console.error("[Binance WS Error]", err.message);
+    }
   });
 
   okxWs.on('close', () => { okxWs = null; setTimeout(startOkxWs, 5000); });
