@@ -5823,7 +5823,7 @@ async function run() {
         }
         
         // v10.5 : Robustesse - Si l'ancrage initial a échoué (curBinance null), on réessaie ou on fetch l'historique
-        if (state.binanceRefPrice === null) {
+        if (!state.binanceRefPrice) {
            const interval = slug.includes('15m') ? '15m' : '1h';
            const curBinance = perpState.get(asset).binance;
            
