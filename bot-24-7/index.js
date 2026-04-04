@@ -11,11 +11,13 @@
  * Usage : npm install && PRIVATE_KEY=0x... npm start
  * Config : .env (voir .env.example)
  */
-import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import lagRecorder from './lag-recorder.js';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
 import { ethers } from 'ethers';
 import { encodeFunctionData, zeroHash } from 'viem';
 import { createWalletClient, http } from 'viem';
@@ -24,26 +26,28 @@ import { polygon } from 'viem/chains';
 import { RelayClient, RelayerTxType } from '@polymarket/builder-relayer-client';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
 import WebSocket from 'ws';
 import axios from 'axios';
 import crypto from 'crypto';
 import { 
-  BITCOIN_UP_DOWN_SLUG, 
-  ETHEREUM_UP_DOWN_SLUG, 
-  SOLANA_UP_DOWN_SLUG, 
-  BITCOIN_UP_DOWN_15M_SLUG, 
-  ETHEREUM_UP_DOWN_15M_SLUG, 
-  SOLANA_UP_DOWN_15M_SLUG,
+  BITCOIN_UP_OR_DOWN_1H_PREFIX,
+  ETHEREUM_UP_OR_DOWN_1H_PREFIX,
+  SOLANA_UP_OR_DOWN_1H_PREFIX,
+  BITCOIN_UPDOWN_15M_PREFIX,
+  ETHEREUM_UPDOWN_15M_PREFIX,
+  SOLANA_UPDOWN_15M_PREFIX,
   POLYMARKET_FEE_RATE,
   ARBITRAGE_GAP_THRESHOLD,
   BTC_ANNUALIZED_VOLATILITY,
   FEE_SAFETY_BUFFER
 } from './config.js';
 
-// --- v7.0.0 Globals ---
+// --- v9.6.0 Simulation & Diagnostics ---
+// --- v9.7.0 Real-Trading Recovery & RPC Failover ---
+// --- v9.8.5 High-Stability Simulation Lockdown ---
+export const IS_SIMULATION = true; // SIMULATION FORCED (v9.8.5)
 export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
 export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
 export const DEEP_ORDER_ENABLED = process.env.DEEP_ORDER_ENABLED !== 'false';
@@ -224,7 +228,9 @@ function getAssetState(asset) {
     assetSpecificState.set(asset, {
       vol: defaultVol,
       priceHistory: [],
-      currentSlotStrike: null
+      currentSlotStrike: null,
+      binanceRefPrice: null, // v10.1: Base 0 for Momentum
+      binanceRefAtMs: null   // v10.1: Timestamp of base
     });
   }
   return assetSpecificState.get(asset);
@@ -870,9 +876,14 @@ const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_
 // Détecter si l'utilisateur a mis l'adresse (0x + 40 hex) au lieu de la clé privée (0x + 64 hex)
 const hexPart = (privateKeyRaw || '').replace(/^0x/i, '');
 const looksLikeAddress = hexPart.length === 40 && /^[0-9a-fA-F]+$/.test(hexPart);
-const privateKey = isPlaceholder || looksLikeAddress ? '' : privateKeyRaw;
+const privateKey = isPlaceholder ? '' : privateKeyRaw;
 if (privateKeyRaw && looksLikeAddress) {
-  console.error('ERREUR: PRIVATE_KEY ressemble à une ADRESSE (0x + 40 caractères). Il faut la CLÉ PRIVÉE (0x + 64 caractères hex). Récupère-la depuis Phantom/MetaMask : Paramètres → Sécurité → Exporter clé privée. Puis dans ~/bot-24-7/.env mets PRIVATE_KEY=0x...');
+  console.warn('ATTENTION: PRIVATE_KEY ressemble à une ADRESSE. Le bot va tenter de l’utiliser quand même, mais cela risque de crasher. Vérifiez votre .env !');
+}
+if (!privateKey) {
+  console.error('CRITICAL: Signer PRIVATE_KEY is MISSING or PLACEHOLDER. Bot will crash on order placement.');
+} else {
+  console.log('Signer: PRIVATE_KEY present in .env. Initializing wallet...');
 }
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
 const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
@@ -1136,7 +1147,7 @@ const walletConfigured = !!privateKey;
 // ——— Wallet & provider ———
 // ethers v6 : 2e argument = chainId (number), pas un objet { chainId }
 let provider = new ethers.JsonRpcProvider(polygonRpc, CHAIN_ID);
-const wallet = walletConfigured
+let wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
 
@@ -1992,6 +2003,12 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
   const side = 'bid'; // v7.12.0 Fix
   const asset = signal.underlying || signal.asset || 'BTC';
   const tokenId = signal.tokenIdToBuy;
+
+  // v9.3.16 : Nuclear Signer Guard
+  if (!clobClient || !wallet) {
+     console.warn('[placeLimitOrderAtOptimalPrice] Emergency Stop: clobClient or wallet is NULL.');
+     return { ok: false, reason: 'missing_client_or_signer' };
+  }
   
   // v7.4.0: Emergency Inventory Brake (Safety 1500 tokens)
   const EMERGENCY_CAP = 1500;
@@ -3257,6 +3274,11 @@ async function executeClobExit(clobClient, pos, tokensToSell, bestBid, drawdownP
     worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
 
     try {
+      // v9.3.17 : Nuclear Signer Guard
+      if (!clobClient || !wallet) {
+         console.warn('[executeClobExit] Emergency Stop: clobClient or wallet is NULL.');
+         return false;
+      }
       const result = await placeLimitOrder(clobClient, {
         price: worstPricePUsed,
         size: tokensToSell - totalFilledTokens,
@@ -4028,8 +4050,43 @@ async function getClobCredsCached() {
 }
 
 async function buildClobClientCachedCreds() {
+  // v9.8.5 : High-Stability Mock Client for Simulation (Bypass SDK crashes)
+  if (IS_SIMULATION) {
+    logJson('info', 'CLOB: Simulation Mode - Using Mock Client to bypass SDK signer/authenticity crash.');
+    return {
+      isMock: true,
+      getMarket: async () => ({}),
+      createOrder: async () => ({}),
+      cancelOrder: async () => ({}),
+      getOrders: async () => []
+    };
+  }
+
   const creds = await getClobCredsCached();
-  return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE, clobFunderAddress);
+
+  if (!wallet || !creds) {
+    const msg = !wallet ? 'Missing Wallet' : 'Missing CLOB credentials';
+    logJson('error', 'CLOB: Signer/Creds error', { error: msg });
+    throw new Error(`CLOB Client Error: ${msg}`);
+  }
+
+  try {
+    // Attempt real connection with retry logic
+    let attempts = 0;
+    while (attempts < 3) {
+      try {
+        return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE, clobFunderAddress);
+      } catch (e) {
+        attempts++;
+        if (attempts >= 3) throw e;
+        logJson('warn', `CLOB Init Attempt ${attempts} failed. Retrying...`, { error: e.message });
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  } catch (e) {
+    logJson('error', 'CLOB: SDK Initialisation Crash (Signer failure)', { error: e.message, stack: e.stack });
+    throw e;
+  }
 }
 
 /**
@@ -4458,7 +4515,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
       const tFallback0 = Date.now();
       const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UPDOWN_15M_PREFIX.toLowerCase())) {
         events = [ev];
         profile.fallbackSlugOk = true;
         gammaSlotEventCache.set(String(slug).toLowerCase(), {
@@ -4544,15 +4601,15 @@ async function getActiveMarketTokensForWs() {
   const tokenToSignal = new Map();
 
   const collectForAsset = async (asset) => {
-    let slugMatch = BITCOIN_UP_DOWN_SLUG;
+    let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
     if (MARKET_MODE === '15m') {
-      if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_15M_SLUG;
-      else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_15M_SLUG;
-      else slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
+      if (asset === 'ETH') slugMatch = ETHEREUM_UPDOWN_15M_PREFIX;
+      else if (asset === 'SOL') slugMatch = SOLANA_UPDOWN_15M_PREFIX;
+      else slugMatch = BITCOIN_UPDOWN_15M_PREFIX;
     } else {
-      if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_SLUG;
-      else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_SLUG;
-      else slugMatch = BITCOIN_UP_DOWN_SLUG;
+      if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
+      else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
+      else slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
     }
 
     const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
@@ -4615,13 +4672,18 @@ async function getActiveMarketTokensForWs() {
 }
 
 /** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
+/** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
 function getCurrent15mEventSlug(asset = 'BTC') {
   const nowSec = Math.floor(Date.now() / 1000);
+  // Aligné sur le cadencement Polymarket (borne de 15m)
   const slotStart = Math.floor(nowSec / 900) * 900;
-  let prefix = BITCOIN_UP_DOWN_15M_SLUG;
-  if (asset === 'ETH') prefix = ETHEREUM_UP_DOWN_15M_SLUG;
-  if (asset === 'SOL') prefix = SOLANA_UP_DOWN_15M_SLUG;
-  return `${prefix}-${slotStart}`;
+  
+  let prefix = BITCOIN_UPDOWN_15M_PREFIX;
+  if (asset === 'ETH') prefix = ETHEREUM_UPDOWN_15M_PREFIX;
+  if (asset === 'SOL') prefix = SOLANA_UPDOWN_15M_PREFIX;
+  
+  // v9.8.9: Force lower-case for Gamma slug matching reliability
+  return `${prefix}-${slotStart}`.toLowerCase();
 }
 
 /**
@@ -4651,7 +4713,7 @@ function pick15mFallbackEventFromList(events, nowMs) {
  */
 async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'BTC') {
   const expectedSlug = getCurrent15mEventSlug(asset).toLowerCase();
-  const searchPrefix = (asset === 'ETH') ? ETHEREUM_UP_DOWN_15M_SLUG : (asset === 'SOL') ? SOLANA_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_15M_SLUG;
+  const searchPrefix = (asset === 'ETH') ? ETHEREUM_UPDOWN_15M_PREFIX : (asset === 'SOL') ? SOLANA_UPDOWN_15M_PREFIX : BITCOIN_UPDOWN_15M_PREFIX;
   
   const relevantEvents = events.filter((e) => (e.slug ?? '').toLowerCase().includes(searchPrefix));
   
@@ -4686,15 +4748,15 @@ async function fetchActiveWindows() {
   const seenKeys = new Set();
   
   for (const asset of SUPPORTED_ASSETS) {
-    let slugMatch = BITCOIN_UP_DOWN_SLUG;
+    let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
     if (MARKET_MODE === '15m') {
-       if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_15M_SLUG;
-       else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_15M_SLUG;
-       else slugMatch = BITCOIN_UP_DOWN_15M_SLUG;
+       if (asset === 'ETH') slugMatch = ETHEREUM_UPDOWN_15M_PREFIX;
+       else if (asset === 'SOL') slugMatch = SOLANA_UPDOWN_15M_PREFIX;
+       else slugMatch = BITCOIN_UPDOWN_15M_PREFIX;
     } else {
-       if (asset === 'ETH') slugMatch = ETHEREUM_UP_DOWN_SLUG;
-       else if (asset === 'SOL') slugMatch = SOLANA_UP_DOWN_SLUG;
-       else slugMatch = BITCOIN_UP_DOWN_SLUG;
+       if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
+       else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
+       else slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
     }
 
     const { events } = await fetchGammaEventsCached(slugMatch, 15000);
@@ -4715,16 +4777,33 @@ async function fetchActiveWindows() {
   return results;
 }
 
-/** Slug horaire au format Gamma `{prefix}-{eventStartSec}`. */
+/** 
+ * Slug horaire au format date Gamma: `{asset-prefix}-{month}-{day}-{year}-{time}-et`.
+ * Exemple: `bitcoin-up-or-down-april-4-2026-1pm-et`
+ */
 function getCurrentHourlyEventSlug(asset = 'BTC') {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const slotStart = Math.floor(nowSec / 3600) * 3600;
-  let prefix = BITCOIN_UP_DOWN_SLUG;
-  if (asset === 'ETH') prefix = ETHEREUM_UP_DOWN_SLUG;
-  if (asset === 'SOL') prefix = SOLANA_UP_DOWN_SLUG;
+  const date = new Date();
+  const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
   
-  const finalSlug = `${prefix}-${slotStart}`;
-  return finalSlug;
+  const month = months[date.getUTCMonth()];
+  const day = date.getUTCDate();
+  const year = date.getUTCFullYear();
+  
+  // Gamma 1h markets align with ET time, but the slugs often use a specific hour logic.
+  // We'll maintain the current hour (e.g. 1pm, 2pm) based on the next upcoming slot.
+  let hour = date.getUTCHours();
+  // Simplified conversion to ET (approx UTC-4 for April/Summer)
+  hour = (hour - 4 + 24) % 24;
+  
+  const ampm = hour >= 12 ? 'pm' : 'am';
+  const hour12 = hour % 12 || 12;
+  
+  let prefix = BITCOIN_UP_OR_DOWN_1H_PREFIX;
+  if (asset === 'ETH') prefix = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
+  if (asset === 'SOL') prefix = SOLANA_UP_OR_DOWN_1H_PREFIX;
+
+  // v9.5.2: New format detected via browser audit
+  return `${prefix}-${month}-${day}-${year}-${hour12}${ampm}-et`.toLowerCase();
 }
 
 /** Vérifie si l'IP est autorisée à trader (geoblock). */
@@ -5316,6 +5395,14 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
     const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
+    
+    // v10.4 : Diagnostic Momentum
+    const state = getAssetState(asset || signal.asset || 'BTC');
+    if (state.binanceRefPrice) {
+      const currentDelta = ((spotPrice / state.binanceRefPrice) - 1) * 100;
+      console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${currentDelta.toFixed(3)}%`);
+    }
+
     const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
 
     // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
@@ -5669,6 +5756,17 @@ async function run() {
   const cycleStartMs = Date.now();
   const profiler = createCycleProfiler();
   try {
+    // v9.6.3: Block-height Diagnostic to confirm RPC health from within the server
+    let currentBlock = 0;
+    try {
+      if (wallet?.provider) {
+        currentBlock = await wallet.provider.getBlockNumber();
+        logJson('debug', 'RPC: Diagnostic Check', { currentBlock, provider: wallet.provider.connection.url });
+      }
+    } catch (e) {
+      logJson('error', 'RPC: Connection Failure', { error: e.message });
+    }
+
     // v9.3.12: S'assurer que le clobClient est initialisé AVANT d'entrer dans les sous-fonctions
     if (!clobClient) {
       clobClient = await buildClobClientCachedCreds();
@@ -5695,7 +5793,9 @@ async function run() {
       balance: (balance != null ? balance.toFixed(2) : '0.00'),
       totalUsd: (totalUsd != null ? totalUsd.toFixed(2) : '0.00'),
       gasBalance: gasBalance != null ? gasBalance.toFixed(4) : '—',
-      activeConditions: OPEN_LIMIT_ORDERS.size
+      activeConditions: OPEN_LIMIT_ORDERS.size,
+      currentBlock,
+      simulation: IS_SIMULATION
     }, { totalUsd });
 
     let totalSignalsCount = 0;
@@ -5712,7 +5812,22 @@ async function run() {
       if (hasEvent && slug) {
         const state = getAssetState(asset);
         if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
+           const curBinance = perpState.get(asset).binance;
+           state.binanceRefPrice = curBinance;
+           state.binanceRefAtMs = Date.now();
+           console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curBinance}.`);
+
            state.currentSlotStrike = await captureStrikeAtSlotOpen(asset, slug);
+        } else if (state.binanceRefPrice === null) {
+           // v10.2 : Fallback de démarrage à froid (récupération de l'ouverture du créneau actuel)
+           const interval = slug.includes('15m') ? '15m' : '1h';
+           console.log(`[${asset}] 🔄 Cold Start: Fetching opening price for ${slug}...`);
+           const openPrice = await fetchBinanceSlotOpeningPrice(asset, interval);
+           if (openPrice) {
+             state.binanceRefPrice = openPrice;
+             state.binanceRefAtMs = Date.now(); // Date approximative du fetch
+             console.log(`[${asset}] ⚓ Historical Base 0 recovered: ${openPrice}. Momentum active.`);
+           }
         }
       }
       
@@ -5765,6 +5880,25 @@ async function run() {
 
 
 /**
+ * Récupère le prix d'ouverture exact (Open Price) de la bougie Binance actuelle.
+ * Utilisé en cas de redémarrage du bot au milieu d'un créneau de 15m.
+ */
+async function fetchBinanceSlotOpeningPrice(asset, interval = '15m') {
+  const symbol = `${asset.toUpperCase()}USDT`;
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`;
+    const { data } = await axios.get(url, { timeout: 5000 });
+    if (Array.isArray(data) && data.length > 0) {
+      const openPrice = parseFloat(data[0][1]); // Index 1 est le prix d'Open
+      if (Number.isFinite(openPrice)) return openPrice;
+    }
+  } catch (err) {
+    console.warn(`[Binance] Erreur fetch d'ouverture pour ${asset}: ${err.message}`);
+  }
+  return null;
+}
+
+/** 
  * Flux Binance Temps Réel (Multi-Assets v5.4.0)
  */
 function startBinanceWs() {
@@ -6008,26 +6142,42 @@ function getDynamicSkew(vol) {
 function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite, asset = 'BTC') {
   if (timeToExpirySec <= 0) return currentPrice > strikePrice ? 1.0 : 0.0;
   
-  // v3.9.2 : Volatilité Hybride (Max entre 24h et 60min)
   const state = getAssetState(asset);
-  let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
-  if (!volOverwrite) {
-    const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
-  const state = getAssetState(asset);
-  const realized = Number(state.vol) || 0;
-    vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
+  
+  // v10.3 : Modèle Momentum Relatif (Lead-Lag)
+  // Si nous avons une Base 0 (Binance), nous calculons le Delta %.
+  if (state.binanceRefPrice && Number.isFinite(state.binanceRefPrice)) {
+    const deltaPct = (currentPrice / state.binanceRefPrice) - 1;
+    const strikeDeltaPct = (strikePrice / state.binanceRefPrice) - 1;
+    
+    // Si le prix actuel est significativement au-dessus/en-dessous du Strike en termes de Delta,
+    // on injecte un biais de momentum dans le modèle.
+    const leadLagBiais = (deltaPct - strikeDeltaPct) * 100; // Force du momentum
+    
+    // v3.9.2 : Volatilité Hybride
+    let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
+    if (!volOverwrite) {
+      const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
+      const realized = Number(state.vol) || 0;
+      vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
+    }
+
+    const skew = getDynamicSkew(vol);
+    const timeInYears = timeToExpirySec / (365 * 24 * 3600);
+    const sqrtT = Math.sqrt(timeInYears);
+    const sigmaRootT = vol * sqrtT;
+    
+    // Modèle ajusté : On intègre le leadLagBiais dans le d1 pour capter la tendance
+    const d1 = (Math.log(currentPrice / strikePrice) + (skew * vol + leadLagBiais * 0.01) * sqrtT) / sigmaRootT;
+    
+    return normalCDF(d1);
   }
 
-  // v5.2.1 : Skew dynamique selon la volatilité actuelle
-  const skew = getDynamicSkew(vol);
-  
+  // Fallback classique si binanceRefPrice est manquant
+  let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
   const timeInYears = timeToExpirySec / (365 * 24 * 3600);
   const sqrtT = Math.sqrt(timeInYears);
-  const sigmaRootT = vol * sqrtT;
-  
-  // Intégration du Skew dans le d1 (Biais directionnel)
-  const d1 = (Math.log(currentPrice / strikePrice) + (skew * vol) * sqrtT) / sigmaRootT;
-  
+  const d1 = (Math.log(currentPrice / strikePrice)) / (vol * sqrtT);
   return normalCDF(d1);
 }
 
@@ -6362,8 +6512,9 @@ async function main() {
       lastHeartbeatMs = Date.now(); // Mise à jour watchdog
       await run();
     } catch (err) {
-      logJson('error', 'Erreur boucle', { error: err.message });
-      console.error(new Date().toISOString(), 'Erreur boucle:', err.message);
+      logJson('error', 'Erreur critique loop run()', { error: err.message, stack: err.stack });
+      console.error(new Date().toISOString(), 'Erreur loop run():', err.message);
+      if (err.stack) console.error(err.stack);
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }
