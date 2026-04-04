@@ -5609,13 +5609,13 @@ async function run() {
     return;
   }
 
-  // v7.16.2 : Boundary Strike Capture (00, 15, 30, 45) - Added cold-start condition
+  // v7.16.4 : Boundary Strike Capture (00, 15, 30, 45) - Added hydration guard (await)
   const nowTrigger = new Date();
   const mins = nowTrigger.getMinutes();
   if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
       lastBoundaryMinute = mins;
       for (const asset of SUPPORTED_ASSETS) {
-          const price = getChainlinkPriceCached(asset) || calculateConsensusPrice(asset);
+          const price = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
           if (price > 0) {
               saveBoundaryStrike(asset, price);
           }
