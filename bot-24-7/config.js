@@ -3,13 +3,14 @@
  * Centralizing these values to support modular architecture.
  */
 
-// Asset Slugs (v5.4.0)
-export const BITCOIN_UP_DOWN_SLUG = process.env.BITCOIN_UP_DOWN_SLUG || 'bitcoin-price-up-down-1h';
-export const ETHEREUM_UP_DOWN_SLUG = process.env.ETHEREUM_UP_DOWN_SLUG || 'ethereum-price-up-down-1h';
-export const SOLANA_UP_DOWN_SLUG = process.env.SOLANA_UP_DOWN_SLUG || 'solana-price-up-down-1h';
-export const BITCOIN_UP_DOWN_15M_SLUG = process.env.BITCOIN_UP_DOWN_15M_SLUG || 'bitcoin-price-up-down-15m';
-export const ETHEREUM_UP_DOWN_15M_SLUG = process.env.ETHEREUM_UP_DOWN_15M_SLUG || 'ethereum-price-up-down-15m';
-export const SOLANA_UP_DOWN_15M_SLUG = process.env.SOLANA_UP_DOWN_15M_SLUG || 'solana-price-up-down-15m';
+// Asset Slugs (v9.5.2)
+export const BITCOIN_UP_OR_DOWN_1H_PREFIX = 'bitcoin-up-or-down';
+export const ETHEREUM_UP_OR_DOWN_1H_PREFIX = 'ethereum-up-or-down';
+export const SOLANA_UP_OR_DOWN_1H_PREFIX = 'solana-up-or-down';
+
+export const BITCOIN_UPDOWN_15M_PREFIX = 'btc-updown-15m';
+export const ETHEREUM_UPDOWN_15M_PREFIX = 'eth-updown-15m';
+export const SOLANA_UPDOWN_15M_PREFIX = 'sol-updown-15m';
 
 // Market & Trading
 export const MARKET_MODE = process.env.MARKET_MODE || '15m';
