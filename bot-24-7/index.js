@@ -128,7 +128,7 @@ import {
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
 import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
-import { fetchSignals, getSignalKey, shouldSkipTradeTiming, saveBoundaryStrike, lookupBoundaryStrike } from './signal-engine.js';
+import { fetchSignals, getSignalKey, shouldSkipTradeTiming, lookupBoundaryStrike } from './signal-engine.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
