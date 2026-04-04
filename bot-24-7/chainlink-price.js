@@ -14,9 +14,17 @@ const DATA_FEEDS = {
 const CHAINLINK_DECIMALS = 8;
 
 const ALCHEMY_RPC = process.env.POLYGON_RPC_URL;
-const FALLBACK_RPCS = (process.env.POLYGON_RPC_FALLBACK || 'https://1rpc.io/matic,https://rpc.ankr.com/polygon,https://polygon.llamarpc.com').split(',').map(u => u.trim()).filter(Boolean);
+const FALLBACK_RPCS = (process.env.POLYGON_RPC_FALLBACK || 'https://polygon-rpc.com,https://1rpc.io/matic,https://rpc.ankr.com/polygon,https://polygon.llamarpc.com,https://rpc-mainnet.maticvigil.com').split(',').map(u => u.trim()).filter(Boolean);
 
 const RPC_ENDPOINTS = ALCHEMY_RPC ? [ALCHEMY_RPC, ...FALLBACK_RPCS] : FALLBACK_RPCS;
+
+// --- Sanity Guard Thresholds (v7.16.38) ---
+// If price is below these, it's likely stale data from a non-syncing node (e.g. ETH at $2049 from 2023).
+const SANITY_MIN_PRICE = {
+  BTC: 40000,
+  ETH: 1500,
+  SOL: 40,
+};
 
 const AGGREGATOR_V3_ABI = [
   'function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
@@ -56,7 +64,13 @@ export async function getChainlinkPrice(asset = 'BTC') {
       const data = await contract.latestRoundData();
       const rawPrice = Number(data.answer) / Math.pow(10, CHAINLINK_DECIMALS);
       const updatedAtMs = Number(data.updatedAt) * 1000;
-      
+
+      // --- Sanity Guard (v7.16.38) ---
+      const minPrice = SANITY_MIN_PRICE[cleanAsset] || 0;
+      if (rawPrice < minPrice) {
+          throw new Error(`Sanity Guard: ${cleanAsset} price ${rawPrice} is below threshold ${minPrice}. Likely stale node.`);
+      }
+
       const rpcLabel = url.includes('alchemy') ? 'Alchemy (Private)' : url.split('//')[1]?.split('/')[0] || 'Public';
       
       return {
@@ -78,13 +92,15 @@ export async function getChainlinkPrice(asset = 'BTC') {
     const result = await Promise.any(promises);
     assetCaches[cleanAsset] = result;
     lastWinningRpc = result.rpcLabel;
-    return { ...result, stale: result.ageSec > 120 };
+    // v7.16.54 : Seuil de fraîcheur augmenté à 600s (Chainlink L2 peut avoir des battements lents)
+    return { ...result, stale: result.ageSec > 600 };
   } catch (err) {
-    console.warn(`[Chainlink] [${cleanAsset}] Tous les RPC ont échoué ! tentative de récupération depuis le cache.`);
+    console.warn(`[Chainlink] [${cleanAsset}] Tous les RPC ont échoué ou prix invalide ! tentative de récupération depuis le cache.`);
     if (cache.price != null) return { ...cache, stale: true, source: 'chainlink_stale_cache' };
     return { price: null, updatedAt: null, roundId: null, source: 'chainlink_unavailable', stale: true };
   }
 }
+
 
 /** Legacy support pour index.js */
 export async function getChainlinkBtcPrice() {

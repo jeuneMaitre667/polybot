@@ -198,20 +198,27 @@ function lookupBoundaryStrikeLocal(asset, startTime) {
 let lastBoundaryMinute = null;
 const runBoundaryCapture = async () => {
     try {
-        const mins = new Date().getMinutes();
-        const currentSlot = Math.floor(Date.now() / 900000) * 900000;
+        const now = new Date();
+        const m = now.getMinutes();
         
-        if (([0, 15, 30, 45].includes(mins) && mins !== lastBoundaryMinute) || lastBoundaryMinute === null) {
-            lastBoundaryMinute = mins;
-            console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL (Slot: ${currentSlot}) @ ${new Date().toISOString()}`);
-            for (const asset of SUPPORTED_ASSETS) {
-                const res = await getChainlinkPrice(asset);
-                const p = res?.price || calculateConsensusPrice(asset);
-                if (p > 0) saveBoundaryStrikeLocal(asset, p);
+        // v7.16.52 : Capture au démarrage (si file absent) ou aux slots 15m
+        const isSlotOpen = (m % 15 === 0);
+        if (!isSlotOpen && fs.existsSync(STRIKES_FILE)) return;
+        
+        if (lastBoundaryMinute === m) return;
+        lastBoundaryMinute = m;
+
+        console.log(`[Strike] Lancement de la capture (Minute: ${m})...`);
+        for (const asset of SUPPORTED_ASSETS) {
+            const res = await captureStrikeAtSlotOpen(asset, `init_${Date.now()}`);
+            if (res && res.price) {
+                saveBoundaryStrikeLocal(asset, res.price);
+            } else {
+                console.warn(`[Strike] Échec capture pour ${asset}.`);
             }
         }
     } catch (e) {
-        console.error('[Strike] ERROR in background capture:', e.message);
+        console.error('[Strike] Capture Error:', e.message);
     }
 };
 setInterval(runBoundaryCapture, 60000);
@@ -236,13 +243,31 @@ let hyperliquidLastUpdateMs = 0;
 function calculateConsensusPrice(asset = 'BTC') {
   const p = perpState.get(asset);
   if (!p) return 0;
+  
+  const now = Date.now();
   const sources = [];
-  if (p.binance > 0) sources.push(p.binance);
-  if (p.okx > 0) sources.push(p.okx);
-  if (p.hyper > 0) sources.push(p.hyper);
-  if (sources.length === 0) return (asset === 'BTC' && binanceBtcPrice > 0) ? binanceBtcPrice : 0;
-  return sources.reduce((a, b) => a + b, 0) / sources.length;
+  
+  // Binance (Weight 1)
+  if (p.binance > 0 && (now - p.binanceTs) < 30000) sources.push(p.binance);
+  // OKX (Weight 1)
+  if (p.okx > 0 && (now - p.okxTs) < 30000) sources.push(p.okx);
+  // Hyperliquid (Weight 1)
+  if (p.hyper > 0 && (now - p.hyperTs) < 30000) sources.push(p.hyper);
+  
+  if (sources.length === 0) return 0;
+  
+  const avg = sources.reduce((a, b) => a + b, 0) / sources.length;
+  
+  // --- Price Sanity Guard (v7.16.38) ---
+  const SANITY_MIN = { BTC: 40000, ETH: 1500, SOL: 40 };
+  if (avg < (SANITY_MIN[asset] || 0)) {
+      console.warn(`[Price] Consensus ${asset} price ${avg.toFixed(2)} below sanity threshold. REJECTED.`);
+      return 0;
+  }
+
+  return avg;
 }
+
 
 let binanceWs = null;
 let okxWs = null;
@@ -5814,13 +5839,23 @@ function startBinanceWs() {
       const data = msg.data;
       if (data && data.s && data.p) {
         const asset = data.s.replace('USDT', '').toUpperCase();
-          perpState.get(asset).binance = parseFloat(data.p);
-          perpState.get(asset).binanceTs = Date.now();
-          lagRecorder.onPerpUpdate(asset, parseFloat(data.p));
-          updateAssetPriceHistory(asset, perpState.get(asset).binance);
+        const price = parseFloat(data.p);
+        
+        // --- Sanity Log (v7.16.38) ---
+        if (asset === 'ETH' || asset === 'SOL') {
+            const last = perpState.get(asset).binance || 0;
+            if (Math.abs(price - last) > 0.01) {
+                console.log(`[Price] Binance ${asset}: ${price.toFixed(2)}`);
+            }
+        }
+
+        perpState.get(asset).binance = price;
+        perpState.get(asset).binanceTs = Date.now();
+        lagRecorder.onPerpUpdate(asset, price);
+        updateAssetPriceHistory(asset, price);
           
-          // v6.2.0 : Latence Binance (E = Event Time)
-          if (data.E) addLatencyHistorySample('ws', Date.now() - Number(data.E));
+        // v6.2.0 : Latence Binance (E = Event Time)
+        if (data.E) addLatencyHistorySample('ws', Date.now() - Number(data.E));
       }
     } catch (_) {}
   });
