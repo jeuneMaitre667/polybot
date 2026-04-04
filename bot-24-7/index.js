@@ -157,7 +157,8 @@ const runBoundaryCapture = async () => {
             lastBoundaryMinute = mins;
             console.log(`[Strike] Snapshot triggered for BTC, ETH, SOL @ ${new Date().toISOString()}`);
             for (const asset of SUPPORTED_ASSETS) {
-                const p = await getChainlinkPrice(asset) || calculateConsensusPrice(asset);
+                const res = await getChainlinkPrice(asset);
+                const p = res?.price || calculateConsensusPrice(asset);
                 if (p > 0) saveBoundaryStrike(asset, p);
             }
         }
