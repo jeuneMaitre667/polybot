@@ -6208,22 +6208,6 @@ function getDynamicSkew(vol) {
   return -0.06;
 }
 
-// v7.12.0 Fix: Add asset parameter
-function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite, asset = 'BTC') {
-  if (timeToExpirySec <= 0) return currentPrice > strikePrice ? 1.0 : 0.0;
-  
-  const state = getAssetState(asset);
-  
-  // v10.3 : Modèle Momentum Relatif (Lead-Lag)
-  // Si nous avons une Base 0 (Binance), nous calculons le Delta %.
-  if (state.binanceRefPrice && Number.isFinite(state.binanceRefPrice)) {
-    const deltaPct = (currentPrice / state.binanceRefPrice) - 1;
-    const strikeDeltaPct = (strikePrice / state.binanceRefPrice) - 1;
-    
-    // Si le prix actuel est significativement au-dessus/en-dessous du Strike en termes de Delta,
-    // on injecte un biais de momentum dans le modèle.
-    const leadLagBiais = (deltaPct - strikeDeltaPct) * 100; // Force du momentum
-    
     // v3.9.2 : Volatilité Hybride
     let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
     if (!volOverwrite) {
