@@ -30,6 +30,18 @@ import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
 import WebSocket from 'ws';
 import axios from 'axios';
 import crypto from 'crypto';
+import { 
+  BITCOIN_UP_DOWN_SLUG, 
+  ETHEREUM_UP_DOWN_SLUG, 
+  SOLANA_UP_DOWN_SLUG, 
+  BITCOIN_UP_DOWN_15M_SLUG, 
+  ETHEREUM_UP_DOWN_15M_SLUG, 
+  SOLANA_UP_DOWN_15M_SLUG,
+  POLYMARKET_FEE_RATE,
+  ARBITRAGE_GAP_THRESHOLD,
+  BTC_ANNUALIZED_VOLATILITY,
+  FEE_SAFETY_BUFFER
+} from './config.js';
 
 // --- v7.0.0 Globals ---
 export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
@@ -243,10 +255,6 @@ let chainlinkSpotPrice = 0; // Prix Chainlink live (mis à jour à chaque cycle)
 let chainlinkRoundId = null; // v5.2.0 : Pour le logging
 let chainlinkAgeMs = 0; // v5.2.0 : Pour le logging
 
-const ARBITRAGE_GAP_THRESHOLD = Number(process.env.ARBITRAGE_GAP_THRESHOLD) || 0.05;
-const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.40;
-const POLYMARKET_FEE_RATE = 0.018; // Taux réaliste 2026 pour Crypto (Peak taker ~1.8%)
-const FEE_SAFETY_BUFFER = 1.05; // Marge de sécurité 5% (Blindage 2026)
 const DEFAULT_STAKE_USDC = 300; 
 
 /** Vérifie si le côté du trade correspond au sens du carnet d'ordres (v5.8.2) */
@@ -654,7 +662,8 @@ function writeActivePositions(positions) {
 async function getBalance() {
   const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
   if (viaClob != null) return viaClob;
-  return getUsdcBalanceRpc();
+  const viaRpc = await getUsdcBalanceRpc();
+  return (viaRpc != null ? viaRpc : 0); // v9.3.3 : Safe default 0
 }
 
 function readActivePositions() {
@@ -822,10 +831,6 @@ marketWorstPriceP = Math.min(0.99, Math.max(0.01, marketWorstPriceP));
  */
 const marketOrderTif = (process.env.MARKET_ORDER_TIF || 'FAK').trim().toUpperCase();
 const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK;
-const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
-const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
-const ETHEREUM_UP_DOWN_15M_SLUG = 'eth-updown-15m'; // v5.4.0
-const SOLANA_UP_DOWN_15M_SLUG = 'sol-updown-15m'; // v5.4.0
 /** Fin de fenêtre 15m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 900 s (comme le dashboard). */
 function slotEndMsFrom15mSlug(slug) {
   if (!slug || typeof slug !== 'string') return null;
@@ -3348,9 +3353,10 @@ async function runStopLossPass() {
   if (stopLossPassBusy) return null;
   stopLossPassBusy = true;
   try {
-    clobClient = null;
     try {
-      clobClient = await buildClobClientCachedCreds();
+      if (!clobClient) {
+         clobClient = await buildClobClientCachedCreds();
+      }
     } catch (err) {
       try {
         const lo = readLastOrder();
@@ -3359,7 +3365,7 @@ async function runStopLossPass() {
         } else {
           throw err;
         }
-      } catch {
+      } catch (innerErr) {
         throw err;
       }
     }
@@ -4709,14 +4715,16 @@ async function fetchActiveWindows() {
   return results;
 }
 
-/** Slug horaire au format Gamma `{prefix}-1h-{eventStartSec}`. */
+/** Slug horaire au format Gamma `{prefix}-{eventStartSec}`. */
 function getCurrentHourlyEventSlug(asset = 'BTC') {
   const nowSec = Math.floor(Date.now() / 1000);
   const slotStart = Math.floor(nowSec / 3600) * 3600;
   let prefix = BITCOIN_UP_DOWN_SLUG;
   if (asset === 'ETH') prefix = ETHEREUM_UP_DOWN_SLUG;
   if (asset === 'SOL') prefix = SOLANA_UP_DOWN_SLUG;
-  return `${prefix}-1h-${slotStart}`;
+  
+  const finalSlug = `${prefix}-${slotStart}`;
+  return finalSlug;
 }
 
 /** Vérifie si l'IP est autorisée à trader (geoblock). */
@@ -5323,9 +5331,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       return;
     }
 
-    // v7.16.13 : Sécurité Profitabilité (1% net minimum après frais)
-    if (netEdge < 0.01) {
-      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.01 });
+    // v9.3.2 : Sécurité Profitabilité Maker (0.5% net minimum sans frais)
+    if (netEdge < 0.005) {
+      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.005 });
       return;
     }
 
@@ -5660,11 +5668,16 @@ async function run() {
 
   const cycleStartMs = Date.now();
   const profiler = createCycleProfiler();
-  clobClient = null;
-
   try {
-    clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
-    const balance = simulationTradeEnabled ? simulationTrade.getPaperBalanceUsd(BOT_DIR) : await getBalance();
+    // v9.3.12: S'assurer que le clobClient est initialisé AVANT d'entrer dans les sous-fonctions
+    if (!clobClient) {
+      clobClient = await buildClobClientCachedCreds();
+    }
+    
+    await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
+    const balance = simulationTradeEnabled 
+       ? (await simulationTrade.getPaperBalanceUsd(BOT_DIR) || 0) 
+       : await getBalance();
     let totalUsd = balance;
     try { totalUsd = await calculateTotalValue(clobClient); } catch(_) {}
     if (totalUsd === 0) totalUsd = balance;
@@ -5679,8 +5692,8 @@ async function run() {
     }
 
     writeHealth({
-      balance: balance.toFixed(2),
-      totalUsd: totalUsd.toFixed(2),
+      balance: (balance != null ? balance.toFixed(2) : '0.00'),
+      totalUsd: (totalUsd != null ? totalUsd.toFixed(2) : '0.00'),
       gasBalance: gasBalance != null ? gasBalance.toFixed(4) : '—',
       activeConditions: OPEN_LIMIT_ORDERS.size
     }, { totalUsd });
@@ -5778,7 +5791,9 @@ function startBinanceWs() {
         if (asset === 'ETH' || asset === 'SOL') {
             const last = perpState.get(asset).binance || 0;
             if (Math.abs(price - last) > 0.01) {
+            if (price != null) {
                 console.log(`[Price] Binance ${asset}: ${price.toFixed(2)}`);
+            }
             }
         }
 
