@@ -42,7 +42,7 @@ export const FEE_SAFETY_BUFFER = 1.05;
 // v10.6 : Momentum CDF Strategy Window
 export const ENTRY_WINDOW = {
   minSecondsRemaining: 15,
-  maxSecondsRemaining: 120, // Fenêtre optimale T-90s environ
+  maxSecondsRemaining: 180, // Fenêtre élargie à 3 min (v12.2)
   minDeltaPct: 0.0003,      // 0.03 %
 };
 
