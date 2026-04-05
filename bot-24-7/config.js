@@ -60,5 +60,7 @@ export const STATE_BACKUP_CONFIG = {
     ]
 };
 
-// Thresholds
+// --- v13 : High-Priority Risk Mitigation ---
+export const MAX_DAILY_DRAWDOWN_PCT = 0.10; // 10% max daily drawdown (Kelly weighting)
+export const RPC_PING_INTERVAL_MS = 30000;  // 30s RPC Sentinel
 
