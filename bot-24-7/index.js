@@ -43,7 +43,10 @@ import {
   ARBITRAGE_GAP_THRESHOLD,
   BTC_ANNUALIZED_VOLATILITY,
   FEE_SAFETY_BUFFER,
-  ENTRY_WINDOW
+  ENTRY_WINDOW,
+  STATE_BACKUP_CONFIG,
+  POLYMARKET_TAKER_FEE,
+  EXPECTED_SLIPPAGE
 } from './config.js';
 
 // --- v9.6.0 Simulation & Diagnostics ---
@@ -208,6 +211,36 @@ setTimeout(runBoundaryCapture, 5000); // v7.16.26 : Démarrage rapide (5s)
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
 let clobClient = null; // v9.2.2 : Global scope fix for background tasks
+let clobCircuitBreaker = { errorCount: 0, lastErrorAt: 0, pausedUntil: 0 };
+const CLOB_CB_THRESHOLD = 3; 
+const CLOB_CB_PAUSE_MS = 300000; // 5 min
+
+/** v12.1 : Circuit Breaker check */
+function isClobPaused() {
+    if (clobCircuitBreaker.pausedUntil > Date.now()) return true;
+    // Auto-reset si la pause est finie
+    if (clobCircuitBreaker.pausedUntil > 0 && Date.now() >= clobCircuitBreaker.pausedUntil) {
+        clobCircuitBreaker.pausedUntil = 0;
+        clobCircuitBreaker.errorCount = 0;
+        console.log('[Resilience] 🛡️ CLOB Circuit Breaker: Safety Pause lift. Service resumed.');
+    }
+    return false;
+}
+
+function recordClobError() {
+    const now = Date.now();
+    // Reset si la dernière erreur date d'il y a plus de 10 min
+    if (now - clobCircuitBreaker.lastErrorAt > 600000) {
+        clobCircuitBreaker.errorCount = 0;
+    }
+    clobCircuitBreaker.errorCount++;
+    clobCircuitBreaker.lastErrorAt = now;
+    
+    if (clobCircuitBreaker.errorCount >= CLOB_CB_THRESHOLD) {
+        clobCircuitBreaker.pausedUntil = now + CLOB_CB_PAUSE_MS;
+        console.warn(`[Resilience] 🚨 CLOB Circuit Breaker: ${clobCircuitBreaker.errorCount} errors detected. PAUSING all trades for 5m.`);
+    }
+}
 let lastRewardsFetch = 0;
 let cachedRewardsData = null;
 
@@ -618,10 +651,65 @@ function writeHealth(updates, extra = {}) {
     }
 
     // 3. Écriture atomique
-    fs.writeFileSync(HEALTH_FILE, JSON.stringify(fullState, null, 2), 'utf8');
+    atomicWriteJson(HEALTH_FILE, fullState);
   } catch (e) {
     console.error('[health] writeHealth échoué:', e?.message ?? e);
   }
+}
+
+/** 
+ * v11 : Service d'archivage automatique vers ./backups 
+ */
+function backupStateFiles() {
+    try {
+        const config = STATE_BACKUP_CONFIG || { dir: './backups', files: [] };
+        if (!fs.existsSync(config.dir)) fs.mkdirSync(config.dir, { recursive: true });
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        config.files.forEach(file => {
+            const src = path.join(process.cwd(), file);
+            if (fs.existsSync(src)) {
+                const dst = path.join(config.dir, `${path.basename(file, '.json')}_${timestamp}.json`);
+                fs.copyFileSync(src, dst);
+            }
+        });
+        
+        // Log périodique silencieux (santé)
+        console.log(`[Backup] ✅ Archivage effectué : ${config.files.length} fichiers sauvegardés.`);
+        
+        // v11.1 : Rotation des backups (on garde les 10 derniers soit 50 min)
+        const oldFiles = fs.readdirSync(config.dir).sort().reverse();
+        if (oldFiles.length > 50) { // 10 fichiers * 5 types = 50 total
+            oldFiles.slice(50).forEach(f => fs.unlinkSync(path.join(config.dir, f)));
+        }
+    } catch (e) {
+        console.error('[Backup] ❌ Échec de la rotation/sauvegarde:', e.message);
+    }
+}
+
+/** 
+ * v11 : Graceful Shutdown Handler (Dernier Souffle)
+ * Sauvegarde l'état critique avant l'arrêt coordonné de PM2/Docker.
+ */
+async function gracefulShutdown(signal) {
+    console.log(`\n[Shutdown] 🛑 Signal ${signal} reçu. Sécurisation de l'état...`);
+    try {
+        // 1. Sauvegardes de persistance finale
+        saveOpenOrders();
+        writeActivePositions(readActivePositions());
+        writeHealth({ status: 'shutdown_complete', lastSignal: signal });
+
+        // 2. Alertes (Optionnel)
+        if (typeof sendTelegramAlert === 'function' && telegramTradeAlertsEnabled) {
+            await sendTelegramAlert(`🏗️ *BOT SHUTDOWN*\nSignal: ${signal}\nStatus: Saved & Exited cleanly.`);
+        }
+
+        console.log('[Shutdown] ✅ État sauvegardé. Fermeture sécurisée.');
+        process.exit(0);
+    } catch (e) {
+        console.error('[Shutdown] ❌ Erreur fatale pendant la fermeture:', e.message);
+        process.exit(1);
+    }
 }
 
 function readStopLossMetrics() {
@@ -651,7 +739,7 @@ function readStopLossMetrics() {
 
 function writeDailyStats(next) {
   try {
-    fs.writeFileSync(DAILY_STATS_FILE, JSON.stringify(next), 'utf8');
+    atomicWriteJson(DAILY_STATS_FILE, next);
   } catch (_) {}
 }
 
@@ -670,7 +758,7 @@ function readDailyStats() {
 
 function writeActivePositions(positions) {
   try {
-    fs.writeFileSync(ACTIVE_POSITIONS_FILE, JSON.stringify(positions), 'utf8');
+    atomicWriteJson(ACTIVE_POSITIONS_FILE, positions);
   } catch (_) {}
 }
 
@@ -725,7 +813,7 @@ async function updateActivePositionsFromFill(fill) {
          if (idx !== -1) positions.splice(idx, 1);
       }
       
-      fs.writeFileSync(ACTIVE_POSITIONS_FILE, JSON.stringify(positions, null, 2));
+      atomicWriteJson(ACTIVE_POSITIONS_FILE, positions);
       // Force immediate balance refresh
       getBalance().then(b => (b != null ? writeHealth({ balance: b.toFixed(2) }) : null));
       return true;
@@ -1955,7 +2043,7 @@ function clearPolymarketDegradedIfExpired() {
 
 function writeStopLossMetrics(metrics) {
   try {
-    fs.writeFileSync(path.join(BOT_DIR, 'stop-loss-metrics.json'), JSON.stringify(metrics));
+    atomicWriteJson(path.join(BOT_DIR, 'stop-loss-metrics.json'), metrics);
   } catch (err) {}
 }
 
@@ -2159,7 +2247,7 @@ const OPEN_ORDERS_FILE = path.join(__dirname, 'open-orders.json');
 function saveOpenOrders() {
   try {
     const data = Object.fromEntries(OPEN_LIMIT_ORDERS);
-    fs.writeFileSync(OPEN_ORDERS_FILE, JSON.stringify(data, null, 2), 'utf8');
+    atomicWriteJson(OPEN_ORDERS_FILE, data);
   } catch (e) {
     console.error('[Persistence] Error saving open orders:', e.message);
   }
@@ -4899,6 +4987,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   if (!options.allowBelowMin && size < orderSizeMinUsd) {
     return { ok: false, error: `Solde insuffisant (${size.toFixed(2)} < ${orderSizeMinUsd} USDC min).` };
   }
+  if (isClobPaused()) return { ok: false, error: 'clob_circuit_breaker_active' };
   const { tokenIdToBuy, takeSide, priceUp, priceDown } = signal;
   const price = takeSide === 'Down' ? priceDown : priceUp;
 
@@ -4993,6 +5082,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
         ...fill,
       };
     } catch (err) {
+      recordClobError();
       const apiErrorDetail =
         err?.response?.data?.error ||
         err?.response?.data?.errorMsg ||
@@ -5427,9 +5517,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     }
     
     const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
-    // v9.1.0 : Alignement sur les frais réels (7.2%) pour valider l'edge net
-    const actualFee = POLYMARKET_FEE_RATE * (1 - vwapPrice);
-    const netEdge = (fairValue - vwapPrice) - actualFee - 0.002; // 0.2% slippage buffer
+    // v12.1 : Alignement sur le True Edge (PnL Net = Gross - Fees - Slippage)
+    const takerFee = POLYMARKET_TAKER_FEE * 1.0; 
+    const netEdge = (fairValue - vwapPrice) - takerFee - EXPECTED_SLIPPAGE;
 
     // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
     if (vwapPrice > 0.98) {
@@ -6208,32 +6298,6 @@ function getDynamicSkew(vol) {
   return -0.06;
 }
 
-    // v3.9.2 : Volatilité Hybride
-    let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
-    if (!volOverwrite) {
-      const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
-      const realized = Number(state.vol) || 0;
-      vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
-    }
-
-    const skew = getDynamicSkew(vol);
-    const timeInYears = timeToExpirySec / (365 * 24 * 3600);
-    const sqrtT = Math.sqrt(timeInYears);
-    const sigmaRootT = vol * sqrtT;
-    
-    // Modèle ajusté : On intègre le leadLagBiais dans le d1 pour capter la tendance
-    const d1 = (Math.log(currentPrice / strikePrice) + (skew * vol + leadLagBiais * 0.01) * sqrtT) / sigmaRootT;
-    
-    return normalCDF(d1);
-  }
-
-  // Fallback classique si binanceRefPrice est manquant
-  let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
-  const timeInYears = timeToExpirySec / (365 * 24 * 3600);
-  const sqrtT = Math.sqrt(timeInYears);
-  const d1 = (Math.log(currentPrice / strikePrice)) / (vol * sqrtT);
-  return normalCDF(d1);
-}
 
 /**
  * Calcule le prix effectif moyen (VWAP) pour une mise donnée en USDC,
@@ -6561,6 +6625,18 @@ async function main() {
       `Résumés Telegram performance : activés (${TELEGRAM_MIDDAY_DIGEST_TZ} — demi-journée ${String(TELEGRAM_MIDDAY_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDDAY_DIGEST_MINUTE).padStart(2, '0')} + minuit ${String(TELEGRAM_MIDNIGHT_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDNIGHT_DIGEST_MINUTE).padStart(2, '0')} — ALERT_TELEGRAM_MIDDAY_DIGEST=true).`
     );
   }
+
+  // --- v11 : Resilience Initialization ---
+  // A. Signal Handlers (SIGTERM pour PM2, SIGINT pour CTRL+C)
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // B. Backup Service (Toutes les 5 min par défaut)
+  const backupConfig = STATE_BACKUP_CONFIG || { intervalMs: 300000 };
+  backupStateFiles(); // v11.2 : Premier backup immédiat au démarrage
+  setInterval(backupStateFiles, backupConfig.intervalMs);
+  console.log(`[Resilience] 🛡️ Service de Backup activé (${backupConfig.intervalMs / 1000}s).`);
+  console.log('[Resilience] 🛡️ Handlers SIGTERM/SIGINT enregistrés.');
   for (;;) {
     try {
       lastHeartbeatMs = Date.now(); // Mise à jour watchdog

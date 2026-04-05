@@ -35,6 +35,8 @@ export const INVENTORY_CAP = Number(process.env.INVENTORY_CAP) || 1000; // token
 export const SKEW_REDUCTION_OFFSET = Number(process.env.SKEW_REDUCTION_OFFSET) || 0.005; // -0.5% si surexposé
 export const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.20;
 export const POLYMARKET_FEE_RATE = 0; // v9.3.6: Maker Strategy (Zero Fee)
+export const POLYMARKET_TAKER_FEE = 0.0002; // 0.02% (v12.1)
+export const EXPECTED_SLIPPAGE = 0.0005;   // 0.05% buffer
 export const FEE_SAFETY_BUFFER = 1.05;
 
 // v10.6 : Momentum CDF Strategy Window
@@ -42,6 +44,20 @@ export const ENTRY_WINDOW = {
   minSecondsRemaining: 15,
   maxSecondsRemaining: 120, // Fenêtre optimale T-90s environ
   minDeltaPct: 0.0003,      // 0.03 %
+};
+
+// --- v11 : Ultra-Resilience Backup Config ---
+export const STATE_BACKUP_CONFIG = {
+    intervalMs: 300000, // 5 min
+    dir: './backups',
+    files: [
+        'health.json',
+        'active-positions.json',
+        'open-orders.json',
+        'stop-loss-metrics.json',
+        'daily-stats.json',
+        'bot.log'
+    ]
 };
 
 // Thresholds
