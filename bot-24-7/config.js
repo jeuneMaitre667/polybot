@@ -63,4 +63,5 @@ export const STATE_BACKUP_CONFIG = {
 // --- v13 : High-Priority Risk Mitigation ---
 export const MAX_DAILY_DRAWDOWN_PCT = 0.10; // 10% max daily drawdown (Kelly weighting)
 export const RPC_PING_INTERVAL_MS = 30000;  // 30s RPC Sentinel
+export const MAX_ALLOWED_LAG_MS = 250;      // Phase 14 : Seuil LAG optimal (v14.1)
 

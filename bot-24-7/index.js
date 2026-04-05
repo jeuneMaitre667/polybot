@@ -48,6 +48,7 @@ import {
   POLYMARKET_TAKER_FEE,
   EXPECTED_SLIPPAGE,
   MAX_DAILY_DRAWDOWN_PCT,
+  MAX_ALLOWED_LAG_MS,
   RPC_PING_INTERVAL_MS
 } from './config.js';
 
@@ -5316,6 +5317,18 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
+  // v14.1 : Phase 14 Latency Guard (Alpha Calibration)
+  if (source === 'poll') {
+      const now = Date.now();
+      const cycleStart = typeof currentCycleStartMs !== 'undefined' ? currentCycleStartMs : now;
+      const currentLag = now - cycleStart;
+      if (currentLag > MAX_ALLOWED_LAG_MS) {
+          console.warn(`[Latency] 🐌 Cycle trop lent (${currentLag}ms > ${MAX_ALLOWED_LAG_MS}ms). Signal abandonnÃ©.`);
+          recordSkipReason('latency_exceeded', source, { currentLag, max: MAX_ALLOWED_LAG_MS });
+          return;
+      }
+  }
+
   try {
     if (!signal?.tokenIdToBuy) return;
     
@@ -5537,9 +5550,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       return;
     }
 
-    // v9.3.2 : Sécurité Profitabilité Maker (0.5% net minimum sans frais)
-    if (netEdge < 0.005) {
-      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.005 });
+    // v9.3.2 : SÃ©curitÃ© ProfitabilitÃ© Maker (v14.1 : 0.2% net minimum)
+    if (netEdge < 0.002) {
+      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.002 });
       return;
     }
 
@@ -5873,6 +5886,7 @@ async function run() {
   // (Capture removed from run() v7.16.9)
 
   const cycleStartMs = Date.now();
+  currentCycleStartMs = cycleStartMs; // v14.1 : Global tracking for latency guard
   const profiler = createCycleProfiler();
   try {
     // v9.6.3: Block-height Diagnostic to confirm RPC health from within the server
