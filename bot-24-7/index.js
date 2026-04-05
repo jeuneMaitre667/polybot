@@ -918,11 +918,11 @@ const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
 // Fenêtre de prix pour signaux et mise max : 77 % – 78 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.77;
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.78;
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.05; // v14.2 : Restoration de la plage complète
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.95; // v14.2 : Restoration de la plage complète
 const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1000);
 const signalEntryTimes = new Map(); // tokenId -> premier instant vu en ms
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.78;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98; // v14.2 : Alignement avec la plage complÃ¨te (v14.2)
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
  * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 77–78 %).
