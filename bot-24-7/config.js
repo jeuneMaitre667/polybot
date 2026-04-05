@@ -42,8 +42,8 @@ export const FEE_SAFETY_BUFFER = 1.05;
 // v10.6 : Momentum CDF Strategy Window
 export const ENTRY_WINDOW = {
   minSecondsRemaining: 15,
-  maxSecondsRemaining: 900, // Débridage Temporel (v14.10) : Trading sur tout le créneau
-  minDeltaPct: 0.0003,      // 0.03 %
+  maxSecondsRemaining: 900, // Débridage Temporel (v14.10)
+  minDeltaPct: 0.0,          // Débridage Mathématique (v14.11) : Forcer la trace momentum
 };
 
 // --- v11 : Ultra-Resilience Backup Config ---
