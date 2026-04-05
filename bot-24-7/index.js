@@ -5504,7 +5504,17 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     }
 
     const state = getAssetState(asset || signal.asset || 'BTC');
-    if (!state || !state.binanceRefPrice) return;
+    if (!state) return;
+    if (!state.binanceRefPrice) {
+      const cur = perpState.get(asset || signal.asset || 'BTC')?.binance;
+      if (cur) {
+        state.binanceRefPrice = cur;
+        state.binanceRefAtMs = Date.now();
+        console.log(`[${asset}] ⚓ Late Anchor (Bypass): Base 0 forced to current Spot $${cur.toFixed(2)}`);
+      } else {
+        return;
+      }
+    }
 
     const deltaPct = (spotPrice / state.binanceRefPrice) - 1;
     if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
