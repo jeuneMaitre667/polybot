@@ -5361,6 +5361,35 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
 
 
+    // --- v14.17 : Momentum Transparency Layer (Calcul avant verrouillage) ---
+    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
+    const nowFixed = Date.now() + (UTC_OFFSET_SEC * 1000);
+    let secondsLeft = Math.max(0, (endDateMs - nowFixed) / 1000);
+
+    let spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
+    const state = getAssetState(asset || signal.asset || 'BTC');
+    
+    if (state && spotPrice > 0) {
+      if (!state.binanceRefPrice) {
+        const cur = perpState.get(asset || signal.asset || 'BTC')?.binance;
+        if (cur) {
+          state.binanceRefPrice = cur;
+          state.binanceRefAtMs = Date.now();
+          console.log(`[${asset}] ⚓ Late Anchor (Bypass): Base 0 forced to current Spot $${cur.toFixed(2)}`);
+        }
+      }
+
+      if (state.binanceRefPrice) {
+        const deltaPct = (spotPrice / state.binanceRefPrice) - 1;
+        const strikePrice = Number(signal.strike);
+        if (Number.isFinite(strikePrice) && strikePrice > 0 && Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
+          const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+          console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
+          signal.probFairAtEntry = probFairLive; // v7.14.6 injection
+        }
+      }
+    }
+
     if (shouldSkipTradeTiming(signal)) {
       const timingDetails = getTimingForbiddenDetails();
       recordSkipReason('timing_forbidden', source, {
@@ -5488,45 +5517,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
     if (!safety.ok) return;
 
-    const spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
-    if (spotPrice <= 0) {
-      recordSkipReason('missing_spot_price', source, { asset, spotPrice });
-      return;
-    }
-
-    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
-    const nowFixed = Date.now() + (UTC_OFFSET_SEC * 1000);
-    const secondsLeft = Math.max(0, (endDateMs - nowFixed) / 1000);
-
-    // --- v10.6 : Momentum Timing Guard (T-90s à T-15s) ---
-    if (secondsLeft < ENTRY_WINDOW.minSecondsRemaining || secondsLeft > ENTRY_WINDOW.maxSecondsRemaining) {
-      return; // Trop tôt ou trop tard pour un edge optimal
-    }
-
-    const state = getAssetState(asset || signal.asset || 'BTC');
-    if (!state) return;
-    if (!state.binanceRefPrice) {
-      const cur = perpState.get(asset || signal.asset || 'BTC')?.binance;
-      if (cur) {
-        state.binanceRefPrice = cur;
-        state.binanceRefAtMs = Date.now();
-        console.log(`[${asset}] ⚓ Late Anchor (Bypass): Base 0 forced to current Spot $${cur.toFixed(2)}`);
-      } else {
-        return;
-      }
-    }
-
-    const deltaPct = (spotPrice / state.binanceRefPrice) - 1;
-    if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
-      return; // Signal trop faible (bruit)
-    }
-
     const strikePrice = Number(signal.strike);
-    const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-    console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
-
-    // v7.14.6 : Injection de la probabilité Fair live pour le calcul de l'edge
-    signal.probFairAtEntry = probFairLive;
 
     const activePositions = readActivePositions();
     const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
