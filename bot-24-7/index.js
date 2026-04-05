@@ -246,6 +246,7 @@ function recordClobError() {
 }
 let lastRewardsFetch = 0;
 let cachedRewardsData = null;
+let currentCycleStartMs = Date.now(); // v14.2.1 : Suivi global pour le LAG guard
 
 // v8.0.0 : Legacy Price Consensus Cleanup (Replaced by src/core/price-engine.js)
 
@@ -923,6 +924,7 @@ const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.95; // v14.2 : Restoration d
 const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1000);
 const signalEntryTimes = new Map(); // tokenId -> premier instant vu en ms
 const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98; // v14.2 : Alignement avec la plage complÃ¨te (v14.2)
+const UTC_OFFSET_SEC = Number(process.env.UTC_OFFSET_SEC) || 0; // v14.3.1 : Correction drift serveur
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
  * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 77–78 %).
@@ -4776,7 +4778,7 @@ async function getActiveMarketTokensForWs() {
 /** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
 /** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
 function getCurrent15mEventSlug(asset = 'BTC') {
-  const nowSec = Math.floor(Date.now() / 1000);
+  const nowSec = Math.floor(Date.now() / 1000) + UTC_OFFSET_SEC;
   // Aligné sur le cadencement Polymarket (borne de 15m)
   const slotStart = Math.floor(nowSec / 900) * 900;
   
@@ -5493,7 +5495,8 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     }
 
     const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
-    const secondsLeft = Math.max(0, (endDateMs - Date.now()) / 1000);
+    const nowFixed = Date.now() + (UTC_OFFSET_SEC * 1000);
+    const secondsLeft = Math.max(0, (endDateMs - nowFixed) / 1000);
 
     // --- v10.6 : Momentum Timing Guard (T-90s à T-15s) ---
     if (secondsLeft < ENTRY_WINDOW.minSecondsRemaining || secondsLeft > ENTRY_WINDOW.maxSecondsRemaining) {
