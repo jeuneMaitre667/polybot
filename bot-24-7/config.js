@@ -42,7 +42,7 @@ export const FEE_SAFETY_BUFFER = 1.05;
 // v10.6 : Momentum CDF Strategy Window
 export const ENTRY_WINDOW = {
   minSecondsRemaining: 15,
-  maxSecondsRemaining: 300, // Fenêtre de test Alpha étendue à 5 min (v13.2)
+  maxSecondsRemaining: 900, // Débridage Temporel (v14.10) : Trading sur tout le créneau
   minDeltaPct: 0.0003,      // 0.03 %
 };
 
