@@ -88,7 +88,28 @@ export async function fetchSignals(asset, context = {}) {
         });
 
         const profile = { totalMs: Date.now() - startFetch };
-        const signals = signalsRaw.filter(s => s.tokenIdToBuy != null);
+        
+        // v2026 Docs Alignment: Filter by market status and fee availability
+        const signals = signalsRaw.filter(s => {
+            if (!s.tokenIdToBuy) return false;
+            
+            // On vérifie les flags d'activité de Polymarket (m est l'objet market brut de Gamma)
+            const isActive = s.m.active === true;
+            const isClosed = s.m.closed === true;
+            const feesEnabled = s.m.feesEnabled === true;
+
+            if (!isActive || isClosed) {
+                console.warn(`[${asset}] Signal REJECTED: Market is not active or already closed. (active:${isActive}, closed:${isClosed})`);
+                return false;
+            }
+
+            if (!feesEnabled) {
+                console.warn(`[${asset}] Signal REJECTED: Fees are not enabled on this market.`);
+                return false;
+            }
+
+            return true;
+        });
         
         const result = {
             signals,

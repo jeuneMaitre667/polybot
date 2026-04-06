@@ -55,7 +55,8 @@ import {
   RPC_PING_INTERVAL_MS,
   SUPPORTED_ASSETS,
   PYTH_FEED_IDS,
-  PYTH_HERMES_URL
+  PYTH_HERMES_URL,
+  DEFAULT_FEE_RATE_BPS
 } from './config.js';
 
 // --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
@@ -2077,11 +2078,21 @@ function purgeExpiredPreSignCache() {
  * plus tard, la déplacer dans un worker_thread si les mesures montrent un pic de latence ici.
  */
 async function createSignedMarketOrder(client, userMarketOrder) {
-  return client.createMarketOrder(userMarketOrder, { negRisk: false });
+  // v2026: Always include feeRateBps for Taker orders
+  const options = { 
+    negRisk: false, 
+    feeRateBps: userMarketOrder.feeRateBps || DEFAULT_FEE_RATE_BPS 
+  };
+  return client.createMarketOrder(userMarketOrder, options);
 }
 
 async function createSignedLimitOrder(client, userLimitOrder) {
-  return client.createLimitOrder(userLimitOrder, { negRisk: false });
+  // v2026: Maker orders use 0 fee, Takers use explicit feeRateBps
+  const options = { 
+    negRisk: false,
+    feeRateBps: userLimitOrder.feeRateBps ?? DEFAULT_FEE_RATE_BPS
+  };
+  return client.createLimitOrder(userLimitOrder, options);
 }
 
 /**
@@ -5001,7 +5012,13 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
       if (useMarketOrder) {
         // Pré-signature : create + sign puis POST (réduit la latence perçue au moment du trade).
         const worstPrice = options.worstPrice || marketWorstPriceP;
-        const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: options?.side || Side.BUY, price: worstPrice };
+        const userMarketOrder = { 
+          tokenID: tokenIdToBuy, 
+          amount: size, 
+          side: options?.side || Side.BUY, 
+          price: worstPrice,
+          feeRateBps: DEFAULT_FEE_RATE_BPS // v2026: Explicit Taker Fee
+        };
         const cacheKey = getPreSignCacheKey(signal, size);
         purgeExpiredPreSignCache();
         let signedOrder = null;
@@ -5035,7 +5052,13 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
           ...fill,
         };
       }
-      const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: options?.side || Side.BUY };
+      const userOrder = { 
+        tokenID: tokenIdToBuy, 
+        price: roundedPrice, 
+        size, 
+        side: options?.side || Side.BUY,
+        feeRateBps: DEFAULT_FEE_RATE_BPS // v2026: Standard for Sniper Taker attempts
+      };
       const signedOrderLimit = await client.createOrder(userOrder, options);
       if (signedOrderLimit?.signature && wallet?.address) {
           console.log(`[Security] 🛡️ Certifying limit order signature for ${wallet.address}...`);

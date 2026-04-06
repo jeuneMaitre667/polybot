@@ -35,7 +35,8 @@ export const INVENTORY_CAP = Number(process.env.INVENTORY_CAP) || 1000; // token
 export const SKEW_REDUCTION_OFFSET = Number(process.env.SKEW_REDUCTION_OFFSET) || 0.005; // -0.5% si surexposé
 export const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.20;
 export const POLYMARKET_FEE_RATE = 0; // v9.3.6: Maker Strategy (Zero Fee)
-export const POLYMARKET_TAKER_FEE = 0.0002; // 0.02% (v12.1)
+export const DEFAULT_FEE_RATE_BPS = 30; // v2026: Standard Taker Fee (30 bps)
+export const POLYMARKET_TAKER_FEE = 0.0030; // 0.30% (v2026 Docs)
 export const EXPECTED_SLIPPAGE = 0.0005;   // 0.05% buffer
 export const FEE_SAFETY_BUFFER = 1.05;
 
