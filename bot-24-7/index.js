@@ -4630,7 +4630,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
       const tFallback0 = Date.now();
       const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UPDOWN_15M_PREFIX.toLowerCase())) {
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UPDOWN_5M_PREFIX.toLowerCase())) {
         events = [ev];
         profile.fallbackSlugOk = true;
         gammaSlotEventCache.set(String(slug).toLowerCase(), {
@@ -4717,10 +4717,10 @@ async function getActiveMarketTokensForWs() {
 
   const collectForAsset = async (asset) => {
     let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    if (MARKET_MODE === '15m') {
-      if (asset === 'ETH') slugMatch = ETHEREUM_UPDOWN_15M_PREFIX;
-      else if (asset === 'SOL') slugMatch = SOLANA_UPDOWN_15M_PREFIX;
-      else slugMatch = BITCOIN_UPDOWN_15M_PREFIX;
+    if (MARKET_MODE === '5m') {
+      if (asset === 'ETH') slugMatch = 'eth-updown-5m';
+      else if (asset === 'SOL') slugMatch = 'sol-updown-5m';
+      else slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
     } else {
       if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
       else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
@@ -4790,9 +4790,9 @@ async function getActiveMarketTokensForWs() {
 function getCurrent15mEventSlug(asset = 'BTC') {
   const nowSec = Math.floor(Date.now() / 1000);
   const slotStart = Math.floor(nowSec / 900) * 900;
-  let prefix = BITCOIN_UPDOWN_15M_PREFIX;
-  if (asset === 'ETH') prefix = ETHEREUM_UPDOWN_15M_PREFIX;
-  if (asset === 'SOL') prefix = SOLANA_UPDOWN_15M_PREFIX;
+  let prefix = BITCOIN_UPDOWN_5M_PREFIX;
+  if (asset === 'ETH') prefix = 'eth-updown-5m';
+  if (asset === 'SOL') prefix = 'sol-updown-5m';
   return `${prefix}-${slotStart}`.toLowerCase();
 }
 
@@ -4837,7 +4837,7 @@ function pick15mFallbackEventFromList(events, nowMs) {
  */
 async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'BTC') {
   const expectedSlug = getCurrent15mEventSlug(asset).toLowerCase();
-  const searchPrefix = (asset === 'ETH') ? ETHEREUM_UPDOWN_15M_PREFIX : (asset === 'SOL') ? SOLANA_UPDOWN_15M_PREFIX : BITCOIN_UPDOWN_15M_PREFIX;
+  const searchPrefix = (asset === 'ETH') ? 'eth-updown-5m' : (asset === 'SOL') ? 'sol-updown-5m' : BITCOIN_UPDOWN_5M_PREFIX;
   
   const relevantEvents = events.filter((e) => (e.slug ?? '').toLowerCase().includes(searchPrefix));
   
@@ -4873,10 +4873,10 @@ async function fetchActiveWindows() {
   
   for (const asset of SUPPORTED_ASSETS) {
     let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    if (MARKET_MODE === '15m') {
-       if (asset === 'ETH') slugMatch = ETHEREUM_UPDOWN_15M_PREFIX;
-       else if (asset === 'SOL') slugMatch = SOLANA_UPDOWN_15M_PREFIX;
-       else slugMatch = BITCOIN_UPDOWN_15M_PREFIX;
+    if (MARKET_MODE === '5m') {
+       if (asset === 'ETH') slugMatch = 'eth-updown-5m';
+       else if (asset === 'SOL') slugMatch = 'sol-updown-5m';
+       else slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
     } else {
        if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
        else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
