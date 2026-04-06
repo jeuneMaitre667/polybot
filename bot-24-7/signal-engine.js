@@ -113,14 +113,8 @@ export async function fetchSignals(asset, context = {}) {
 }
 
 function getSlotSlugForAsset(asset) {
-    if (MARKET_MODE === '15m') {
-        if (asset === 'BTC') return BITCOIN_UPDOWN_15M_PREFIX;
-        if (asset === 'ETH') return ETHEREUM_UPDOWN_15M_PREFIX;
-        if (asset === 'SOL') return SOLANA_UPDOWN_15M_PREFIX;
-    }
-    if (asset === 'ETH') return ETHEREUM_UP_OR_DOWN_1H_PREFIX;
-    if (asset === 'SOL') return SOLANA_UP_OR_DOWN_1H_PREFIX;
-    return BITCOIN_UP_OR_DOWN_1H_PREFIX;
+    // v2026 : Focalisation absolue sur le BTC 5m
+    return BITCOIN_UPDOWN_5M_PREFIX;
 }
 
 /**

@@ -29,16 +29,18 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
 import { WebSocket } from 'ws';
-import lagRecorder from './lag-recorder.js';
 import axios from 'axios';
 import crypto from 'crypto';
+/** Aide Ã  la journalisation : Ã©moji selon la latence (v14.53) */
+function brandEmoji(latencyMs) {
+  if (latencyMs < 150) return '\ud83c\udfce\ufe0f'; // 🏎️
+  if (latencyMs < 350) return '\u26a1';             // ⚡
+  if (latencyMs < 600) return '\ud83d\udc22';         // 🐢
+  return '\ud83d\udc0c';                              // 🐌
+}
+
 import { 
-  BITCOIN_UP_OR_DOWN_1H_PREFIX,
-  ETHEREUM_UP_OR_DOWN_1H_PREFIX,
-  SOLANA_UP_OR_DOWN_1H_PREFIX,
-  BITCOIN_UPDOWN_15M_PREFIX,
-  ETHEREUM_UPDOWN_15M_PREFIX,
-  SOLANA_UPDOWN_15M_PREFIX,
+  BITCOIN_UPDOWN_5M_PREFIX,
   POLYMARKET_FEE_RATE,
   ARBITRAGE_GAP_THRESHOLD,
   BTC_ANNUALIZED_VOLATILITY,
@@ -49,8 +51,25 @@ import {
   EXPECTED_SLIPPAGE,
   MAX_DAILY_DRAWDOWN_PCT,
   MAX_ALLOWED_LAG_MS,
-  RPC_PING_INTERVAL_MS
+  RPC_PING_INTERVAL_MS,
+  SUPPORTED_ASSETS
 } from './config.js';
+
+// --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
+const ENABLE_SNIPER_STRATEGY = true;
+const SNIPER_WINDOW_START_S = 40;  // t-40s
+const SNIPER_WINDOW_END_S = 20;    // t-20s
+const SNIPER_PRICE_MIN = 0.90;     // 90 cents
+const SNIPER_PRICE_MAX = 0.97;     // 97 cents
+const SNIPER_STAKE = 10;           // 10 USDC
+
+// --- CONFIG COMPOUNDING (v2026) ---
+const SNIPER_STAKE_START = 10; // Mise de départ
+const SNIPER_STAKE_MIN = 1;   // Pas moins de 1$
+const SNIPER_STAKE_MAX = 100;  // Mise max de sécurité
+
+const SNIPER_COMPOUNDING_FILE = path.join(process.cwd(), 'sniper-compounding.json');
+
 
 // --- v9.6.0 Simulation & Diagnostics ---
 // --- v9.7.0 Real-Trading Recovery & RPC Failover ---
@@ -62,6 +81,8 @@ export const DEEP_ORDER_ENABLED = process.env.DEEP_ORDER_ENABLED !== 'false';
 export const DEEP_ORDER_OFFSET = Number(process.env.DEEP_ORDER_OFFSET) || 0.005; // 0.5% d'écart supplémentaire
 
 // --- Smart Rate Limiter / Cloudflare (Blindage 2026) ---
+const lastRateLimitInfo = { limit: 0, remaining: 0, reset: 0, lastUpdate: 0 };
+let last425ErrorAt = 0;
 function updateRateLimitFromHeaders(headers) {
   if (!headers) return;
   const limit = Number(headers['x-ratelimit-limit'] || headers['X-RateLimit-Limit']);
@@ -151,7 +172,7 @@ import {
 } from './gammaUpDownOrder.js';
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
-import { getChainlinkPrice, getChainlinkPriceCached, captureStrikeAtSlotOpen, getChainlinkHealthStats } from './chainlink-price.js';
+import { captureStrikeAtSlotOpen } from './chainlink-price.js';
 import { fetchSignals, getSignalKey, shouldSkipTradeTiming, lookupBoundaryStrike } from './signal-engine.js';
 import { getStrike, saveStrike } from './src/core/strike-manager.js';
 import { calculateConsensusPrice, getUnifiedFairValue } from './src/core/price-engine.js';
@@ -160,19 +181,12 @@ import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
 const WS_REFRESH_SUBSCRIPTIONS_MS = 30 * 1000;
-const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion alive
-const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 10; // Réduit v5.3.0 (Blindage 2026)
-const SUPPORTED_ASSETS = ['BTC', 'ETH', 'SOL']; // v5.4.0 (Option 4)
-const BINANCE_WS_URL = 'wss://fstream.binance.com/stream?streams=';
-const OKX_WS_URL = 'wss://ws.okx.com:8443/ws/v5/public';
-const HYPERLIQUID_WS_URL = 'wss://api.hyperliquid.xyz/ws';
+const WS_PING_INTERVAL_MS = 10 * 1000; 
+const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 10; 
 
-// État global des prix Perp par Asset (v5.4.0)
-// v5.4.3 : perpState converti en Map pour multi-actifs
+// État global des prix Perp par Asset (v2026 : BTC Only)
 const perpState = new Map([
   ['BTC', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
-  ['ETH', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
-  ['SOL', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
 ]);
 
 /** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
@@ -248,22 +262,14 @@ let lastRewardsFetch = 0;
 let cachedRewardsData = null;
 let currentCycleStartMs = Date.now(); // v14.2.1 : Suivi global pour le LAG guard
 
-// v8.0.0 : Legacy Price Consensus Cleanup (Replaced by src/core/price-engine.js)
-
-
-let binanceWs = null;
-let okxWs = null;
-let hyperliquidWs = null;
-
 /** Cache global des prix Polymarket (via WS) pour le SL Miroir et l'enrichissement */
 const latestPrices = new Map(); // assetId -> { bestBid, bestAsk }
 const ofiState = new Map(); // assetId -> { prevBidPrice, prevBidSize, ..., ofi }
-// v5.4.2 : État spécifique par actif (BTC, ETH, SOL)
+// v5.4.2 : État spécifique par actif (BTC Only)
 const assetSpecificState = new Map();
 function getAssetState(asset) {
   if (!assetSpecificState.has(asset)) {
-    const defaultVolMap = { BTC: 0.40, ETH: 0.50, SOL: 0.80 };
-    const defaultVol = Number(process.env[`${asset}_ANNUALIZED_VOLATILITY`]) || defaultVolMap[asset] || 0.20;
+    const defaultVol = Number(process.env[`${asset}_ANNUALIZED_VOLATILITY`]) || 0.20;
     assetSpecificState.set(asset, {
       vol: defaultVol,
       priceHistory: [],
@@ -275,13 +281,11 @@ function getAssetState(asset) {
   return assetSpecificState.get(asset);
 }
 
-/// État global des Strikes par Asset (v5.4.0)
+/// État global des Strikes par Asset (v2026 : BTC Only)
 const assetStrikes = {
-  BTC: { price: null, slotSlug: null, capturedAt: null, isOfficial: false, lastFetchPrice: null, stableCount: 0 },
-  ETH: { price: null, slotSlug: null, capturedAt: null, isOfficial: false, lastFetchPrice: null, stableCount: 0 },
-  SOL: { price: null, slotSlug: null, capturedAt: null, isOfficial: false, lastFetchPrice: null, stableCount: 0 },
+  BTC: { price: null, slotSlug: null, capturedAt: null, isOfficial: false, lastFetchPrice: null, stableCount: 0 }
 };
-const assetLastSlugs = { BTC: null, ETH: null, SOL: null };
+const assetLastSlugs = { BTC: null };
 
 async function fetchPolymarketStrikeOfficial(startTimeIso, endTimeIso, symbol = 'BTC') {
   try {
@@ -333,9 +337,7 @@ const ABSOLUTE_MAX_STAKE_USD = Number(process.env.ABSOLUTE_MAX_STAKE_USD) || 200
 const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 15;
 // v7.9.1: Per-asset exposure limits (Surgical Calibration)
 const MAX_POSITIONS_PER_ASSET = {
-  'BTC': 15,
-  'ETH': 15,
-  'SOL': 8
+  'BTC': 15
 };
 const MAX_DAILY_LOSS_USDC = 500; 
 const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; 
@@ -409,8 +411,6 @@ function checkHeartbeat() {
   // v10.1 : Mise à jour régulière du dashboard
   writeHealth({});
 }
-// Surveillance toutes les 15s
-setInterval(checkHeartbeat, 15_000);
 // Surveillance toutes les 15s
 setInterval(checkHeartbeat, 15_000);
 
@@ -1831,15 +1831,6 @@ async function getMarketConfig(clobClient, tokenId) {
   }
 }
 
-/** État global du Rate-Limit CLOB/Cloudflare (Blindage 2026) */
-let last425ErrorAt = 0; // v5.3.0 (Blindage 2026) : Détection redémarrage moteur Polymarket
-let lastRateLimitInfo = {
-  limit: 100, // Valeur par défaut prudente
-  remaining: 100,
-  reset: 0,
-  lastUpdate: 0,
-};
-
 function recordSkipReason(reason, source = 'unknown', details = {}) {
   const r = String(reason || 'unknown_skip');
   const s = String(source || 'unknown');
@@ -3151,7 +3142,8 @@ async function executePaperStopLossExit(p) {
   }
   
   if (Number.isFinite(bestBidLive) && bestBidLive > 0 && bestBidLive < 1) {
-    worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
+    // v14.53 : Si le prix actuel est meilleur que le prix de stop-loss (Take Profit), on utilise le profit rÃ©el.
+    worstPricePUsed = bestBidLive;
   }
   worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
   const rawTakerLoop = tokensToSell * worstPricePUsed * 1e6;
@@ -3248,6 +3240,9 @@ async function executePaperStopLossExit(p) {
     worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
     filledUsdc: totalFilledUsdc,
   });
+
+  pos.resolved = true;
+  updateActivePosition(pos);
 }
 
 /** 
@@ -3273,31 +3268,35 @@ async function processSinglePositionExit(pos, clobClient) {
   if (!(entryPriceP > 0)) return false;
 
   const bestBid = await getBestBid(tokenId);
-  if (!(bestBid > 0 && bestBid < 1)) return false;
-
-  const secondsLeft = endMs ? Math.max(0, (endMs - nowMs) / 1000) : 300;
-  
-  // 1. Take Profit : Convergence ou Edge d'entrée
-  const entryFair = Number(pos.entryFair || pos.probFairAtEntry);
-  const netProfitPct = (bestBid - entryPriceP) / entryPriceP;
   const targetProfitPct = Math.min(0.20, Math.max(0.025, Number(pos.edge || 0.05)));
-  const triggerTP = (netProfitPct >= targetProfitPct) || (entryFair > 0 && bestBid >= entryFair * 0.98);
+  const netProfitPct = (bestBid - entryPriceP) / entryPriceP;
+  console.log(`[Monitor] \ud83d\udcca Position ${pos.underlying} | Bid: ${bestBid} | Target: +${(targetProfitPct*100).toFixed(1)}% | Net: +${(netProfitPct*100).toFixed(1)}%`);
+  
+  if (!(bestBid > 0 && bestBid < 1)) return false;
+  const secondsLeft = Number.isFinite(endMs) ? (endMs - nowMs) / 1000 : 999;
 
-  // 2. Stop Loss Hard Stop -5% (Miroir SL désactivé temporairement pour stabilité v7.13)
-  const triggerHardSL = (netProfitPct <= -0.05);
+  // --- LOGIQUE SNIPER 5M BTC (v2026 : SL Fixe 10%) ---
+  const stopLossThreshold = 0.10; // -10% Fixe pendant toute la position
+  const triggerSL = (netProfitPct <= -stopLossThreshold);
 
-  // 3. Time-Based Exit : Force close avant l'expiration (v7.13.0)
-  const triggerTimeForce = secondsLeft < 30;
-  const triggerTimeCut = secondsLeft < 60 && netProfitPct < 0;
+  // 1. Take Profit (Convergence)
+  const triggerTP = (netProfitPct >= targetProfitPct);
 
-  const triggered = triggerTP || triggerHardSL || triggerTimeForce || triggerTimeCut;
+  // 3. Time-Based Exit (Fermeture de secours hors Sniper)
+  const isSniper = ENABLE_SNIPER_STRATEGY && (pos.asset === 'BTC' || (pos.eventSlug && pos.eventSlug.includes('btc-updown-5m')));
+  const triggerTimeForce = !isSniper && secondsLeft < 30; 
+  const triggerTimeCut = !isSniper && secondsLeft < 60 && netProfitPct < 0;
+
+  const triggered = triggerTP || triggerSL || triggerTimeForce || triggerTimeCut;
   if (!triggered) {
     stopLossNextAttemptByCondition.set(conditionId, nowMs + 10000);
     return false;
   }
 
+  const isSniperTrade = ENABLE_SNIPER_STRATEGY && (pos.asset === 'BTC' || (pos.eventSlug && pos.eventSlug.includes('btc-updown-5m')));
   const triggerReason = triggerTP ? 'CONVERGENCE_TP' : 
-                       triggerHardSL ? 'HARD_STOP_LOSS' :
+                       (triggerSL && isSniperTrade) ? (stopLossThreshold === 0.05 ? 'SNIPER_SL_5PCT' : 'SNIPER_SL_10PCT') :
+                       triggerSL ? 'HARD_STOP_LOSS' :
                        triggerTimeForce ? 'TIME_FORCE_EXIT' : 'TIME_CUT_LOSS';
 
   const drawdownPct = netProfitPct * 100;
@@ -3330,12 +3329,13 @@ async function processSinglePositionExit(pos, clobClient) {
 
 /** Boucle principale de monitoring (v7.13.1 Multi-Asset) */
 async function tryDynamicExitForOpenPosition(clobClient) {
-  if (!walletConfigured || !wallet) return;
+  if (!IS_SIMULATION && (!walletConfigured || !wallet)) return;
   const active = readActivePositions();
   if (!active || active.length === 0) return;
 
   for (const pos of active) {
     try {
+      console.log(`[Monitor] \ud83d\udc41\ufe0f Analyse de position active : ${pos.underlying}`);
       await processSinglePositionExit(pos, clobClient);
     } catch (err) {
       logJson('error', 'Echec monitoring position', { underlying: pos.underlying, err: err.message });
@@ -3377,10 +3377,20 @@ async function executeClobExit(clobClient, pos, tokensToSell, bestBid, drawdownP
 
     try {
       // v9.3.17 : Nuclear Signer Guard
-      if (!clobClient || !wallet) {
+      if (!IS_SIMULATION && (!clobClient || !wallet)) {
          console.warn('[executeClobExit] Emergency Stop: clobClient or wallet is NULL.');
          return false;
       }
+
+      if (IS_SIMULATION) {
+        // --- SIMULATED FILL (v14.53) ---
+        totalFilledTokens = tokensToSell;
+        totalFilledUsdc = tokensToSell * bestBidLive;
+        exitFilledOk = true;
+        console.log(`[PAPER] \u2705 Stop-loss Exit Simulated for ${pos.underlying} at ${bestBidLive}`);
+        break; 
+      }
+
       const result = await placeLimitOrder(clobClient, {
         price: worstPricePUsed,
         size: tokensToSell - totalFilledTokens,
@@ -3473,10 +3483,11 @@ async function tryStopLossForVirtualWatchEntries() {
 
 /** Exécute une passe stop-loss avec verrou anti-chevauchement. Retourne un client CLOB réutilisable pour le cycle. */
 async function runStopLossPass() {
-  if (!walletConfigured || !wallet || !stopLossEnabled) return null;
+  if (!IS_SIMULATION && (!walletConfigured || !wallet || !stopLossEnabled)) return null;
   if (stopLossPassBusy) return null;
   stopLossPassBusy = true;
   try {
+    console.log(`[Monitor] \u23f3 Tentative de surveillance Stop-Loss (Boucle ${STOP_LOSS_FAST_INTERVAL_MS}ms)...`);
     try {
       if (!clobClient) {
          clobClient = await buildClobClientCachedCreds();
@@ -4776,18 +4787,27 @@ async function getActiveMarketTokensForWs() {
 }
 
 /** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
-/** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
 function getCurrent15mEventSlug(asset = 'BTC') {
-  const nowSec = Math.floor(Date.now() / 1000) + UTC_OFFSET_SEC;
-  // Aligné sur le cadencement Polymarket (borne de 15m)
+  const nowSec = Math.floor(Date.now() / 1000);
   const slotStart = Math.floor(nowSec / 900) * 900;
-  
   let prefix = BITCOIN_UPDOWN_15M_PREFIX;
   if (asset === 'ETH') prefix = ETHEREUM_UPDOWN_15M_PREFIX;
   if (asset === 'SOL') prefix = SOLANA_UPDOWN_15M_PREFIX;
-  
-  // v9.8.9: Force lower-case for Gamma slug matching reliability
   return `${prefix}-${slotStart}`.toLowerCase();
+}
+
+/** Slug du créneau 5m ouvert : `{prefix}-{eventStartSec}` (Polymarket UpDown 5m). */
+function getCurrent5mEventSlug(asset = 'BTC') {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const slotStart = Math.floor(nowSec / 300) * 300;
+  return `${BITCOIN_UPDOWN_5M_PREFIX}${slotStart}`.toLowerCase();
+}
+
+/** Fenêtre temporelle avant la clôture du slot (en secondes). */
+function getRemainingSeconds(intervalSeconds = 300) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const nextSlot = (Math.floor(nowSec / intervalSeconds) + 1) * intervalSeconds;
+  return nextSlot - nowSec;
 }
 
 /**
@@ -5318,6 +5338,39 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 /** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
+/**
+ * Calcule la mise Sniper avec rÃ©investissement des gains (Compounding).
+ * Mise = StartStake + (BalanceActuelle - BalanceSessionInitiale)
+ * CapÃ© entre MIN (1$) et MAX (100$).
+ */
+async function getCompoundedSniperStake(currentBalance) {
+  try {
+    let state = await safeReadJson(SNIPER_COMPOUNDING_FILE);
+    if (!state || !state.sessionStartBalance) {
+      state = { sessionStartBalance: currentBalance, cumulativeProfit: 0, lastUpdatedAt: new Date().toISOString() };
+      await atomicWriteJson(SNIPER_COMPOUNDING_FILE, state);
+      console.log(`[Sniper] \ud83d\udd30 Initialisation du Compounding. Solde de rÃ©fÃ©rence : ${currentBalance.toFixed(2)} USDC`);
+    }
+    
+    const profit = currentBalance - state.sessionStartBalance;
+    let stake = SNIPER_STAKE_START + profit;
+    
+    // Verrouillage Strict (Cahier des charges : 1$ min, 100$ max)
+    const finalStake = Math.max(SNIPER_STAKE_MIN, Math.min(SNIPER_STAKE_MAX, stake));
+    
+    if (profit !== state.cumulativeProfit) {
+        state.cumulativeProfit = profit;
+        state.lastUpdatedAt = new Date().toISOString();
+        await atomicWriteJson(SNIPER_COMPOUNDING_FILE, state);
+    }
+
+    return Math.round(finalStake * 100) / 100;
+  } catch (err) {
+    console.error(`[Sniper] \u26a0\ufe0f Erreur calcul Compounding : ${err.message}. Fallback mise Start.`);
+    return SNIPER_STAKE_START;
+  }
+}
+
 async function tryPlaceOrderForSignal(signal, source = 'ws') {
   // v14.1 : Phase 14 Latency Guard (Alpha Calibration)
   if (source === 'poll') {
@@ -5384,8 +5437,13 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         const strikePrice = Number(signal.strike);
         if (Number.isFinite(strikePrice) && strikePrice > 0 && Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
           const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+          
+          // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
+          signal.probFairAtEntry = probFairLive;
+          signal.spotAtDetection = spotPrice;
+          signal.thresholdAtDetection = adjustedThreshold;
+
           console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
-          signal.probFairAtEntry = probFairLive; // v7.14.6 injection
         }
       }
     }
@@ -5406,22 +5464,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
       logSignalInRangeButNoOrder(source, r, signal, {});
       return;
-    }
-
-    // --- Correlation Guard BTC/ETH ---
-    const MAX_CONCURRENT_CORRELATED_POSITIONS = 1;
-    const correlatedGroup = ["BTC", "ETH"];
-    if (correlatedGroup.includes(signal.asset)) {
-      const activePositions = readActivePositions();
-      const now = Date.now();
-      const activeCorrelated = activePositions.filter(p => 
-        correlatedGroup.includes(p.asset) && (p.marketEndMs ? p.marketEndMs > now : true)
-      ).length;
-      if (activeCorrelated >= MAX_CONCURRENT_CORRELATED_POSITIONS) {
-          console.log(`⛔ [${signal.asset}] Exposition BTC/ETH déjà active (${activeCorrelated} pos) — [${source}] skip.`);
-          recordSkipReason('correlation_limit', source, { asset: signal.asset, activeCorrelated });
-          return;
-      }
     }
 
     const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
@@ -5489,24 +5531,29 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       }
     }
 
-    // 4. PHASE SIZING (Kelly, SOL, Caps)
+    // 4. PHASE SIZING (Kelly, SOL, Sniper, Caps)
     const balanceForSizing = budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
     let amountUsd = orderSizeUsd;
-    if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-      const activePositions = readActivePositions();
-      const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-      amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
-    } else if (useBalanceAsSize) {
-      amountUsd = balanceForSizing ?? orderSizeUsd;
+
+    // --- LOGIQUE SNIPER 5M BTC (v2026 : Compounding Active) ---
+    if (ENABLE_SNIPER_STRATEGY && (signal.asset === 'BTC' || slug.includes('btc-updown-5m'))) {
+        if (bestAskLive < SNIPER_PRICE_MIN || bestAskLive > SNIPER_PRICE_MAX) {
+            console.log(`[Sniper] \u26d4 Hors fen\u00eatre de prix : ${bestAskLive.toFixed(2)} (Attendu: ${SNIPER_PRICE_MIN}-${SNIPER_PRICE_MAX})`);
+            return;
+        }
+        
+        // Calcul de la mise dynamique basÃ©e sur la balance actuelle
+        amountUsd = await getCompoundedSniperStake(balance || 0);
+        console.log(`[Sniper] \ud83c\udfaf Cible Verrouill\u00e9e : Prix=${bestAskLive.toFixed(2)} | Mise Dynamique=${amountUsd} USDC`);
+    } else if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
+        const activePositions = readActivePositions();
+        const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
+        amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
+    } else {
+        amountUsd = Number(orderSizeUsd) || 1.0;
     }
 
-    if (signal.asset === 'SOL') {
-      console.log(`[Risk] 📉 SOL detected. Type of amountUsd: ${typeof amountUsd}, Value: ${amountUsd}`);
-      amountUsd *= 0.5;
-      console.log(`[Risk] 📉 SOL stake adjusted to ${(Number(amountUsd) || 0).toFixed(2)} USDC.`);
-    }
-
-    console.log(`[Trace] 00 Starting phase validation for ${signal.asset} (Amount: ${amountUsd})...`);
+    console.log(`[Trace] 00 Starting phase validation for BTC (Amount: ${amountUsd})...`);
     if (liquidity != null && useLiquidityCap && amountUsd > liquidity) amountUsd = liquidity;
     if (maxUsdAvg != null && useAvgPriceSizing && amountUsd > maxUsdAvg) amountUsd = maxUsdAvg;
     amountUsd = applyMaxStakeUsd(amountUsd);
@@ -5532,18 +5579,25 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     }
 
     console.log(`[Trace] 05 VWAP Calc starting...`);
-    const vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
+    let vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
+    
+    // FIX FALLBACK SIMULATION (v14.53) - Bypass 429 Rate Limit
+    if (vwapPrice == null && IS_SIMULATION) {
+      vwapPrice = bestAskLive || 0.50; // Fallback sur le meilleur prix vu
+      console.log(`[PAPER] \u26a0\ufe0f VWAP failed (429?), using Signal Price as Fallback: ${vwapPrice}`);
+    }
+
     console.log(`[Trace] 06 VWAP Result: ${vwapPrice}`);
     if (vwapPrice == null) return;
 
-    console.log(`[Trace] 07 Data: spot=${spotPrice} strike=${strikePrice}`);
+    console.log(`[Trace] 07 Data: spot=${signal.spotAtDetection} strike=${strikePrice}`);
 
     if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
       recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
       return;
     }
     
-    const fairValue = signal.takeSide === 'Up' ? probFairLive : (1 - probFairLive);
+    const fairValue = signal.takeSide === 'Up' ? signal.probFairAtEntry : (1 - signal.probFairAtEntry);
     // v12.1 : Alignement sur le True Edge (PnL Net = Gross - Fees - Slippage)
     const takerFee = POLYMARKET_TAKER_FEE * 1.0; 
     const netEdge = (fairValue - vwapPrice) - takerFee - EXPECTED_SLIPPAGE;
@@ -5560,7 +5614,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       return;
     }
 
-    if (netEdge < adjustedThreshold) {
+    if (netEdge < signal.thresholdAtDetection) {
       // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
       logDecision({
           at: new Date().toISOString(),
@@ -5568,7 +5622,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
           asset,
           slug: signal.slug || signal.eventSlug,
           side: signal.takeSide,
-          prob: probFairLive,
+          prob: signal.probFairAtEntry,
           ask: vwapPrice,
           edge: (netEdge != null ? Number(netEdge.toFixed(4)) : 0),
           strike: signal.strike,
@@ -5910,6 +5964,17 @@ async function run() {
     }
     
     await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
+    
+    // v2026 : Actualisation de l'Indice BTC (Pyth) au dÃ©but du cycle
+    const pythPrice = await fetchPythPrice('BTC');
+    if (pythPrice) {
+        perpState.get('BTC').binance = pythPrice;
+        perpState.get('BTC').binanceTs = Date.now();
+        chainlinkSpotPrice = pythPrice; // v2026 : Bridge Pyth -> Legacy Prob Sizing
+        updateAssetPriceHistory('BTC', pythPrice);
+        process.stdout.write(`[Native] BTC Polymarket Index: $${pythPrice.toFixed(2)} \r`);
+    }
+
     const balance = simulationTradeEnabled 
        ? (await simulationTrade.getPaperBalanceUsd(BOT_DIR) || 0) 
        : await getBalance();
@@ -5989,6 +6054,19 @@ async function run() {
       
       if (signals.length === 0) continue;
 
+      // --- VERROU SNIPER TEMP_REL (t-40s à t-20s) ---
+      if (ENABLE_SNIPER_STRATEGY && (asset === 'BTC' || slug.includes('btc-updown-5m'))) {
+          const remaining = getRemainingSeconds(300); // Fenêtre 5m
+          if (remaining < SNIPER_WINDOW_END_S || remaining > SNIPER_WINDOW_START_S) {
+              // On ne loggue que si on est proche (t-60s) pour ne pas polluer.
+              if (remaining < 60) {
+                  process.stdout.write(`[Sniper] ⏳ En attente de la fenêtre (t-${remaining}s)... \r`);
+              }
+              continue;
+          }
+          console.log(`\n[Sniper] ⚔️ Fenêtre Active (t-${remaining}s) ! Analyse des signaux...`);
+      }
+
       await profiler.measure(`redeem_${asset}`, () => trySimulationPaperRedeem(asset));
 
       if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) continue;
@@ -6035,157 +6113,32 @@ async function run() {
 }
 
 
+/** Flux Externes dÃ©sactivÃ©s (v2026) */
+function startBinanceWs() {}
+function startOkxWs() {}
+function startHyperliquidWs() {}
+
+async function fetchBinanceSlotOpeningPrice() { return null; }
+
 /**
- * Récupère le prix d'ouverture exact (Open Price) de la bougie Binance actuelle.
- * Utilisé en cas de redémarrage du bot au milieu d'un créneau de 15m.
+ * Récupère le prix d'indice officiel (Oracle Pyth) pour Polymarket.
  */
-async function fetchBinanceSlotOpeningPrice(asset, interval = '15m') {
-  const symbol = `${asset.toUpperCase()}USDT`;
-  try {
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1`;
-    const { data } = await axios.get(url, { timeout: 5000 });
-    if (Array.isArray(data) && data.length > 0) {
-      const openPrice = parseFloat(data[0][1]); // Index 1 est le prix d'Open
-      if (Number.isFinite(openPrice)) return openPrice;
-    }
-  } catch (err) {
-    console.warn(`[Binance] Erreur fetch d'ouverture pour ${asset}: ${err.message}`);
-  }
-  return null;
-}
-
-/** 
- * Flux Binance Temps Réel (Multi-Assets v5.4.0)
- */
-function startBinanceWs() {
-  if (binanceWs) return;
-  const streams = SUPPORTED_ASSETS.map(a => `${a.toLowerCase()}usdt@aggTrade`).join('/');
-  console.log(`[Binance] Connexion WebSocket pour [${SUPPORTED_ASSETS}]...`);
-  try {
-    binanceWs = new WebSocket(BINANCE_WS_URL + streams);
-  } catch (err) {
-    console.warn('[Binance] Erreur de création WS:', err.message);
-    setTimeout(startBinanceWs, 5000);
-    return;
-  }
-
-  binanceWs.on('message', (raw) => {
+async function fetchPythPrice(asset) {
+    const feedId = PYTH_FEED_IDS[asset];
+    if (!feedId) return null;
+    
     try {
-      const msg = JSON.parse(raw.toString());
-      const data = msg.data;
-      if (data && data.s && data.p) {
-        const asset = data.s.replace('USDT', '').toUpperCase();
-        const price = parseFloat(data.p);
-        
-        // --- v10.8 : Diagnostics complets pour les 3 assets ---
-        if (price != null) {
-            const last = perpState.get(asset).binance || 0;
-            if (Math.abs(price - last) > 0.05) { // Un peu plus de calme (0.05$)
-               console.log(`[Binance] ${asset} Update: $${price.toFixed(2)}`);
-            }
+        const url = `${PYTH_HERMES_URL}?ids[]=${feedId}`;
+        const { data } = await axios.get(url, { timeout: 2500 });
+        if (data?.parsed?.[0]?.price) {
+            const p = data.parsed[0].price;
+            const price = parseFloat(p.price) * Math.pow(10, p.expo);
+            return price;
         }
-
-        perpState.get(asset).binance = price;
-        perpState.get(asset).binanceTs = Date.now();
-        lagRecorder.onPerpUpdate(asset, price);
-        updateAssetPriceHistory(asset, price);
-          
-        // v6.2.0 : Latence Binance (E = Event Time)
-        if (data.E) addLatencyHistorySample('ws', Date.now() - Number(data.E));
-      }
-    } catch (_) {}
-  });
-
-  binanceWs.on('close', () => {
-    console.warn('[Binance] WebSocket fermé. Reconnexion...');
-    binanceWs = null;
-    setTimeout(startBinanceWs, 5000);
-  });
-
-  binanceWs.on('error', (err) => {
-    console.error('[Binance] Erreur WebSocket:', err.message);
-  });
-}
-
-/** Flux OKX Public (Multi-Assets v5.4.0) */
-function startOkxWs() {
-  if (okxWs) return;
-  console.log(`[OKX] Connexion WebSocket pour [${SUPPORTED_ASSETS}]...`);
-  try {
-    okxWs = new WebSocket(OKX_WS_URL);
-  } catch (err) {
-    setTimeout(startOkxWs, 5000);
-    return;
-  }
-
-  okxWs.on('open', () => {
-    const args = SUPPORTED_ASSETS.map(a => ({ channel: 'tickers', instId: `${a}-USDT-SWAP` }));
-    okxWs.send(JSON.stringify({ op: 'subscribe', args }));
-  });
-
-  okxWs.on('message', (raw) => {
-    try {
-      const data = JSON.parse(raw.toString());
-      if (data && data.arg?.channel === 'tickers' && data.data?.[0]?.last) {
-        const asset = data.arg.instId.split('-')[0];
-        const state = perpState.get(asset);
-        if (state) {
-          const price = parseFloat(data.data[0].last);
-          state.okx = price;
-          state.okxTs = Date.now();
-          lagRecorder.onPerpUpdate(asset, price);
-        }
-      }
     } catch (err) {
-       console.error("[Binance WS Error]", err.message);
+        console.error(`[Pyth] Error fetching ${asset}: ${err.message}`);
     }
-  });
-
-  okxWs.on('close', () => { okxWs = null; setTimeout(startOkxWs, 5000); });
-  okxWs.on('error', () => {});
-}
-
-/** Flux Hyperliquid (v5.3.0) */
-function startHyperliquidWs() {
-  if (hyperliquidWs) return;
-  console.log('[Hyperliquid] Connexion WebSocket...');
-  try {
-    hyperliquidWs = new WebSocket(HYPERLIQUID_WS_URL);
-  } catch (err) {
-    setTimeout(startHyperliquidWs, 5000);
-    return;
-  }
-
-  hyperliquidWs.on('open', () => {
-    SUPPORTED_ASSETS.forEach(asset => {
-      hyperliquidWs.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'l2Book', coin: asset } }));
-    });
-  });
-
-  hyperliquidWs.on('message', (raw) => {
-    try {
-      const data = JSON.parse(raw.toString());
-      if (data && data.channel === 'l2Book' && data.data?.levels?.[0]?.length >= 2) {
-        const asset = data.data.coin;
-        const bids = data.data.levels[0];
-        const asks = data.data.levels[1];
-        if (bids[0] && asks[0]) {
-          const bid = parseFloat(bids[0].px);
-          const ask = parseFloat(asks[0].px);
-          const state = perpState.get(asset);
-          if (state) {
-            const price = (bid + ask) / 2;
-            state.hyper = price;
-            state.hyperTs = Date.now();
-            lagRecorder.onPerpUpdate(asset, price);
-          }
-        }
-      }
-    } catch (_) {}
-  });
-
-  hyperliquidWs.on('close', () => { hyperliquidWs = null; setTimeout(startHyperliquidWs, 5000); });
-  hyperliquidWs.on('error', () => {});
+    return null;
 }
 
 /** 
@@ -6669,7 +6622,7 @@ async function main() {
   }
 
   const pollMs = pollIntervalSec * 1000;
-  if (walletConfigured && stopLossEnabled && STOP_LOSS_FAST_INTERVAL_MS > 0) {
+  if ((IS_SIMULATION || (walletConfigured && wallet)) && stopLossEnabled && STOP_LOSS_FAST_INTERVAL_MS > 0) {
     setInterval(() => {
       void runStopLossPass();
     }, STOP_LOSS_FAST_INTERVAL_MS);

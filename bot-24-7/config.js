@@ -3,21 +3,21 @@
  * Centralizing these values to support modular architecture.
  */
 
-// Asset Slugs (v9.5.2)
-export const BITCOIN_UP_OR_DOWN_1H_PREFIX = 'bitcoin-up-or-down';
-export const ETHEREUM_UP_OR_DOWN_1H_PREFIX = 'ethereum-up-or-down';
-export const SOLANA_UP_OR_DOWN_1H_PREFIX = 'solana-up-or-down';
-
-export const BITCOIN_UPDOWN_15M_PREFIX = 'btc-updown-15m';
-export const ETHEREUM_UPDOWN_15M_PREFIX = 'eth-updown-15m';
-export const SOLANA_UPDOWN_15M_PREFIX = 'sol-updown-15m';
+// Asset Slugs (v2026 : BTC 5m Only)
+export const BITCOIN_UPDOWN_5M_PREFIX = 'btc-updown-5m';
 
 // Market & Trading
-export const MARKET_MODE = process.env.MARKET_MODE || '15m';
-export const SUPPORTED_ASSETS = ['BTC', 'ETH', 'SOL'];
+export const MARKET_MODE = '5m';
+export const SUPPORTED_ASSETS = ['BTC'];
 
 // API URLs
 export const GAMMA_EVENT_BY_SLUG_URL = 'https://gamma-api.polymarket.com/events/slug';
+
+// --- PYTH ORACLE IDS (Polymarket Native Resolution) ---
+export const PYTH_FEED_IDS = {
+    BTC: '0xe62df6c8ba85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43'
+};
+export const PYTH_HERMES_URL = 'https://hermes.pyth.network/v2/updates/price/latest';
 
 // Cache & Timings
 export const FETCH_SIGNALS_CACHE_MS = Number(process.env.FETCH_SIGNALS_CACHE_MS) || 200;

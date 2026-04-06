@@ -34,3 +34,8 @@ public/data/*.json
 
 # État runtime du bot (conditionIds déjà redeemés — local / serveur)
 bot-24-7/redeemed-condition-ids.json
+bot-24-7/active-positions.json
+bot-24-7/boundary-strikes.json
+bot-24-7/last-order.json
+bot-24-7/sniper-compounding.json
+bot-24-7/temp_*.json
