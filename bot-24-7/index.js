@@ -5362,7 +5362,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     
     if (state && spotPrice > 0) {
       if (!state.pythRefPrice) {
-        const cur = perpState.get(asset || signal.asset || 'BTC')?.binance;
+        const cur = perpState.get(asset || signal.asset || 'BTC')?.pyth;
         if (cur) {
           state.pythRefPrice = cur;
           state.pythRefAtMs = Date.now();
@@ -5906,7 +5906,7 @@ async function run() {
     // v2026 : Actualisation de l'Indice BTC (Pyth) au dÃ©but du cycle
     const pythPrice = await fetchPythPrice('BTC');
     if (pythPrice) {
-        perpState.get().pyth = pythPrice;
+        perpState.get('BTC').pyth = pythPrice;
         perpState.get('BTC').pythTs = Date.now();
         pythSpotPrice = pythPrice; // v2026 : Bridge Pyth -> Legacy Prob Sizing
         updateAssetPriceHistory('BTC', pythPrice);
@@ -5951,7 +5951,7 @@ async function run() {
       if (hasEvent && slug) {
         const state = getAssetState(asset);
         if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
-           const curPyth = perpState.get().pyth;
+           const curPyth = perpState.get('BTC').pyth;
            state.pythRefPrice = curPyth;
            state.pythRefAtMs = Date.now();
            console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curPyth}.`);
@@ -5969,7 +5969,7 @@ async function run() {
         // v10.5 : Robustesse - Si l'ancrage initial a échoué (curPyth null), on réessaie ou on fetch l'historique
         if (!state.pythRefPrice) {
            const interval = '5m';
-           const curPyth = perpState.get().pyth;
+           const curPyth = perpState.get('BTC').pyth;
            
            console.log(`[${asset}] 🔍 Anchor Diagnostics: spot=${curPyth}, slot=${slug}`);
            
