@@ -4771,7 +4771,7 @@ async function getActiveMarketTokensForWs() {
 function getCurrent5mEventSlug(asset = 'BTC') {
   const nowSec = Math.floor(Date.now() / 1000);
   const slotStart = Math.floor(nowSec / 300) * 300;
-  return `${BITCOIN_UPDOWN_5M_PREFIX}${slotStart}`.toLowerCase();
+  return `${BITCOIN_UPDOWN_5M_PREFIX}-${slotStart}`.toLowerCase();
 }
 
 /** Fenêtre temporelle avant la clôture du slot (en secondes). */
