@@ -262,7 +262,7 @@ function getHealth() {
     last425ErrorAt: o.last425ErrorAt ?? null,
     isMaintenance: !!o.isMaintenance,
     perpSources: o.perpSources ?? null,
-    chainlinkSources: o.chainlinkSources ?? null, // v5.6.3 (Alchemy Visibility)
+    pythSources: o.pythSources ?? null, // v5.6.3 (Alchemy Visibility)
     uptimeStart: o.uptimeStart ?? null, // v5.6.3 (Bot Uptime)
     kellyFraction: o.kellyFraction ?? null, // v5.6.3 (Risk)
     availableCapital: o.availableCapital ?? null, // v5.6.3 (Bankroll)
@@ -655,7 +655,7 @@ function getBotConfig() {
     useMarketOrder: true,
     pollIntervalSec: 1,
     useWebSocket: true,
-    marketMode: 'hourly',
+    marketMode: '5m',
     signalPriceSource: 'gamma',
     minSignalP: null,
     maxSignalP: null,
@@ -668,7 +668,7 @@ function getBotConfig() {
     let useMarketOrder = true;
     let pollIntervalSec = 1;
     let useWebSocket = true;
-    let marketModeRaw = 'hourly';
+    let marketModeRaw = '5m';
     let signalPriceSourceLine = '';
     let minSignalP = null;
     let maxSignalP = null;
@@ -688,7 +688,7 @@ function getBotConfig() {
         useWebSocket = t.slice('USE_WEBSOCKET='.length).trim().toLowerCase() !== 'false';
       }
       if (t.startsWith('MARKET_MODE=')) {
-        marketModeRaw = t.slice('MARKET_MODE='.length).trim().toLowerCase() || 'hourly';
+        marketModeRaw = t.slice('MARKET_MODE='.length).trim().toLowerCase() || '5m';
       }
       if (t.startsWith('SIGNAL_PRICE_SOURCE=')) {
         signalPriceSourceLine = t.slice('SIGNAL_PRICE_SOURCE='.length).trim().toLowerCase();
@@ -714,13 +714,11 @@ function getBotConfig() {
         if (Number.isFinite(v)) entryForbiddenLastMin = v;
       }
     }
-    const marketMode = marketModeRaw === '15m' ? '15m' : 'hourly';
+    const marketMode = marketModeRaw || '5m';
     const signalPriceSource =
       signalPriceSourceLine === 'gamma' || signalPriceSourceLine === 'clob'
         ? signalPriceSourceLine
-        : marketMode === '15m'
-          ? 'clob'
-          : 'gamma';
+        : 'clob';
     return {
       useMarketOrder,
       pollIntervalSec,
@@ -1153,8 +1151,8 @@ const server = http.createServer((req, res) => {
             vol: lastDecision.vol,
             secondsLeft: lastDecision.secondsLeft,
             priceSource: lastDecision.priceSource ?? null,
-            binanceBtc: lastDecision.binanceBtc ?? null,
-            chainlinkDelta: lastDecision.chainlinkDelta ?? null,
+            pythBtc: lastDecision.pythBtc ?? null,
+            pythDelta: lastDecision.pythDelta ?? null,
             strikeSource: lastDecision.strikeSource ?? null,
           } : null,
           at: new Date().toISOString(),

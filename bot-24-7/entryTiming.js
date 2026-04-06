@@ -1,5 +1,5 @@
 /**
- * Grille ET 15m alignée sur le dashboard (`src/lib/bitcoin15mSlotEntryTiming.js`).
+ * Grille ET 5m alignée sur le dashboard (slot entry timing).
  * Minutes configurables via ENTRY_FORBIDDEN_FIRST_MIN / ENTRY_FORBIDDEN_LAST_MIN (défaut 0 / 0 = tout le créneau).
  */
 
@@ -59,7 +59,7 @@ function offsetSecondsInEtQuarterHour(tsSec) {
 /**
  * @returns {{ forbidden: boolean, block: 'first_window' | 'last_window' | 'whole_slot' | null, offsetSec: number | null }}
  */
-export function get15mSlotEntryTimingDetail(tsSec) {
+export function getSlotEntryTimingDetail(tsSec) {
   const o = offsetSecondsInEtQuarterHour(tsSec);
   if (o == null) return { forbidden: false, block: null, offsetSec: null };
   if (FORBID_FIRST_SEC + FORBID_LAST_SEC >= QUARTER_SEC) {
@@ -73,6 +73,9 @@ export function get15mSlotEntryTimingDetail(tsSec) {
 /**
  * @param {number} tsSec — typiquement Math.floor(Date.now() / 1000) au moment où le bot décide de trader
  */
-export function is15mSlotEntryTimeForbiddenNow(tsSec) {
-  return get15mSlotEntryTimingDetail(tsSec).forbidden;
+export function isSlotEntryTimeForbiddenNow(tsSec) {
+  return getSlotEntryTimingDetail(tsSec).forbidden;
 }
+
+
+

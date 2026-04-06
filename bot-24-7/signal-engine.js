@@ -6,12 +6,7 @@ import {
     SUPPORTED_ASSETS, 
     MARKET_MODE, 
     GAMMA_EVENT_BY_SLUG_URL,
-    BITCOIN_UP_OR_DOWN_1H_PREFIX,
-    ETHEREUM_UP_OR_DOWN_1H_PREFIX,
-    SOLANA_UP_OR_DOWN_1H_PREFIX,
     BITCOIN_UPDOWN_5M_PREFIX,
-    ETHEREUM_UPDOWN_15M_PREFIX,
-    SOLANA_UPDOWN_15M_PREFIX,
     POLYMARKET_FEE_RATE,
     FEE_SAFETY_BUFFER
 } from './config.js';
@@ -21,15 +16,15 @@ const __dirname = path.dirname(__filename);
 const STRIKES_FILE = path.resolve(__dirname, 'boundary-strikes.json');
 
 /**
- * Moteur de Signaux Polymarket (v5.4.0)
- * Gère la récupération, le filtrage et le sizing (LOB depth) pour tous les actifs.
+ * Moteur de Signaux Polymarket (v5.4.0 — BTC 5m Only)
+ * Gère la récupération, le filtrage et le sizing (LOB depth) pour BTC.
  */
 
 const signalCache = new Map(); // asset -> { data, ts }
 const FETCH_SIGNALS_CACHE_MS = 200;
 
 /**
- * Récupère les signaux Gamma pour un actif donné.
+ * Récupère les signaux Gamma pour BTC 5m.
  */
 export async function fetchSignals(asset, context = {}) {
     const now = Date.now();
@@ -39,12 +34,10 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    const { MARKET_MODE, getCurrent15mEventSlug, getCurrentHourlyEventSlug } = context;
+    const { getCurrent5mEventSlug } = context;
     let slug = null;
-    if (MARKET_MODE === '15m' && getCurrent15mEventSlug) {
-        slug = getCurrent15mEventSlug(asset);
-    } else if (MARKET_MODE === 'hourly' && getCurrentHourlyEventSlug) {
-        slug = getCurrentHourlyEventSlug(asset);
+    if (getCurrent5mEventSlug) {
+        slug = getCurrent5mEventSlug(asset);
     } else {
         slug = getSlotSlugForAsset(asset);
     }
@@ -67,7 +60,7 @@ export async function fetchSignals(asset, context = {}) {
             // Note: m.groupItemTitle contient souvent "Yes" ou "No"
             const takeSide = m.groupItemTitle || "Yes";
             
-            // v5.4.1: Handle clobTokenIds (plural array) for 15m markets
+            // v5.4.1: Handle clobTokenIds (plural array) for 5m markets
             let tokenIdToBuy = m.clobTokenId;
             if (!tokenIdToBuy && m.clobTokenIds) {
                 try {
@@ -125,10 +118,10 @@ export function getSignalKey(s) {
 }
 
 /**
- * Garde-fou temporel (Double-check avec et15mEntryTiming).
+ * Garde-fou temporel (Double-check avec entry timing).
  */
 export function shouldSkipTradeTiming(s) {
-    // Logique simplifiée : ici on pourrait importer is15mSlotEntryTimeForbiddenNow
+    // Logique simplifiée : ici on pourrait importer isSlotEntryTimeForbiddenNow
     return false; 
 }
 
@@ -192,7 +185,7 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     
     try {
         let startTime = null;
-        // v9.8.12 : Priorité ABSOLUE au timestamp extrait du slug pour le matching 15m
+        // v9.8.12 : Priorité ABSOLUE au timestamp extrait du slug pour le matching 5m
         if (marketSlug && marketSlug.includes('-')) {
             const parts = marketSlug.split('-');
             const lastPart = parts[parts.length - 1];

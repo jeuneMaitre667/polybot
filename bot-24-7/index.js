@@ -4,7 +4,7 @@
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
  * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 77–78 %)
- * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
+ * 3. Pour chaque signal : respect des fenêtres « pas de trade » (5m = grille ET) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
  *
@@ -41,8 +41,9 @@ function brandEmoji(latencyMs) {
 
 import { 
   BITCOIN_UPDOWN_5M_PREFIX,
+  MARKET_MODE,
   POLYMARKET_FEE_RATE,
-  ARBITRAGE_GAP_THRESHOLD,
+  SIGNAL_GAP_THRESHOLD,
   BTC_ANNUALIZED_VOLATILITY,
   FEE_SAFETY_BUFFER,
   ENTRY_WINDOW,
@@ -157,11 +158,11 @@ import {
   getLocalHourMinute,
 } from './middayDigest.js';
 import {
-  get15mSlotEntryTimingDetail,
-  is15mSlotEntryTimeForbiddenNow,
+  getSlotEntryTimingDetail,
+  isSlotEntryTimeForbiddenNow,
   ENTRY_FORBID_FIRST_MIN_RESOLVED,
   ENTRY_FORBID_LAST_MIN_RESOLVED,
-} from './et15mEntryTiming.js';
+} from './entryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
   getAlignedUpDownGammaPrices,
@@ -186,7 +187,7 @@ const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 10;
 
 // État global des prix Perp par Asset (v2026 : BTC Only)
 const perpState = new Map([
-  ['BTC', { binance: 0, okx: 0, hyper: 0, binanceTs: 0, okxTs: 0, hyperTs: 0 }],
+  ['BTC', { pyth: 0, pythTs: 0 }],
 ]);
 
 /** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
@@ -199,7 +200,7 @@ const runBoundaryCapture = async () => {
         const now = new Date();
         const m = now.getMinutes();
         
-        // v7.16.52 : Capture au démarrage (si file absent) ou aux slots 15m
+        // v7.16.52 : Capture au démarrage (si file absent) ou aux slots 5m
         const isSlotOpen = (m % 15 === 0);
         if (!isSlotOpen && fs.existsSync(STRIKES_FILE)) return;
         
@@ -274,8 +275,8 @@ function getAssetState(asset) {
       vol: defaultVol,
       priceHistory: [],
       currentSlotStrike: null,
-      binanceRefPrice: null, // v10.1: Base 0 for Momentum
-      binanceRefAtMs: null   // v10.1: Timestamp of base
+      pythRefPrice: null, // v10.1: Base 0 for Momentum
+      pythRefAtMs: null   // v10.1: Timestamp of base
     });
   }
   return assetSpecificState.get(asset);
@@ -300,9 +301,9 @@ async function fetchPolymarketStrikeOfficial(startTimeIso, endTimeIso, symbol = 
   return null;
 }
 let lastKnownSlotSlug = null; // Pour détecter le changement de slot
-let chainlinkSpotPrice = 0; // Prix Chainlink live (mis à jour à chaque cycle)
-let chainlinkRoundId = null; // v5.2.0 : Pour le logging
-let chainlinkAgeMs = 0; // v5.2.0 : Pour le logging
+let pythSpotPrice = 0; // Prix Chainlink live (mis à jour à chaque cycle)
+
+
 
 const DEFAULT_STAKE_USDC = 300; 
 
@@ -326,11 +327,11 @@ const SKEW_ADJUSTMENT = Number(process.env.SKEW_ADJUSTMENT) || -0.03; // Biais B
 const MAX_CHAINLINK_AGE_SEC = 8; // Sécurité Stale Chainlink (v5.2.0 : Audit Compliance)
 const POLYMARKET_MAINTENANCE_DAY_UTC = 2; // Mardi
 const POLYMARKET_MAINTENANCE_HOUR_UTC = 11; // 11h UTC = 13h Paris (pendant DST)
-const ORDER_TYPE_ARBITRAGE = 'FOK'; // Fill-Or-Kill recommandé par la doc
+const ORDER_TYPE_SIGNAL = 'FOK'; // Fill-Or-Kill recommandé par la doc
 const USE_KELLY_SIZING = process.env.USE_KELLY_SIZING !== 'false'; // Activé par défaut en 3.0
-const strikeHistoryCacheMap = new Map(); // Cache de Strike par Slug pour le mode 15m
+const strikeHistoryCacheMap = new Map(); // Cache de Strike par Slug pour le mode 5m
 
-// --- Paramètres Arbitrage Engine 3.0 (Capital Optimization) ---
+// --- Paramètres Signal Engine 3.0 (Capital Optimization) ---
 const KELLY_FRACTION = Number(process.env.KELLY_FRACTION) || 0.25; // Quarter-Kelly
 const KELLY_MAX_BANKROLL_PCT = Number(process.env.KELLY_MAX_BANKROLL_PCT) || 0.25;
 const ABSOLUTE_MAX_STAKE_USD = Number(process.env.ABSOLUTE_MAX_STAKE_USD) || 200; // Cap absolu (v5.8.0)
@@ -441,19 +442,19 @@ function ensureJsonArrayFileExists(filePath) {
 ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
 ensureJsonArrayFileExists(REDEEMED_CONDITION_IDS_FILE);
 
-let binanceHigh24h = null;
-let binanceLow24h = null;
-let lastBinance24hFetchAt = 0;
+let dailyHigh24h = null;
+let dailyLow24h = null;
+let lastDaily24hFetchAt = 0;
 
-async function refreshBinance24hStats() {
-  if (Date.now() - lastBinance24hFetchAt < 60_000) return;
+async function refreshDaily24hStats() {
+  if (Date.now() - lastDaily24hFetchAt < 60_000) return;
   try {
     const res = await axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
     if (res.data && res.data.highPrice && res.data.lowPrice) {
-      binanceHigh24h = Number(res.data.highPrice);
-      binanceLow24h = Number(res.data.lowPrice);
-      lastBinance24hFetchAt = Date.now();
-      console.log(`[Quant] 📊 Volatilité 24h rafraîchie : High ${binanceHigh24h} | Low ${binanceLow24h}`);
+      dailyHigh24h = Number(res.data.highPrice);
+      dailyLow24h = Number(res.data.lowPrice);
+      lastDaily24hFetchAt = Date.now();
+      console.log(`[Quant] 📊 Volatilité 24h rafraîchie : High ${dailyHigh24h} | Low ${dailyLow24h}`);
     }
   } catch (_) {}
 }
@@ -467,10 +468,9 @@ const gammaSlotEventCache = new Map(); // slotSlugLower -> { expiresAt, event }
 
 function computeGammaSlotEventCacheExpiresAt(slotSlugLower, nowMs = Date.now()) {
   const base = nowMs + GAMMA_SLOT_EVENT_CACHE_MS;
-  if (MARKET_MODE !== '15m') return base;
-  const endMs = slotEndMsFrom15mSlug(slotSlugLower);
+  // 5m mode: invalidate at slot boundary
+  const endMs = slotEndMsFrom5mSlug(slotSlugLower);
   if (!Number.isFinite(endMs)) return base;
-  // Invalidation naturelle au changement de créneau + petite marge.
   return Math.min(base, endMs + 5000);
 }
 
@@ -572,13 +572,11 @@ function writeHealth(updates, extra = {}) {
     // 2. Enrichir avec les données globales actuelles (v5.6.1)
     const fullState = {
       ...currentHealthState,
-      parkinsonVol: (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : null,
+      parkinsonVol: (dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : null,
       perpSources: Object.fromEntries(
-        [...perpState.entries()].map(([k, v]) => [k, { ...v, lastUpdate: Math.max(v.binanceTs || 0, v.okxTs || 0, v.hyperTs || 0) }])
+        [...perpState.entries()].map(([k, v]) => [k, { ...v, lastUpdate: v.pythTs || 0 }])
       ),
-      chainlinkSources: Object.fromEntries(
-        SUPPORTED_ASSETS.map(asset => [asset, getChainlinkHealthStats(asset)])
-      ),
+
       assetStates: Object.fromEntries(
         [...assetSpecificState.entries()].map(([asset, state]) => [asset, {
           realizedVol60m: state.vol,
@@ -596,8 +594,8 @@ function writeHealth(updates, extra = {}) {
             return count > 0 ? total / count : 0;
           })(),
           strikeLocked: state.currentSlotStrike?.isOfficial || false,
-          binanceRefPrice: state.binanceRefPrice || null,
-          binanceRefAtMs: state.binanceRefAtMs || null
+          pythRefPrice: state.pythRefPrice || null,
+          pythRefAtMs: state.pythRefAtMs || null
         }])
       ),
       lastRateLimitInfo: typeof lastRateLimitInfo !== 'undefined' ? lastRateLimitInfo : null,
@@ -939,37 +937,33 @@ marketWorstPriceP = Math.min(0.99, Math.max(0.01, marketWorstPriceP));
  */
 const marketOrderTif = (process.env.MARKET_ORDER_TIF || 'FAK').trim().toUpperCase();
 const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK;
-/** Fin de fenêtre 15m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 900 s (comme le dashboard). */
-function slotEndMsFrom15mSlug(slug) {
+/** Fin de fenêtre 5m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 300 s. */
+function slotEndMsFrom5mSlug(slug) {
   if (!slug || typeof slug !== 'string') return null;
-  const m = slug.match(/btc-updown-15m-(\d+)$/i);
+  const m = slug.match(/btc-updown-5m-(\d+)$/i);
   if (!m) return null;
   const raw = parseInt(m[1], 10);
   if (!Number.isFinite(raw)) return null;
   const startSec = raw < 1e12 ? raw : Math.floor(raw / 1000);
-  return (startSec + 900) * 1000;
+  return (startSec + 300) * 1000;
 }
-const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
+const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // Legacy, kept for safety
 
-/** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
-const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
+// MARKET_MODE is imported from config.js ('5m')
+// No local redeclaration — this was the crash cause.
 
-// Cache /book : plus long sur 15m pour réduire variance/ratelimits (overridable via BOOK_CACHE_MS).
-const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || (MARKET_MODE === '15m' ? 3000 : 1500);
+// Cache /book (overridable via BOOK_CACHE_MS).
+const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || 3000;
 
 /**
  * Prix utilisés pour décider si fetchSignals() émet un signal (poll).
- * - gamma : outcomePrices Gamma (lissé / mid, défaut historique 1h).
- * - clob : best ask CLOB par token Up/Down (aligné exécution, défaut auto pour MARKET_MODE=15m).
- * Défaut si non défini : 15m → clob, hourly → gamma. Override : SIGNAL_PRICE_SOURCE=gamma|clob
+ * 5m mode: always use CLOB best ask for precision.
  */
 const signalPriceSourceEnv = (process.env.SIGNAL_PRICE_SOURCE || '').trim().toLowerCase();
 const signalPriceSource =
   signalPriceSourceEnv === 'gamma' || signalPriceSourceEnv === 'clob'
     ? signalPriceSourceEnv
-    : MARKET_MODE === '15m'
-      ? 'clob'
-      : 'gamma';
+    : 'clob';
 /** Cache court best ask pour fetchSignals (évite 2 hits CLOB identiques dans le même cycle). */
 const BEST_ASK_SIGNAL_CACHE_MS = Number(process.env.BEST_ASK_SIGNAL_CACHE_MS) || 400;
 
@@ -1134,7 +1128,7 @@ const STOP_LOSS_FAST_INTERVAL_MS = Math.max(
 /** Priorise l'entrée en position: reporte les relevés de liquidité lourds si un signal est présent. */
 const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
-/** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
+/** Autotrade désactivé par défaut — AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Simulation : solde virtuel (fichier simulation-paper.json), mêmes signaux / sizing / Telegram [PAPER], aucun ordre CLOB réel. */
 const simulationTradeEnabled = simulationTrade.isSimulationTradeEnabled();
@@ -1182,7 +1176,7 @@ const STOP_LOSS_ESCALATION_MS = Math.max(10_000, Number(process.env.STOP_LOSS_ES
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /**
  * N’essaie pas le redeem avant `fin du marché (Gamma) + N ms` pour ce `conditionId` (évite STATE_FAILED tout de suite après la cloche).
- * Défaut si non défini : **60_000 ms (1 min) en MARKET_MODE=15m**, **0** en hourly. `REDEEM_AFTER_MARKET_END_MS=0` désactive.
+ * Défaut si non défini : **60_000 ms (1 min)**. `REDEEM_AFTER_MARKET_END_MS=0` désactive.
  */
 const redeemAfterMarketEndMsRaw = process.env.REDEEM_AFTER_MARKET_END_MS;
 const REDEEM_AFTER_MARKET_END_MS =
@@ -1439,7 +1433,7 @@ function maybeLogFetchSignalsBreakdown(profile) {
   if (now - fetchSignalsBreakdownLastLogAt < 20_000) return;
   fetchSignalsBreakdownLastLogAt = now;
   console.log(
-    `[fetchSignals_breakdown] total=${Math.round(totalMs)}ms eventsFetch=${Math.round(profile.eventsFetchMs ?? 0)}ms resolve15m=${Math.round(profile.resolve15mMs ?? 0)}ms loop=${Math.round(profile.loopMs ?? 0)}ms priceLookups=${profile.priceLookups ?? 0} priceAvg=${Math.round(profile.priceLookupMsAvg ?? 0)}ms eventsRaw=${profile.eventCountRaw ?? 0} eventsAfter=${profile.eventCountAfterResolve ?? 0} markets=${profile.marketCountVisited ?? 0} strategy=${profile.strategy ?? 'n/a'}`
+    `[fetchSignals_breakdown] total=${Math.round(totalMs)}ms eventsFetch=${Math.round(profile.eventsFetchMs ?? 0)}ms resolve5m=${Math.round(profile.resolve5mMs ?? 0)}ms loop=${Math.round(profile.loopMs ?? 0)}ms priceLookups=${profile.priceLookups ?? 0} priceAvg=${Math.round(profile.priceLookupMsAvg ?? 0)}ms eventsRaw=${profile.eventCountRaw ?? 0} eventsAfter=${profile.eventCountAfterResolve ?? 0} markets=${profile.marketCountVisited ?? 0} strategy=${profile.strategy ?? 'n/a'}`
   );
 }
 
@@ -4485,11 +4479,11 @@ async function getOutcomePricesForSignal(market) {
 }
 
 /**
- * Marché horaire : pas de trade dans les 5 dernières minutes avant `endDate` Gamma.
- * (Le 15m utilise `shouldSkipTradeTiming` → grille ET, pas cette fonction.)
+ * Marché 5m : pas de trade dans les 90 dernières secondes avant expiration.
+ * (Uses shouldSkipTradeTiming / grille ET.)
  */
 function isInLastMinute(signal) {
-  if (MARKET_MODE === '15m') return false;
+  return false; // 5m mode uses ET timing grid instead
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
   let endMs;
@@ -4504,16 +4498,11 @@ function isInLastMinute(signal) {
   return Date.now() >= endMs - thresholdMs;
 }
 
-/**
- * Skip placement selon le mode :
- * - 15m : **même règle que le dashboard** — pas les 6 premières / 4 dernières minutes de chaque quart d’heure **ET** (:00,:15,:30,:45).
- * - horaire : 5 dernières minutes avant fin événement Gamma.
- */
-
+/** Skip placement : 5m grille ET. */
 
 function getTimingForbiddenDetails() {
-  if (MARKET_MODE !== '15m') return null;
-  const d = get15mSlotEntryTimingDetail(Math.floor(Date.now() / 1000));
+  // 5m mode: use ET timing grid
+  const d = getSlotEntryTimingDetail(Math.floor(Date.now() / 1000));
   if (!d?.forbidden) return null;
   return {
     timingBlock: d.block,
@@ -4522,9 +4511,8 @@ function getTimingForbiddenDetails() {
 }
 
 function getGammaEventsCacheKey(slugMatch) {
-  // La fallback dépend du créneau courant (hourly/15m). On inclut donc le slug courant dans la clé.
-  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
-  return `${MARKET_MODE}|${slugMatch}|${currentSlug}`;
+  const currentSlug = getCurrent5mEventSlug();
+  return `5m|${slugMatch}|${currentSlug}`;
 }
 
 /**
@@ -4535,7 +4523,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
   const cacheKey = getGammaEventsCacheKey(slugMatch);
   const now = Date.now();
   const preferCurrentSlotOnly = options?.preferCurrentSlotOnly === true;
-  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
+  const currentSlug = getCurrent5mEventSlug();
   const currentSlugLower = String(currentSlug || '').toLowerCase();
   const cached = gammaEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached;
@@ -4624,8 +4612,8 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
   const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
   profile.hasMatchingSlugAfterEvents = hasMatchingSlug;
 
-  // Secours : si la liste n'a aucun event qui matche notre slug (API peut ignorer slug_contains), récupérer le créneau actuel par slug.
-  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
+  // Secours : si la liste n'a aucun event qui matche notre slug, récupérer le créneau actuel par slug.
+  if (!hasMatchingSlug) {
     try {
       const tFallback0 = Date.now();
       const slug = currentSlug;
@@ -4645,9 +4633,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
       profile.fallbackSlugOk = false;
       profile.fallbackSlugMs = 0;
     }
-  }
-
-  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
+  // Fallback removed (BTC 5m only)
     try {
       const tFallback0 = Date.now();
       const slug = currentSlug;
@@ -4716,25 +4702,15 @@ async function getActiveMarketTokensForWs() {
   const tokenToSignal = new Map();
 
   const collectForAsset = async (asset) => {
-    let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    if (MARKET_MODE === '5m') {
-      if (asset === 'ETH') slugMatch = 'eth-updown-5m';
-      else if (asset === 'SOL') slugMatch = 'sol-updown-5m';
-      else slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
-    } else {
-      if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
-      else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
-      else slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    }
+    const slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
 
     const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
     let events = gammaOut.events;
     console.log(`[WS-Sub] 🔍 Assets=${asset} | slugMatch=${slugMatch} | Events found=${events.length}`);
-    if (MARKET_MODE === '15m') {
-      const r = await resolve15mEventsForTrading(events, Date.now(), asset);
-      events = r.events;
-      console.log(`[WS-Sub] 🔍 Resolved 15m for ${asset}: Strategy=${r.resolveStrategy} | Count=${events.length} | Slug=${r.expectedSlug}`);
-    }
+    // 5m mode: resolve events for current slot
+    const r = await resolve5mEventsForTrading(events, Date.now(), asset);
+    events = r.events;
+    console.log(`[WS-Sub] 🔍 Resolved 5m for ${asset}: Strategy=${r.resolveStrategy} | Count=${events.length} | Slug=${r.expectedSlug}`);
 
     for (const ev of events) {
       if (!ev?.markets?.length) continue;
@@ -4786,15 +4762,8 @@ async function getActiveMarketTokensForWs() {
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
-/** Slug du créneau 15m ouvert : `{prefix}-{eventStartSec}` (Gamma). */
-function getCurrent15mEventSlug(asset = 'BTC') {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const slotStart = Math.floor(nowSec / 900) * 900;
-  let prefix = BITCOIN_UPDOWN_5M_PREFIX;
-  if (asset === 'ETH') prefix = 'eth-updown-5m';
-  if (asset === 'SOL') prefix = 'sol-updown-5m';
-  return `${prefix}-${slotStart}`.toLowerCase();
-}
+
+
 
 /** Slug du créneau 5m ouvert : `{prefix}-{eventStartSec}` (Polymarket UpDown 5m). */
 function getCurrent5mEventSlug(asset = 'BTC') {
@@ -4811,38 +4780,38 @@ function getRemainingSeconds(intervalSeconds = 300) {
 }
 
 /**
- * Repli : marchés 15m encore ouverts, triés par fin de créneau (plus proche d’abord).
- * Aligné sur le dashboard (`pickCurrent15mEvent`).
+ * Repli : marchés 5m encore ouverts, triés par fin de créneau (plus proche d’abord).
+ * Aligné sur le dashboard (`pickCurrent5mEvent`).
  */
-function pick15mFallbackEventFromList(events, nowMs) {
+function pick5mFallbackEventFromList(events, nowMs) {
   if (!Array.isArray(events) || events.length === 0) return null;
-  const preferred = getCurrent15mEventSlug().toLowerCase();
+  const preferred = getCurrent5mEventSlug().toLowerCase();
   const exact = events.find((e) => (e.slug ?? '').toLowerCase() === preferred);
   if (exact) return exact;
   const stillOpen = events.filter((e) => {
-    const end = slotEndMsFrom15mSlug(e.slug ?? '');
+    const end = slotEndMsFrom5mSlug(e.slug ?? '');
     return end != null && Number.isFinite(end) && nowMs < end;
   });
   stillOpen.sort((a, b) => {
-    const ea = slotEndMsFrom15mSlug(a.slug ?? '') ?? 0;
-    const eb = slotEndMsFrom15mSlug(b.slug ?? '') ?? 0;
+    const ea = slotEndMsFrom5mSlug(a.slug ?? '') ?? 0;
+    const eb = slotEndMsFrom5mSlug(b.slug ?? '') ?? 0;
     return ea - eb;
   });
   return stillOpen[0] ?? events[0];
 }
 
 /**
- * Un seul event 15m pour trading / WS : slug UTC courant exact, sinon GET /events/slug, sinon repli trié.
- * (La liste Gamma peut contenir plusieurs `btc-updown-15m-*` — ne pas prendre le premier au hasard.)
+ * Un seul event 5m pour trading / WS : slug UTC courant exact, sinon GET /events/slug, sinon repli trié.
+ * (La liste Gamma peut contenir plusieurs `btc-updown-5m-*` — ne pas prendre le premier au hasard.)
  */
-async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'BTC') {
-  const expectedSlug = getCurrent15mEventSlug(asset).toLowerCase();
+async function resolve5mEventsForTrading(events, nowMs = Date.now(), asset = 'BTC') {
+  const expectedSlug = getCurrent5mEventSlug(asset).toLowerCase();
   const searchPrefix = (asset === 'ETH') ? 'eth-updown-5m' : (asset === 'SOL') ? 'sol-updown-5m' : BITCOIN_UPDOWN_5M_PREFIX;
   
   const relevantEvents = events.filter((e) => (e.slug ?? '').toLowerCase().includes(searchPrefix));
   
   if (relevantEvents.length > 0) {
-    return { events: relevantEvents, resolveStrategy: 'filter_active_15m', slugMismatch: false, expectedSlug };
+    return { events: relevantEvents, resolveStrategy: 'filter_active_5m', slugMismatch: false, expectedSlug };
   }
 
   // Fallback si la liste est vide : essai direct par slug (API GET /event/slug)
@@ -4853,7 +4822,7 @@ async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'B
       return { events: [ev], resolveStrategy: 'direct_slug', slugMismatch: false, expectedSlug };
     }
   } catch (_) {}
-  const fb = pick15mFallbackEventFromList(events, nowMs);
+  const fb = pick5mFallbackEventFromList(events, nowMs);
   if (fb?.markets?.length) {
     const sl = (fb.slug ?? '').toLowerCase();
     return {
@@ -4866,22 +4835,13 @@ async function resolve15mEventsForTrading(events, nowMs = Date.now(), asset = 'B
   return { events: [], resolveStrategy: 'empty', slugMismatch: false, expectedSlug };
 }
 
-/** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix pour tous les assets. */
+/** Récupère tous les créneaux actifs (5m BTC) sans filtre de prix pour tous les assets. */
 async function fetchActiveWindows() {
   const results = [];
   const seenKeys = new Set();
   
   for (const asset of SUPPORTED_ASSETS) {
-    let slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    if (MARKET_MODE === '5m') {
-       if (asset === 'ETH') slugMatch = 'eth-updown-5m';
-       else if (asset === 'SOL') slugMatch = 'sol-updown-5m';
-       else slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
-    } else {
-       if (asset === 'ETH') slugMatch = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
-       else if (asset === 'SOL') slugMatch = SOLANA_UP_OR_DOWN_1H_PREFIX;
-       else slugMatch = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-    }
+    const slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
 
     const { events } = await fetchGammaEventsCached(slugMatch, 15000);
     for (const ev of events) {
@@ -4901,33 +4861,9 @@ async function fetchActiveWindows() {
   return results;
 }
 
-/** 
- * Slug horaire au format date Gamma: `{asset-prefix}-{month}-{day}-{year}-{time}-et`.
- * Exemple: `bitcoin-up-or-down-april-4-2026-1pm-et`
- */
+/** Legacy slug stub — redirects to getCurrent5mEventSlug. */
 function getCurrentHourlyEventSlug(asset = 'BTC') {
-  const date = new Date();
-  const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-  
-  const month = months[date.getUTCMonth()];
-  const day = date.getUTCDate();
-  const year = date.getUTCFullYear();
-  
-  // Gamma 1h markets align with ET time, but the slugs often use a specific hour logic.
-  // We'll maintain the current hour (e.g. 1pm, 2pm) based on the next upcoming slot.
-  let hour = date.getUTCHours();
-  // Simplified conversion to ET (approx UTC-4 for April/Summer)
-  hour = (hour - 4 + 24) % 24;
-  
-  const ampm = hour >= 12 ? 'pm' : 'am';
-  const hour12 = hour % 12 || 12;
-  
-  let prefix = BITCOIN_UP_OR_DOWN_1H_PREFIX;
-  if (asset === 'ETH') prefix = ETHEREUM_UP_OR_DOWN_1H_PREFIX;
-  if (asset === 'SOL') prefix = SOLANA_UP_OR_DOWN_1H_PREFIX;
-
-  // v9.5.2: New format detected via browser audit
-  return `${prefix}-${month}-${day}-${year}-${hour12}${ampm}-et`.toLowerCase();
+  return getCurrent5mEventSlug(asset);
 }
 
 /** Vérifie si l'IP est autorisée à trader (geoblock). */
@@ -5247,15 +5183,15 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
         }
 
         // v5.2.2 : Revalidation Persistance du GAP (Audit Compliance)
-        // On utilise le chainlinkSpotPrice global pour un check rapide
-        if (chainlinkSpotPrice > 0 && signal.strikePrice) {
+        // On utilise le pythSpotPrice global pour un check rapide
+        if (pythSpotPrice > 0 && signal.strikePrice) {
           const nowTs = Math.floor(Date.now() / 1000);
           const marketEndTs = Math.floor(signal.endDate / 1000);
           const secondsLeft = Math.max(0, marketEndTs - nowTs);
-          const currentProbFair = calculateFairProbability(chainlinkSpotPrice, signal.strikePrice, secondsLeft, null);
+          const currentProbFair = calculateFairProbability(pythSpotPrice, signal.strikePrice, secondsLeft, null);
           
           const currentGap = side === Side.BUY ? (currentProbFair - ask) : (ask - currentProbFair);
-          if (currentGap < ARBITRAGE_GAP_THRESHOLD * 0.3) { // Seuil de survie du GAP à 30% (Audit v5.2.2)
+          if (currentGap < SIGNAL_GAP_THRESHOLD * 0.3) { // Seuil de survie du GAP à 30% (Audit v5.2.2)
             logJson('info', 'Complément FAK: GAP évaporé sur retry, abandon', { currentGap, extra });
             break;
           }
@@ -5411,7 +5347,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
     const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
-    const adjustedThreshold = ARBITRAGE_GAP_THRESHOLD * ofiMultiplier;
+    const adjustedThreshold = SIGNAL_GAP_THRESHOLD * ofiMultiplier;
 
 
     // --- v14.17 : Momentum Transparency Layer (Calcul avant verrouillage) ---
@@ -5423,17 +5359,17 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     const state = getAssetState(asset || signal.asset || 'BTC');
     
     if (state && spotPrice > 0) {
-      if (!state.binanceRefPrice) {
+      if (!state.pythRefPrice) {
         const cur = perpState.get(asset || signal.asset || 'BTC')?.binance;
         if (cur) {
-          state.binanceRefPrice = cur;
-          state.binanceRefAtMs = Date.now();
+          state.pythRefPrice = cur;
+          state.pythRefAtMs = Date.now();
           console.log(`[${asset}] ⚓ Late Anchor (Bypass): Base 0 forced to current Spot $${cur.toFixed(2)}`);
         }
       }
 
-      if (state.binanceRefPrice) {
-        const deltaPct = (spotPrice / state.binanceRefPrice) - 1;
+      if (state.pythRefPrice) {
+        const deltaPct = (spotPrice / state.pythRefPrice) - 1;
         const strikePrice = Number(signal.strike);
         if (Number.isFinite(strikePrice) && strikePrice > 0 && Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
           const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
@@ -5443,7 +5379,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
           signal.spotAtDetection = spotPrice;
           signal.thresholdAtDetection = adjustedThreshold;
 
-          console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.binanceRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
+          console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.pythRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
         }
       }
     }
@@ -5968,9 +5904,9 @@ async function run() {
     // v2026 : Actualisation de l'Indice BTC (Pyth) au dÃ©but du cycle
     const pythPrice = await fetchPythPrice('BTC');
     if (pythPrice) {
-        perpState.get('BTC').binance = pythPrice;
-        perpState.get('BTC').binanceTs = Date.now();
-        chainlinkSpotPrice = pythPrice; // v2026 : Bridge Pyth -> Legacy Prob Sizing
+        perpState.get().pyth = pythPrice;
+        perpState.get('BTC').pythTs = Date.now();
+        pythSpotPrice = pythPrice; // v2026 : Bridge Pyth -> Legacy Prob Sizing
         updateAssetPriceHistory('BTC', pythPrice);
         process.stdout.write(`[Native] BTC Polymarket Index: $${pythPrice.toFixed(2)} \r`);
     }
@@ -6002,7 +5938,7 @@ async function run() {
     let totalSignalsCount = 0;
     for (const asset of SUPPORTED_ASSETS) {
       const res = await profiler.measure(`fetchSignals_${asset}`, () => 
-        fetchSignals(asset, { MARKET_MODE, getCurrent15mEventSlug, getCurrentHourlyEventSlug, FETCH_SIGNALS_CACHE_MS })
+        fetchSignals(asset, { MARKET_MODE, getCurrent5mEventSlug, getCurrentHourlyEventSlug: getCurrent5mEventSlug, FETCH_SIGNALS_CACHE_MS })
       );
       
       const signals = res.signals || [];
@@ -6013,10 +5949,10 @@ async function run() {
       if (hasEvent && slug) {
         const state = getAssetState(asset);
         if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
-           const curBinance = perpState.get(asset).binance;
-           state.binanceRefPrice = curBinance;
-           state.binanceRefAtMs = Date.now();
-           console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curBinance}.`);
+           const curPyth = perpState.get().pyth;
+           state.pythRefPrice = curPyth;
+           state.pythRefAtMs = Date.now();
+           console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curPyth}.`);
 
            const strikeData = await captureStrikeAtSlotOpen(asset, slug);
            state.currentSlotStrike = strikeData;
@@ -6028,26 +5964,19 @@ async function run() {
            }
         }
         
-        // v10.5 : Robustesse - Si l'ancrage initial a échoué (curBinance null), on réessaie ou on fetch l'historique
-        if (!state.binanceRefPrice) {
-           const interval = slug.includes('15m') ? '15m' : '1h';
-           const curBinance = perpState.get(asset).binance;
+        // v10.5 : Robustesse - Si l'ancrage initial a échoué (curPyth null), on réessaie ou on fetch l'historique
+        if (!state.pythRefPrice) {
+           const interval = '5m';
+           const curPyth = perpState.get().pyth;
            
-           console.log(`[${asset}] 🔍 Anchor Diagnostics: spot=${curBinance}, slot=${slug}`);
+           console.log(`[${asset}] 🔍 Anchor Diagnostics: spot=${curPyth}, slot=${slug}`);
            
-           if (curBinance && Number.isFinite(curBinance)) {
-              state.binanceRefPrice = curBinance;
-              state.binanceRefAtMs = Date.now();
-              console.log(`[${asset}] ⚓ Late Anchor: Recovered Base 0 from Spot: ${curBinance}.`);
+           if (curPyth && Number.isFinite(curPyth)) {
+              state.pythRefPrice = curPyth;
+              state.pythRefAtMs = Date.now();
+              console.log(`[${asset}] ⚓ Late Anchor: Recovered Base 0 from Spot: ${curPyth}.`);
            } else {
-              console.log(`[${asset}] 🔄 Momentum Recovery: Fetching klines for ${slug}...`);
-              const openPrice = await fetchBinanceSlotOpeningPrice(asset, interval);
-              console.log(`[${asset}] 🔄 Klines result: ${openPrice}`);
-              if (openPrice && Number.isFinite(openPrice)) {
-                state.binanceRefPrice = openPrice;
-                state.binanceRefAtMs = Date.now();
-                console.log(`[${asset}] ⚓ Historical Base 0 recovered: ${openPrice}. Momentum active.`);
-              }
+              console.log(`[${asset}] ⚠️ Momentum Recovery failed: Pyth spot price unavailable. Will retry next cycle.`);
            }
         }
       }
@@ -6113,12 +6042,7 @@ async function run() {
 }
 
 
-/** Flux Externes dÃ©sactivÃ©s (v2026) */
-function startBinanceWs() {}
-function startOkxWs() {}
-function startHyperliquidWs() {}
-
-async function fetchBinanceSlotOpeningPrice() { return null; }
+/** Flux Externes désactivés (v2026) - Stubs supprimes */
 
 /**
  * Récupère le prix d'indice officiel (Oracle Pyth) pour Polymarket.
@@ -6190,14 +6114,14 @@ function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, vo
   const secondsRemaining = Math.max(1, timeToExpirySec);
 
   // v10.6 : Modèle Momentum Log-Normal de Juste Valeur
-  if (state.binanceRefPrice && Number.isFinite(state.binanceRefPrice)) {
+  if (state.pythRefPrice && Number.isFinite(state.pythRefPrice)) {
     // 1. Calcul du Delta % par rapport à l'ancrage T-zéro
-    const deltaPct = (currentPrice / state.binanceRefPrice) - 1;
+    const deltaPct = (currentPrice / state.pythRefPrice) - 1;
     
     // 2. Récupération de la Volatilité (Annualisée)
     let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
     if (!volOverwrite) {
-      const parkinson = (binanceHigh24h && binanceLow24h) ? calculateParkinsonVol(binanceHigh24h, binanceLow24h) : 0;
+      const parkinson = (dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : 0;
       const realized = Number(state.vol) || 0;
       vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
     }
@@ -6214,7 +6138,7 @@ function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, vo
     return normalCDF(d);
   }
 
-  // Fallback classique (Log-Diff) si binanceRefPrice est absent
+  // Fallback classique (Log-Diff) si pythRefPrice est absent
   const vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
   const timeInYears = timeToExpirySec / (365 * 24 * 3600);
   const sqrtT = Math.sqrt(timeInYears);
@@ -6371,7 +6295,7 @@ async function calculateSessionStats() {
 /**
  * Calcule le seuil GAP adaptatif selon la volatilité actuelle.
  */
-function getAdaptiveThreshold(vol, baseThreshold = ARBITRAGE_GAP_THRESHOLD) {
+function getAdaptiveThreshold(vol, baseThreshold = SIGNAL_GAP_THRESHOLD) {
   const volBaseline = 0.50;
   const ratio = vol / volBaseline;
   return baseThreshold * Math.min(Math.max(ratio, 1.0), 2.0);
@@ -6518,7 +6442,7 @@ function startRpcSentinel() {
 
 async function main() {
   loadOpenOrders(); // v7.1.0 Persistence
-  console.log('[System] Initialisation du Bot v13.1 (Market: 15m)...');
+  console.log('[System] Initialisation du Bot v13.1 (Market: BTC 5m)...');
   startRpcSentinel();
   simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
   if (simulationTradeEnabled) {
@@ -6527,11 +6451,7 @@ async function main() {
     );
   }
   console.log(
-    `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${
-      MARKET_MODE === '15m'
-        ? `grille ET : ${ENTRY_FORBID_FIRST_MIN_RESOLVED} premières + ${ENTRY_FORBID_LAST_MIN_RESOLVED} dernières min du quart (ENTRY_FORBIDDEN_*_MIN)`
-        : '5 min avant fin'
-    }`
+    `Marché: BTC 5m (${BITCOIN_UPDOWN_5M_PREFIX}) | Timing: grille ET : ${ENTRY_FORBID_FIRST_MIN_RESOLVED} premières + ${ENTRY_FORBID_LAST_MIN_RESOLVED} dernières min du quart`
   );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
@@ -6616,9 +6536,6 @@ async function main() {
 
   if (useWebSocket) {
     startClobWs();
-    startBinanceWs();
-    startOkxWs(); // v5.3.0
-    startHyperliquidWs(); // v5.3.0
   }
 
   const pollMs = pollIntervalSec * 1000;

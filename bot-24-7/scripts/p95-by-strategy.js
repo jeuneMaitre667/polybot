@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Affiche le p95 de decisionMs par fetchSignalsStrategy sur les 24 dernières heures.
- * À lancer sur le serveur après déploiement pour vérifier l'amélioration latence 15m.
+ * À lancer sur le serveur après déploiement pour vérifier l'amélioration latence 5m.
  * Usage (sur le serveur) : node ~/bot-24-7/scripts/p95-by-strategy.js
  * Ou depuis bot-24-7 : node scripts/p95-by-strategy.js
  */

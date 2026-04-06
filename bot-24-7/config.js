@@ -26,7 +26,7 @@ export const SIGNAL_MIN_DWELL_MS = Number(process.env.SIGNAL_MIN_DWELL_MS) || 50
 
 // Math & Strategy
 export const SKEW_ADJUSTMENT = Number(process.env.SKEW_ADJUSTMENT) || -0.03;
-export const ARBITRAGE_GAP_THRESHOLD = Number(process.env.ARBITRAGE_GAP_THRESHOLD) || 0.005; // v9.3.6: 0.5% Maker Gap
+export const SIGNAL_GAP_THRESHOLD = Number(process.env.SIGNAL_GAP_THRESHOLD) || 0.005; // v9.3.6: 0.5% Maker Gap
 export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
 export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
 
