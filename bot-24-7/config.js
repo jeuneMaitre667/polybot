@@ -15,7 +15,7 @@ export const GAMMA_EVENT_BY_SLUG_URL = 'https://gamma-api.polymarket.com/events/
 
 // --- PYTH ORACLE IDS (Polymarket Native Resolution) ---
 export const PYTH_FEED_IDS = {
-    BTC: '0xe62df6c8ba85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43'
+    BTC: '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43'
 };
 export const PYTH_HERMES_URL = 'https://hermes.pyth.network/v2/updates/price/latest';
 
