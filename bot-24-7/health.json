@@ -1,1 +1,326 @@
-{"wsConnected":false,"wsLastChangeAt":null,"wsLastConnectedAt":null,"wsLastBidAskAt":null,"lastOrderAt":null,"lastOrderSource":null,"geoblockOk":false,"killSwitchActive":false,"polymarketDegraded":false,"degradedReason":null,"degradedUntil":null,"staleWsData":false,"staleWsDataAt":null,"executionDelayed":false,"executionDelayedAt":null,"at":"2026-03-31T15:26:30.092Z"}
+{
+  "wsConnected": true,
+  "wsLastConnectedAt": "2026-04-08T22:36:16.400Z",
+  "wsLastBidAskAt": null,
+  "lastOrderAt": null,
+  "lastOrderSource": null,
+  "at": "2026-04-08T22:37:23.134Z",
+  "lastRateLimitInfo": {
+    "limit": 0,
+    "remaining": 0,
+    "reset": 0,
+    "lastUpdate": 1775687843134
+  },
+  "wsLastChangeAt": "2026-04-08T22:36:16.400Z",
+  "lastRedeemAt": "2026-04-08T22:36:16.610Z",
+  "balance": "100.00",
+  "totalUsd": "100.00",
+  "gasBalance": "—",
+  "activeConditions": 0,
+  "currentBlock": 85283903,
+  "simulation": true,
+  "secondsLeftInSlot": 157,
+  "timestamp": 1775687843115,
+  "lastSkipReason": "momentum_insufficient",
+  "lastSkipSource": "ws",
+  "lastSkipAt": "2026-04-08T22:36:17.081Z",
+  "lastSkipDetails": null,
+  "parkinsonVol": null,
+  "perpSources": {
+    "BTC": {
+      "pyth": 71338,
+      "pythTs": 1775687843115,
+      "lastUpdate": 1775687843115
+    }
+  },
+  "assetStates": {
+    "BTC": {
+      "realizedVol60m": 0.2,
+      "currentSlot": null,
+      "strike": null,
+      "ofiScore": -0.2056718899354686,
+      "strikeLocked": false,
+      "pythRefPrice": 71338.03577341,
+      "pythRefAtMs": 1775687842027
+    }
+  },
+  "isMaintenance": false,
+  "kellyFraction": 0.25,
+  "kellyMaxBankrollPct": 0.25,
+  "maxConcurrentPositions": 15,
+  "availableCapital": null,
+  "uptimeStart": 69.4251488,
+  "sniperFilterAudit": {
+    "at": "2026-04-08T22:37:23.080Z",
+    "asset": "BTC",
+    "status": "evaluating",
+    "reason": "Checks en cours",
+    "momentumDelta": 0,
+    "isDuplicate": false,
+    "isStrong": false,
+    "isSignMatch": false
+  },
+  "latencyHistory": {
+    "ws": [],
+    "poll": [
+      {
+        "t": 1775687776666,
+        "v": 272
+      },
+      {
+        "t": 1775687777745,
+        "v": 76
+      },
+      {
+        "t": 1775687778880,
+        "v": 132
+      },
+      {
+        "t": 1775687779973,
+        "v": 87
+      },
+      {
+        "t": 1775687781082,
+        "v": 104
+      },
+      {
+        "t": 1775687782195,
+        "v": 107
+      },
+      {
+        "t": 1775687783311,
+        "v": 103
+      },
+      {
+        "t": 1775687784395,
+        "v": 79
+      },
+      {
+        "t": 1775687785500,
+        "v": 103
+      },
+      {
+        "t": 1775687786598,
+        "v": 86
+      },
+      {
+        "t": 1775687787720,
+        "v": 107
+      },
+      {
+        "t": 1775687788794,
+        "v": 71
+      },
+      {
+        "t": 1775687789900,
+        "v": 100
+      },
+      {
+        "t": 1775687791037,
+        "v": 130
+      },
+      {
+        "t": 1775687792155,
+        "v": 114
+      },
+      {
+        "t": 1775687793263,
+        "v": 95
+      },
+      {
+        "t": 1775687794372,
+        "v": 96
+      },
+      {
+        "t": 1775687795520,
+        "v": 139
+      },
+      {
+        "t": 1775687796645,
+        "v": 118
+      },
+      {
+        "t": 1775687797733,
+        "v": 85
+      },
+      {
+        "t": 1775687798849,
+        "v": 108
+      },
+      {
+        "t": 1775687799972,
+        "v": 116
+      },
+      {
+        "t": 1775687801106,
+        "v": 128
+      },
+      {
+        "t": 1775687802196,
+        "v": 85
+      },
+      {
+        "t": 1775687803301,
+        "v": 97
+      },
+      {
+        "t": 1775687804380,
+        "v": 74
+      },
+      {
+        "t": 1775687805474,
+        "v": 90
+      },
+      {
+        "t": 1775687806566,
+        "v": 89
+      },
+      {
+        "t": 1775687807671,
+        "v": 99
+      },
+      {
+        "t": 1775687808758,
+        "v": 79
+      },
+      {
+        "t": 1775687809881,
+        "v": 113
+      },
+      {
+        "t": 1775687810959,
+        "v": 75
+      },
+      {
+        "t": 1775687812133,
+        "v": 170
+      },
+      {
+        "t": 1775687813234,
+        "v": 88
+      },
+      {
+        "t": 1775687814348,
+        "v": 98
+      },
+      {
+        "t": 1775687815437,
+        "v": 83
+      },
+      {
+        "t": 1775687816547,
+        "v": 102
+      },
+      {
+        "t": 1775687817650,
+        "v": 95
+      },
+      {
+        "t": 1775687818798,
+        "v": 142
+      },
+      {
+        "t": 1775687819897,
+        "v": 89
+      },
+      {
+        "t": 1775687821031,
+        "v": 125
+      },
+      {
+        "t": 1775687822136,
+        "v": 96
+      },
+      {
+        "t": 1775687823286,
+        "v": 139
+      },
+      {
+        "t": 1775687824376,
+        "v": 88
+      },
+      {
+        "t": 1775687825486,
+        "v": 102
+      },
+      {
+        "t": 1775687826577,
+        "v": 85
+      },
+      {
+        "t": 1775687827718,
+        "v": 126
+      },
+      {
+        "t": 1775687828806,
+        "v": 82
+      },
+      {
+        "t": 1775687829905,
+        "v": 93
+      },
+      {
+        "t": 1775687830980,
+        "v": 71
+      },
+      {
+        "t": 1775687832075,
+        "v": 92
+      },
+      {
+        "t": 1775687833196,
+        "v": 118
+      },
+      {
+        "t": 1775687834336,
+        "v": 126
+      },
+      {
+        "t": 1775687835417,
+        "v": 73
+      },
+      {
+        "t": 1775687836477,
+        "v": 57
+      },
+      {
+        "t": 1775687837565,
+        "v": 85
+      },
+      {
+        "t": 1775687838719,
+        "v": 146
+      },
+      {
+        "t": 1775687839826,
+        "v": 97
+      },
+      {
+        "t": 1775687840944,
+        "v": 103
+      },
+      {
+        "t": 1775687842028,
+        "v": 76
+      }
+    ]
+  },
+  "performance": {
+    "totalVolume": 0,
+    "netProfit": 0,
+    "winRatePct": 0,
+    "tradeCount": 0,
+    "updatedAt": "2026-04-08T22:37:16.149Z"
+  },
+  "openLimitOrders": 0,
+  "executionMode": "LIMIT",
+  "rewards": [],
+  "trendHistory": [
+    {
+      "t": "2026-04-08T22:37:23.135Z",
+      "vol": 0,
+      "rew": null
+    }
+  ],
+  "equityHistory": []
+}

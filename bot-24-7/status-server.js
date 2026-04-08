@@ -39,7 +39,7 @@ function getPm2List() {
   }
 
   try {
-    const out = execSync('pm2 jlist', { encoding: 'utf8', timeout: 5000 });
+    const out = execSync('pm2 jlist 2>nul || exit 0', { encoding: 'utf8', timeout: 5000 });
     const list = JSON.parse(out);
     const bot = Array.isArray(list) ? list.find((p) => p.name === 'polymarket-bot') : null;
     const value = {
@@ -50,21 +50,28 @@ function getPm2List() {
     getPm2List._cache = { at: Date.now(), value };
     return value;
   } catch (e) {
-    // Si l'appel à pm2 jlist échoue mais qu'on a déjà une valeur récente,
-    // on la renvoie pour stabiliser l'UI (pas de "flicker" sur échec transitoire).
-    const cached = getPm2List._cache?.value;
-    if (cached) {
-      return cached;
-    }
-    return { status: 'error', error: String(e.message) };
+    // v2026 : Fallback if PM2 is missing in PATH
+    const health = readJsonFile(path.join(BOT_DIR, 'health.json'));
+    const isFresh = health && health.at && (Date.now() - new Date(health.at).getTime() < 30000);
+    
+    return { 
+      status: isFresh ? 'online' : 'offline', 
+      mode: 'manual',
+      error: 'PM2 not found - Manual mode' 
+    };
   }
 }
 
 function getLogs(lines = 40) {
   try {
-    const out = execSync(`pm2 logs polymarket-bot --nostream --lines ${lines} 2>&1`, { encoding: 'utf8', timeout: 5000 });
+    const out = execSync(`pm2 logs polymarket-bot --nostream --lines ${lines} 2>nul || exit 0`, { encoding: 'utf8', timeout: 5000 });
     return String(out).trim();
   } catch (e) {
+    // v2026 : Direct file fallback
+    const logPath = path.join(BOT_DIR, 'bot.log');
+    if (fs.existsSync(logPath)) {
+        return readFileTailUtf8(logPath, 4000); // approx 40 lines
+    }
     return `Erreur logs: ${e.message}`;
   }
 }
@@ -267,7 +274,14 @@ function getHealth() {
     kellyFraction: o.kellyFraction ?? null, // v5.6.3 (Risk)
     availableCapital: o.availableCapital ?? null, // v5.6.3 (Bankroll)
     at: o.at ?? null,
+    timestamp: o.timestamp ?? null,
     assetStates: o.assetStates ?? null,
+    secondsLeftInSlot: o.secondsLeftInSlot ?? null,
+    sniperFilterAudit: o.sniperFilterAudit ?? null,
+    performance: o.performance ?? null,
+    equityHistory: o.equityHistory ?? [],
+    balance: o.balance ?? null,
+    totalUsd: o.totalUsd ?? null,
   };
 }
 
@@ -1155,6 +1169,15 @@ const server = http.createServer((req, res) => {
             pythDelta: lastDecision.pythDelta ?? null,
             strikeSource: lastDecision.strikeSource ?? null,
           } : null,
+          // v2026 : Industrial Sniper Mapping
+          secondsLeftInSlot: health?.secondsLeftInSlot ?? 0,
+          sniperFilterAudit: health?.sniperFilterAudit ?? null,
+          performance: health?.performance ?? null,
+          equityHistory: health?.equityHistory ?? [],
+          assetStates: health?.assetStates ?? null,
+          balance: health?.balance ?? balanceUsd,
+          totalUsd: health?.totalUsd ?? balanceUsd,
+          timestamp: health?.timestamp || Date.now(),
           at: new Date().toISOString(),
         };
         if (debugRequested) {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { BotOverview } from './components/BotOverview';
-import { BitcoinUpDownStrategy } from './components/BitcoinUpDownStrategy';
 import { BotStatusBadge } from './components/BotStatus';
 import {
   DEFAULT_BOT_STATUS_URL,
@@ -40,63 +39,33 @@ export default function App() {
   }, []);
 
   return (
-    <div className="layout app-root">
-      <header className="pm-header">
+    <div className="layout app-root bg-black min-h-screen">
+      <header className="pm-header sticky top-0 z-50 backdrop-blur-md bg-black/60 border-b border-white/5">
         <div className="logo">
-          <div className="logo-mark">PM</div>
+          <div className="logo-mark bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.4)]">PM</div>
           <div>
-            <div className="logo-text">Polymarket Bot</div>
-            <div className="logo-sub">Trading Dashboard</div>
+            <div className="logo-text">Polymarket Sniper</div>
+            <div className="logo-sub text-indigo-400 font-bold uppercase tracking-widest text-[8px]">BTC 5m Console</div>
           </div>
         </div>
         <div className="header-right">
-          <div className="timestamp">{clock}</div>
+          <div className="timestamp font-mono text-white/40">{clock}</div>
         </div>
       </header>
 
-      <div className="bots-row">
+      <div className="bots-row px-4 py-2 border-b border-white/5 bg-white/[0.01]">
         {areBotStatusUrlsDuplicate(DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M) ? (
-          <>
-            <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="BOT 15M" />
-            <span
-              className="bots-row-hint"
-              title="Le serveur de statut ne renvoie qu’un seul état PM2. Pour afficher le bot horaire séparément, définissez VITE_BOT_STATUS_URL vers l’URL du statut sur l’instance 1h (IP ou port différent du 15m)."
-            >
-              Même URL que 1h : le statut horaire n’est pas indépendant. Utilisez une URL dédiée pour le bot 1h.
-            </span>
-          </>
+          <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER NODE" />
         ) : (
-          <>
-            {DEFAULT_BOT_STATUS_URL ? (
-              <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="BOT 1H" />
-            ) : (
-              <span className="bots-row-hint" title="Définissez VITE_BOT_STATUS_URL quand un bot horaire sera de nouveau connecté.">
-                Bot 1h : non configuré
-              </span>
-            )}
-            {DEFAULT_BOT_STATUS_URL_15M && (
-              <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="BOT 15M" />
-            )}
-          </>
+          <div className="flex gap-4">
+            {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="NODE 1H" />}
+            {DEFAULT_BOT_STATUS_URL_15M && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="SNIPER NODE" />}
+          </div>
         )}
       </div>
 
-      <main className="app-main app-main--flat">
-        <div className="section-title">
-          <h2>Solde &amp; Performance</h2>
-          <div className="line" />
-        </div>
-        <div className="app-stack app-stack--tight">
-          <BotOverview />
-
-          <div className="section-title">
-            <h2>Stratégie &amp; Backtest</h2>
-            <div className="line" />
-          </div>
-          <div className="app-strat-full">
-            <BitcoinUpDownStrategy />
-          </div>
-        </div>
+      <main className="app-main">
+        <BotOverview />
       </main>
     </div>
   );
