@@ -63,9 +63,9 @@ import { startStrikeWorker } from './strike-worker.js';
 
 // --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
 const ENABLE_SNIPER_STRATEGY = true;
-const SNIPER_WINDOW_START_S = 40;  // t-40s
+const SNIPER_WINDOW_START_S = 60;  // t-60s (Assoupli pour collecter plus de données)
 const SNIPER_WINDOW_END_S = 20;    // t-20s
-const SNIPER_PRICE_MIN = 0.90;     // 90 cents
+const SNIPER_PRICE_MIN = 0.87;     // 87 cents (Assoupli pour plus d'opportunités)
 const SNIPER_PRICE_MAX = 0.97;     // 97 cents
 const SNIPER_STAKE = 10;           // 10 USDC
 
@@ -257,6 +257,18 @@ function getAssetState(asset) {
   }
   return assetSpecificState.get(asset);
 }
+
+/** État global du dernier signal sniper pour le Dashboard (Audit) */
+let lastSniperDecision = {
+  at: null,
+  asset: 'BTC',
+  status: 'idle',
+  reason: 'Initialisé',
+  momentumDelta: 0,
+  isDuplicate: false,
+  isStrong: false,
+  isSignMatch: false
+};
 
 /// État global des Strikes par Asset (v2026 : BTC Only)
 const assetStrikes = {
@@ -581,6 +593,7 @@ function writeHealth(updates, extra = {}) {
       maxConcurrentPositions: MAX_CONCURRENT_BTC_EXPOSURE,
       availableCapital: typeof availableCapital !== 'undefined' ? availableCapital : null,
       uptimeStart: process.uptime(), // Secondes depuis démarrage
+      sniperFilterAudit: lastSniperDecision || { status: 'idle', reason: 'Waiting for signal' },
       // v6.2.0 : Historisation pour les charts
       latencyHistory: {
         ws: wsLatencyHistory,
@@ -5407,6 +5420,18 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         else asset = 'BTC';
     }
 
+    // Initialisation Audit pour le Dashboard
+    lastSniperDecision = {
+        at: new Date().toISOString(),
+        asset,
+        status: 'evaluating',
+        reason: 'Checks en cours',
+        momentumDelta: 0,
+        isDuplicate: false,
+        isStrong: false,
+        isSignMatch: false
+    };
+
     if (signal.strike == null) {
         const start = signal.m?.startDate || signal.startDate;
         signal.strike = getStrike(asset, start);
@@ -5424,6 +5449,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId, strictement)
     if (activePositions.some(p => p.conditionId === key)) {
+      lastSniperDecision.status = 'skipped';
+      lastSniperDecision.reason = 'Déjà tradé (Ce slot)';
+      lastSniperDecision.isDuplicate = true;
       if (shouldAuditSlot(key, 'SKIPPED_DEDUPLICATION')) {
         console.log(`[Deduplication] 🛡️ Créneau ${key} déjà traité (Un seul trade par slot). Signal ignoré.`);
         recordSkipReason('already_in_position', source, { conditionId: key });
@@ -5459,6 +5487,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
       // 1. Magnitude Check (0.1% Minimum)
       if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
+        lastSniperDecision.status = 'skipped';
+        lastSniperDecision.reason = `Momentum < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%`;
+        lastSniperDecision.momentumDelta = deltaPct;
         if (shouldAuditSlot(key, 'SKIPPED_MOMENTUM')) {
             console.log(`[${asset}] 🚫 Momentum Delta insuffisant : ${(deltaPct * 100).toFixed(3)}% < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%. Signal ignoré.`);
             recordSkipReason('momentum_insufficient', source, { deltaPct, min: ENTRY_WINDOW.minDeltaPct, strike: strikePrice, spot: spotPrice });
@@ -5473,6 +5504,10 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       const isDirectionalMatch = (isUp && deltaPct > 0) || (isDown && deltaPct < 0);
 
       if (!isDirectionalMatch) {
+        lastSniperDecision.status = 'skipped';
+        lastSniperDecision.reason = 'Côté Opposé au Strike';
+        lastSniperDecision.momentumDelta = deltaPct;
+        lastSniperDecision.isSignMatch = false;
         if (shouldAuditSlot(key, 'SKIPPED_DIRECTION_MISMATCH')) {
             console.log(`[${asset}] 🚫 Momentum INVERSE : Signal=${signal.takeSide} mais Delta=${(deltaPct * 100).toFixed(3)}%. Signal ignoré.`);
             recordSkipReason('direction_mismatch', source, { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
@@ -5489,6 +5524,12 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       signal.spotAtDetection = spotPrice;
       signal.deltaPctAtDetection = deltaPct; // v2026: Store for Audit
       signal.thresholdAtDetection = adjustedThreshold;
+
+      lastSniperDecision.status = 'executing';
+      lastSniperDecision.reason = 'CRITÈRES OK';
+      lastSniperDecision.momentumDelta = deltaPct;
+      lastSniperDecision.isStrong = true;
+      lastSniperDecision.isSignMatch = true;
 
       console.log(`[${asset}] 🚀 Momentum Confirmé (Strike=$${strikePrice.toFixed(2)}) : Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
     }
@@ -6070,7 +6111,9 @@ async function run() {
       gasBalance: gasBalance != null ? gasBalance.toFixed(4) : '—',
       activeConditions: OPEN_LIMIT_ORDERS.size,
       currentBlock,
-      simulation: IS_SIMULATION
+      simulation: IS_SIMULATION,
+      secondsLeftInSlot: getRemainingSeconds(300), // Fenêtre 5m
+      timestamp: Date.now()
     }, { totalUsd });
 
     let totalSignalsCount = 0;
