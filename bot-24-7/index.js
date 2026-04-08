@@ -5410,6 +5410,13 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     if (signal.strike == null) {
         const start = signal.m?.startDate || signal.startDate;
         signal.strike = getStrike(asset, start);
+        
+        // v2026 : Late Catch Fallback (Si restart en milieu de créneau)
+        if (signal.strike == null) {
+            const { getChainlinkPrice } = await import('./chainlink-price.js');
+            const { resolveStrikeLate } = await import('./src/core/strike-manager.js');
+            signal.strike = await resolveStrikeLate(asset, start, getChainlinkPrice);
+        }
     }
     const activePositions = readActivePositions();
     const strikePrice = Number(signal.strike);

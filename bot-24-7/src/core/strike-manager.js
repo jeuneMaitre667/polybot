@@ -64,3 +64,31 @@ export const saveStrike = (asset, price, slotOverride = null) => {
         return null;
     }
 };
+
+/**
+ * resolveStrikeLate(asset, startTime)
+ * v2026 : REST Fallback via Chainlink if local cache is empty.
+ * Triggered only once per asset/slot.
+ */
+const lateResolveMemory = new Set();
+export const resolveStrikeLate = async (asset, startTime, getChainlinkPrice) => {
+    const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
+    const key = `${ms}_${asset.trim().toUpperCase()}`;
+    
+    if (lateResolveMemory.has(key)) return null;
+    lateResolveMemory.add(key);
+
+    console.log(`[Strike] [LATE-CATCH] Attempting REST recovery for ${key}...`);
+    try {
+        const result = await getChainlinkPrice(asset);
+        if (result.price != null) {
+            // Optionnel : vérifier result.updatedAt pour être sûr qu'on n'est pas trop loin du début du slot
+            // Mais pour un Sniper v2026, la tolérance est de quelques minutes.
+            saveStrike(asset, result.price, ms);
+            return result.price;
+        }
+    } catch (e) {
+        console.error(`[Strike] [LATE-CATCH] Failed: ${e.message}`);
+    }
+    return null;
+};
