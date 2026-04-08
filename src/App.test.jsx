@@ -12,10 +12,6 @@ vi.mock('./components/BotOverview', () => ({
   BotOverview: () => <div data-testid="bot-overview">BotOverview</div>,
 }));
 
-vi.mock('./components/BitcoinUpDownStrategy', () => ({
-  BitcoinUpDownStrategy: () => <div data-testid="bitcoin-strategy">BitcoinUpDownStrategy</div>,
-}));
-
 function TestWrapper({ children }) {
   return <WalletProvider>{children}</WalletProvider>;
 }
@@ -32,6 +28,5 @@ describe('App', () => {
     render(<App />, { wrapper: TestWrapper });
     expect(screen.getByRole('main')).toBeInTheDocument();
     expect(screen.getByTestId('bot-overview')).toBeInTheDocument();
-    expect(screen.getByTestId('bitcoin-strategy')).toBeInTheDocument();
   });
 });
