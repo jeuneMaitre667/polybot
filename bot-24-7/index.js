@@ -60,6 +60,8 @@ import {
   STRATEGY_AUDIT_FILE
 } from './config.js';
 
+import { startStrikeWorker } from './strike-worker.js';
+
 // --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
 const ENABLE_SNIPER_STRATEGY = true;
 const SNIPER_WINDOW_START_S = 40;  // t-40s
@@ -198,43 +200,8 @@ const perpState = new Map([
 // v8.0.0 : Logic moved to src/core/strike-manager.js
 const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
 
-let lastCapturedMinute = -1;
-const runBoundaryCapture = async () => {
-    try {
-        const now = new Date();
-        const m = now.getMinutes();
-        const s = now.getSeconds();
-        
-        // v2026 : Déclenchement strict sur les multiples de 5 (indépendant du mode config)
-        const isFiveMinBoundary = (m % 5 === 0);
-        
-        if (!isFiveMinBoundary) return;
-        if (lastCapturedMinute === m) return;
-        
-        lastCapturedMinute = m;
-        const targetSlotStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), m, 0, 0).getTime();
-        
-        console.log(`[Strike] 🎯 TRIGGER detected at ${m}m ${s}s. Target: ${new Date(targetSlotStartMs).toISOString()}`);
-
-        for (const asset of SUPPORTED_ASSETS) {
-            try {
-                const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
-                if (strikeData && strikeData.price) {
-                    saveStrike(asset, strikeData.price);
-                    console.log(`[Strike] ✅ SUCCESS ${asset} price=${strikeData.price.toFixed(2)} offset=${strikeData.updatedAt - targetSlotStartMs}ms`);
-                }
-            } catch (err) {
-                console.error(`[Strike] ❌ ERROR ${asset}:`, err.message);
-            }
-        }
-
-    } catch (e) {
-        console.error('[Strike] 💀 CRITICAL:', e.message);
-    }
-};
 // v7.16.53 : Check plus fréquent (5s) pour ne rater aucune ouverture de slot
-setInterval(runBoundaryCapture, 5000);
-setTimeout(runBoundaryCapture, 5000); // v7.16.26 : Démarrage rapide (5s)
+startStrikeWorker();
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
 const ACTIVE_REDEMPTIONS = new Set();
@@ -5447,17 +5414,36 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       // v2026: Delta must be calculated against the STRIKE, not the START price for Fair Value.
       const deltaPct = (spotPrice / strikePrice) - 1; 
 
-      if (Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
-        const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-        
-        // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
-        signal.probFairAtEntry = probFairLive;
-        signal.spotAtDetection = spotPrice;
-        signal.deltaPctAtDetection = deltaPct; // v2026: Store for Audit
-        signal.thresholdAtDetection = adjustedThreshold;
-
-        console.log(`[${asset}] 🚀 Momentum Trace (Strike Anchor): Strike=${strikePrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
+      // 1. Magnitude Check (0.1% Minimum)
+      if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
+        console.log(`[${asset}] 🚫 Momentum Delta insuffisant : ${(deltaPct * 100).toFixed(3)}% < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%. Signal ignoré.`);
+        recordSkipReason('momentum_insufficient', source, { deltaPct, min: ENTRY_WINDOW.minDeltaPct, strike: strikePrice, spot: spotPrice });
+        recordSignalAudit(signal, 'SKIPPED_MOMENTUM', { deltaPct, strike: strikePrice, spot: spotPrice });
+        return;
       }
+
+      // 2. Directional Check (Sign Match)
+      const isUp = signal.takeSide === 'Up';
+      const isDown = signal.takeSide === 'Down';
+      const isDirectionalMatch = (isUp && deltaPct > 0) || (isDown && deltaPct < 0);
+
+      if (!isDirectionalMatch) {
+        console.log(`[${asset}] 🚫 Momentum INVERSE : Signal=${signal.takeSide} mais Delta=${(deltaPct * 100).toFixed(3)}%. Signal ignoré.`);
+        recordSkipReason('direction_mismatch', source, { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
+        recordSignalAudit(signal, 'SKIPPED_DIRECTION_MISMATCH', { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
+        return;
+      }
+
+      // v2026 : Momentum Validé (> 0.1% + Direction OK) -> Calcul Fair et Traçabilité
+      const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+      
+      // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
+      signal.probFairAtEntry = probFairLive;
+      signal.spotAtDetection = spotPrice;
+      signal.deltaPctAtDetection = deltaPct; // v2026: Store for Audit
+      signal.thresholdAtDetection = adjustedThreshold;
+
+      console.log(`[${asset}] 🚀 Momentum Confirmé (Strike=$${strikePrice.toFixed(2)}) : Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
     }
 
     if (shouldSkipTradeTiming(signal)) {

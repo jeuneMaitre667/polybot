@@ -40,11 +40,11 @@ export const POLYMARKET_TAKER_FEE = 0.0030; // 0.30% (v2026 Docs)
 export const EXPECTED_SLIPPAGE = 0.0005;   // 0.05% buffer
 export const FEE_SAFETY_BUFFER = 1.05;
 
-// v10.6 : Momentum CDF Strategy Window
+// v10.6 : Momentum CDF Strategy Window (Hi-Fi v2026)
 export const ENTRY_WINDOW = {
   minSecondsRemaining: 15,
   maxSecondsRemaining: 900, // Débridage Temporel (v14.10)
-  minDeltaPct: 0.0,          // Débridage Mathématique (v14.11) : Forcer la trace momentum
+  minDeltaPct: 0.001,        // Momentum Delta Threshold : 0.1%
 };
 
 // --- v11 : Ultra-Resilience Backup Config ---

@@ -38,13 +38,14 @@ export const getStrike = (asset, startTime) => {
 };
 
 /**
- * saveStrike(asset, price)
+ * saveStrike(asset, price, slotOverride)
  * v8.0.0 : Atomic save with slot calculation
+ * v8.1.0 : Added slotOverride for 5m precision
  */
-export const saveStrike = (asset, price) => {
+export const saveStrike = (asset, price, slotOverride = null) => {
     try {
         const data = safeReadJson(STRIKES_FILE);
-        const slot = Math.floor(Date.now() / 900000) * 900000;
+        const slot = slotOverride || (Math.floor(Date.now() / 900000) * 900000);
         const cleanAsset = asset.trim().toUpperCase();
         const key = `${slot}_${cleanAsset}`;
         
