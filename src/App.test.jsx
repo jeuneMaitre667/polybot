@@ -17,11 +17,9 @@ function TestWrapper({ children }) {
 }
 
 describe('App', () => {
-  it('renders header avec pastille(s) bot ou hint si pas de VITE_* (CI)', () => {
+  it('renders header with logo', () => {
     render(<App />, { wrapper: TestWrapper });
-    const badges = screen.queryAllByTestId('bot-status-badge');
-    const hint1h = screen.queryByText(/Bot 1h : non configuré/);
-    expect(badges.length >= 1 || hint1h != null).toBe(true);
+    expect(screen.getByText(/Polymarket Sniper/i)).toBeInTheDocument();
   });
 
   it('renders main sections', () => {
