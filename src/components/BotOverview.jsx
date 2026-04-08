@@ -4,12 +4,10 @@ import { DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from
 import { DecisionFeed } from './DecisionFeed';
 import { GlobalRiskSentinel } from './GlobalRiskSentinel';
 import { AssetSentinelCard } from './AssetSentinelCard';
-import { ExchangeMatrix } from './ExchangeMatrix';
+import { BotStatusBadge } from './BotStatus';
 import { LatencySentinelCards } from './LatencySentinelCards';
 import { RiskKellySentinel } from './RiskKellySentinel';
-import { OFIMonitor } from './OFIMonitor';
 import LatencyTimelineChart from './LatencyTimelineChart';
-import ExposureHeatmap from './ExposureHeatmap';
 import { readLatencyModeFromStorage, writeLatencyModeToStorage } from '@/lib/dashboardUiPrefs.js';
 import { useWallet } from '@/context/useWallet.js';
 import { PnLAnalyticsCard } from './PnLAnalyticsCard';
@@ -306,18 +304,14 @@ export function BotOverview() {
         </div>
       )}
 
-      {/* SECTION 1: GLOBAL RISK SENTINEL */}
       <section className="animate-in fade-in slide-in-from-top-4 duration-700">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="lg:col-span-2">
             <GlobalRiskSentinel 
               data={data15m} 
               paperBalance={balance} 
               realBalance={walletUsdc15m} 
             />
-          </div>
-          <div>
-            <ExposureHeatmap data={data15m} />
           </div>
         </div>
       </section>
@@ -356,33 +350,15 @@ export function BotOverview() {
         <RiskKellySentinel data={data15m} />
       </section>
 
-      {/* SECTION 5: DATA FLUX & ACTIVITY */}
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-        <div className="xl:col-span-2 space-y-6">
+      {/* SECTION 5: ACTIVITY FEED (Legacy Matrix/OFI Removed) */}
+      <section className="grid grid-cols-1 gap-8">
+        <div className="space-y-4">
           <div className="section-title flex items-center gap-4">
-            <h2 className="text-xl font-bold tracking-tight text-white/90">Data Flux Matrix</h2>
-            <div className="h-[1px] flex-1 bg-gradient-to-r from-white/10 to-transparent" />
+            <h2 className="text-sm font-bold tracking-widest text-blue-400 uppercase">Decision Feed</h2>
+            <div className="h-[1px] flex-1 bg-blue-500/10" />
           </div>
-          <ExchangeMatrix data={data15m} />
-        </div>
-
-        <div className="space-y-8">
-          <div className="space-y-4">
-            <div className="section-title flex items-center gap-4">
-               <h2 className="text-sm font-bold tracking-widest text-indigo-400 uppercase">Quant Pressure (OFI)</h2>
-               <div className="h-[1px] flex-1 bg-indigo-500/10" />
-            </div>
-            <OFIMonitor data={data15m} />
-          </div>
-
-          <div className="space-y-4">
-            <div className="section-title flex items-center gap-4">
-              <h2 className="text-sm font-bold tracking-widest text-blue-400 uppercase">Decision Feed</h2>
-              <div className="h-[1px] flex-1 bg-blue-500/10" />
-            </div>
-            <div className="glass-panel border border-white/5 bg-black/40 rounded-2xl overflow-hidden h-[450px]">
-               <DecisionFeed feed={data15m?.decisionFeed} />
-            </div>
+          <div className="glass-panel border border-white/5 bg-black/40 rounded-2xl overflow-hidden h-[450px]">
+             <DecisionFeed feed={data15m?.decisionFeed} />
           </div>
         </div>
       </section>

@@ -233,7 +233,7 @@ export function streaksFromOutcomes(outcomes) {
 export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabel, streakContextLabel = 'midi' }) {
   const wrLine =
     stats.decided > 0
-      ? `📈 WR (${windowLabel}) : ${stats.wrPct}% (${stats.winCount} V / ${stats.decided} décisions — 🏆 ${stats.winCount} redeem gagnant${stats.winCount > 1 ? 's' : ''}, 🛑 ${stats.slCount} SL)`
+      ? `📈 WR (${windowLabel}) : ${stats.wrPct}% (${stats.winCount} 🎯 / ${stats.decided} décisions — 🏆 ${stats.winCount} redeem gagnant${stats.winCount > 1 ? 's' : ''}, 🛑 ${stats.slCount} SL)`
       : `📈 WR (${windowLabel}) : — (aucune sortie SL ni redeem « victoire » sur la période)`;
 
   const streakNow =
@@ -251,7 +251,7 @@ export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabe
         : 'à midi';
 
   return (
-    `📊 Résumé bot · ${windowLabel}\n` +
+    `🎯 Résumé Sniper · ${windowLabel}\n` +
     `📅 ${dateStr} · 🌍 ${timeZone}\n` +
     `➖➖➖\n` +
     `🛒 Ordres d’entrée : ${stats.entriesCount}\n` +
@@ -259,7 +259,7 @@ export function formatMiddayDigestMessage(stats, { timeZone, dateStr, windowLabe
     `🏆 Redeem victoire : ${stats.winCount}\n` +
     `${wrLine}\n` +
     `➖➖➖\n` +
-    `📌 Séries (🛑 SL + 🏆 redeem gagnant, ordre chrono)\n` +
+    `📌 Séries (🛑 SL + 🏆 Win, ordre chrono)\n` +
     `🔥 Max victoires d’affilée : ${stats.maxWinStreak}\n` +
     `📉 Max défaites d’affilée : ${stats.maxLossStreak}\n` +
     `⚡ Série ${streakPhrase} : ${streakNow}\n` +

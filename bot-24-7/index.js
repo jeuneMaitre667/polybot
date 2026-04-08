@@ -56,7 +56,8 @@ import {
   SUPPORTED_ASSETS,
   PYTH_FEED_IDS,
   PYTH_HERMES_URL,
-  DEFAULT_FEE_RATE_BPS
+  DEFAULT_FEE_RATE_BPS,
+  STRATEGY_AUDIT_FILE
 } from './config.js';
 
 // --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
@@ -197,36 +198,42 @@ const perpState = new Map([
 // v8.0.0 : Logic moved to src/core/strike-manager.js
 const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
 
-let lastBoundaryMinute = null;
+let lastCapturedMinute = -1;
 const runBoundaryCapture = async () => {
     try {
         const now = new Date();
         const m = now.getMinutes();
+        const s = now.getSeconds();
         
-        // v7.16.52 : Capture au démarrage (si file absent) ou aux slots 5m
-        const isSlotOpen = (m % 15 === 0);
-        if (!isSlotOpen && fs.existsSync(STRIKES_FILE)) return;
+        // v2026 : Déclenchement strict sur les multiples de 5 (indépendant du mode config)
+        const isFiveMinBoundary = (m % 5 === 0);
         
-        if (lastBoundaryMinute === m) return;
-        lastBoundaryMinute = m;
+        if (!isFiveMinBoundary) return;
+        if (lastCapturedMinute === m) return;
+        
+        lastCapturedMinute = m;
+        const targetSlotStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), m, 0, 0).getTime();
+        
+        console.log(`[Strike] 🎯 TRIGGER detected at ${m}m ${s}s. Target: ${new Date(targetSlotStartMs).toISOString()}`);
 
-        console.log(`[Strike] Lancement de la capture (Minute: ${m})...`);
         for (const asset of SUPPORTED_ASSETS) {
-            const res = await captureStrikeAtSlotOpen(asset, `init_${Date.now()}`);
-            const { price, source } = getUnifiedFairValue(asset, res, perpState);
-
-            if (price > 0) {
-                saveStrike(asset, price);
-                console.log(`[Strike] SUCCESS asset=${asset} price=${(price != null ? price.toFixed(2) : '0.00')} source=${source}`);
-            } else {
-                console.error(`[Strike] ÉCHEC CRITIQUE: Aucune source de prix pour ${asset}.`);
+            try {
+                const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
+                if (strikeData && strikeData.price) {
+                    saveStrike(asset, strikeData.price);
+                    console.log(`[Strike] ✅ SUCCESS ${asset} price=${strikeData.price.toFixed(2)} offset=${strikeData.updatedAt - targetSlotStartMs}ms`);
+                }
+            } catch (err) {
+                console.error(`[Strike] ❌ ERROR ${asset}:`, err.message);
             }
         }
+
     } catch (e) {
-        console.error('[Strike] Capture Error:', e.message);
+        console.error('[Strike] 💀 CRITICAL:', e.message);
     }
 };
-setInterval(runBoundaryCapture, 60000);
+// v7.16.53 : Check plus fréquent (5s) pour ne rater aucune ouverture de slot
+setInterval(runBoundaryCapture, 5000);
 setTimeout(runBoundaryCapture, 5000); // v7.16.26 : Démarrage rapide (5s)
 
 const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
@@ -457,7 +464,7 @@ async function refreshDaily24hStats() {
       dailyHigh24h = Number(res.data.highPrice);
       dailyLow24h = Number(res.data.lowPrice);
       lastDaily24hFetchAt = Date.now();
-      console.log(`[Quant] 📊 Volatilité 24h rafraîchie : High ${dailyHigh24h} | Low ${dailyLow24h}`);
+      console.log(`[Quant] 📊 Volatilité 24h (Ref) rafraîchie : High ${dailyHigh24h} | Low ${dailyLow24h}`);
     }
   } catch (_) {}
 }
@@ -706,7 +713,7 @@ async function gracefulShutdown(signal) {
 
         // 2. Alertes (Optionnel)
         if (typeof sendTelegramAlert === 'function' && telegramTradeAlertsEnabled) {
-            await sendTelegramAlert(`🏗️ *BOT SHUTDOWN*\nSignal: ${signal}\nStatus: Saved & Exited cleanly.`);
+            await sendTelegramAlert(`🏗️ *SNIPER SHUTDOWN*\nStatus: Saved & Exited safely.`);
         }
 
         console.log('[Shutdown] ✅ État sauvegardé. Fermeture sécurisée.');
@@ -1642,6 +1649,13 @@ function markConditionRedeemedSuccess(cid) {
   try {
     const sorted = [...set].sort();
     fs.writeFileSync(REDEEMED_CONDITION_IDS_FILE, JSON.stringify(sorted, null, 0) + '\n', 'utf8');
+    // v2026 : Audit System (Win/Loss Outcome)
+    fs.appendFileSync(STRATEGY_AUDIT_FILE, JSON.stringify({
+      at: new Date().toISOString(),
+      conditionId: key,
+      status: 'RESOLVED_SUCCESS',
+      type: 'outcome'
+    }) + '\n', 'utf8');
   } catch (e) {
     console.warn('[Redeem] écriture redeemed-condition-ids.json impossible:', e?.message || e);
   }
@@ -1768,6 +1782,13 @@ async function calculateTotalValue(clobClient) {
           if (bal > 0) {
              const book = await clobClient.getOrderBook(tokenId);
              const price = (book.bids && book.bids.length > 0) ? Number(book.bids[0].price) : 0.5;
+             const header = `🎯 *MANUAL SNIPER ENTRY*`;
+             const lines = [
+                 header,
+                 `Asset: ${asset}`,
+                 `Side: ${side.toUpperCase()}`,
+                 `Price: ${price}¢`,
+             ];
              totalUsd += (bal * price);
           }
        } catch (_) {}
@@ -1786,7 +1807,7 @@ function detectWhales(asset, side, book) {
       if (value > threshold) {
          console.log(`[${asset}] 🐳 WHALE ALERT: ${side.toUpperCase()} of $${value.toFixed(0)} at ${level.price}¢`);
          if (telegramTradeAlertsEnabled) {
-            sendTelegramAlert(`🐳 *WHALE ALERT*\nAsset: ${asset}\nSide: ${side.toUpperCase()}\nValue: $${value.toFixed(0)}\nPrice: ${level.price}¢`);
+            sendTelegramAlert(`🐳 *ORACLE WHALE DETECTED*\nAsset: ${asset}\nSide: ${side.toUpperCase()}\nValue: $${value.toFixed(0)}\nPrice: ${level.price}¢`);
          }
          return true;
       }
@@ -1804,7 +1825,7 @@ async function checkNativeGasBalance(clobClient) {
     if (balance < 0.5 && (Date.now() - lastGasAlertAt > 3600000)) {
        console.warn(`[Gas] ⛽ CRITICAL: Low POL/MATIC balance (${balance.toFixed(4)}). Refill wallet!`);
        if (telegramTradeAlertsEnabled) {
-          sendTelegramAlert(`⛽ *CRITICAL GAS ALERT*\nWallet: ${address.slice(0,6)}...${address.slice(-4)}\nBalance: ${balance.toFixed(4)} POL\n*Action*: The bot might stop trading soon. Refill MATIC/POL!`);
+          sendTelegramAlert(`⛽ *GAS REQUIRED*\nWallet: ${address.slice(0,6)}...${address.slice(-4)}\nBalance: ${balance.toFixed(4)} POL\n*Action*: Refill MATIC/POL to keep the Sniper active!`);
        }
        lastGasAlertAt = Date.now();
     }
@@ -1825,6 +1846,31 @@ async function getMarketConfig(clobClient, tokenId) {
     return config;
   } catch (err) {
     return { tickSize: '0.001', minOrderSize: 0.1 };
+  }
+}
+
+/**
+ * v2026 : Enregistrement d'audit stratégique pour backtest futur.
+ * @param {object} signal 
+ * @param {string} status EXECUTED | SKIPPED | REJECTED
+ * @param {object} context 
+ */
+function recordSignalAudit(signal, status, context = {}) {
+  try {
+    const entry = {
+      at: new Date().toISOString(),
+      asset: signal.asset || 'BTC',
+      slug: signal.slug || signal.eventSlug || 'unknown',
+      strike: signal.strike,
+      spot: signal.spotAtDetection,
+      delta: signal.deltaPctAtDetection, // v14.11 rename
+      fair: signal.probFairAtEntry,
+      status: status,
+      ...context
+    };
+    fs.appendFileSync(STRATEGY_AUDIT_FILE, JSON.stringify(entry) + '\n', 'utf8');
+  } catch (e) {
+    console.warn('[Audit] Erreur écriture audit signal:', e.message);
   }
 }
 
@@ -2118,7 +2164,7 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
      if (balance > EMERGENCY_CAP) {
         console.error(`[${asset}] 🚨 EMERGENCY: Inventory too high (${balance.toFixed(0)} > ${EMERGENCY_CAP}). DELEVERAGING NOW.`);
         if (telegramTradeAlertsEnabled) {
-           await sendTelegramAlert(`🚨 *EMERGENCY BRAKE*\nAsset: ${asset}\nInventory: ${balance.toFixed(0)}\nAction: Market SELL Triggered`);
+           await sendTelegramAlert(`🛑 *SNIPER EMERGENCY STOP*\nAsset: ${asset}\nInventory: ${balance.toFixed(0)}\nAction: Panic Sell Triggered`);
         }
         await clobClient.createAndPostMarketOrder({ tokenId, amount: balance, side: Side.SELL }, { tickSize: '0.001' });
         return { ok: false, reason: 'emergency_brake_triggered' };
@@ -2232,6 +2278,7 @@ async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
       }
       saveOpenOrders();
 
+      recordSignalAudit(signal, 'EXECUTED', { status: 'posted', result: result });
       return { ok: true, orderId: result.orderID, price: limitPrice, filledUsd: 0 }; // Maker is not filled yet
     }
     
@@ -2317,7 +2364,7 @@ async function checkAndCancelStaleOrders(clobClient) {
     if (!activeOrderIds.has(data.orderId)) {
         console.log(`[${data.asset}] 🌊 LADDER FILL DETECTED: Order ${data.orderId} at ${data.price}¢`);
         if (telegramTradeAlertsEnabled) {
-           await sendTelegramAlert(`🌊 *LADDER FILL*\nAsset: ${data.asset}\nPrice: ${data.price}¢\nType: Maker Fill`);
+           await sendTelegramAlert(`🌊 *LADDER SNIPER FILL*\nAsset: ${data.asset}\nPrice: ${data.price}¢\nType: Maker Fill Detected`);
         }
         OPEN_LIMIT_ORDERS.delete(condId);
         saveOpenOrders();
@@ -4170,9 +4217,17 @@ async function getClobCredsCached() {
 }
 
 async function buildClobClientCachedCreds() {
+  const creds = await getClobCredsCached();
+
+  if (!wallet || !creds) {
+    const msg = !wallet ? 'Missing Wallet' : 'Missing CLOB credentials';
+    logJson('error', 'CLOB: Signer/Creds error', { error: msg });
+    throw new Error(`CLOB Client Error: ${msg}`);
+  }
+
   // v9.8.5 : High-Stability Mock Client for Simulation (Bypass SDK crashes)
   if (IS_SIMULATION) {
-    logJson('info', 'CLOB: Simulation Mode - Using Mock Client to bypass SDK signer/authenticity crash.');
+    logJson('info', 'CLOB: Simulation Mode - Credentials verified. Using Mock Client for execution (Bypassing SDK risk).');
     return {
       isMock: true,
       getMarket: async () => ({}),
@@ -4182,14 +4237,6 @@ async function buildClobClientCachedCreds() {
       getOpenOrders: async () => [], // v10.1 : Stub pour diagnostic dashboard
       getRewardPercentages: async () => [] // v10.1 : Stub pour diagnostic dashboard
     };
-  }
-
-  const creds = await getClobCredsCached();
-
-  if (!wallet || !creds) {
-    const msg = !wallet ? 'Missing Wallet' : 'Missing CLOB credentials';
-    logJson('error', 'CLOB: Signer/Creds error', { error: msg });
-    throw new Error(`CLOB Client Error: ${msg}`);
   }
 
   try {
@@ -5341,6 +5388,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       if (currentLag > MAX_ALLOWED_LAG_MS) {
           console.warn(`[Latency] 🐌 Cycle trop lent (${currentLag}ms > ${MAX_ALLOWED_LAG_MS}ms). Signal abandonnÃ©.`);
           recordSkipReason('latency_exceeded', source, { currentLag, max: MAX_ALLOWED_LAG_MS });
+          recordSignalAudit(signal, 'SKIPPED_LATENCY', { currentLag });
           return;
       }
   }
@@ -5358,22 +5406,25 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         else asset = 'BTC';
     }
 
-    // v7.16.0 : Unified Strike Injection (Poll & WS)
     if (signal.strike == null) {
-        let start = signal.m?.startDate || signal.startDate;
-        if (!start && slug.includes('-')) {
-            const parts = slug.split('-');
-            const lastPart = parts[parts.length - 1];
-            if (/^\d{10,}$/.test(lastPart)) start = lastPart;
-        }
+        const start = signal.m?.startDate || signal.startDate;
         signal.strike = getStrike(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
     }
+    const activePositions = readActivePositions();
+    const strikePrice = Number(signal.strike);
     const key = getSignalKey(signal);
+
+    // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId)
+    if (activePositions.some(p => p.conditionId === key && !p.resolved)) {
+      console.log(`[Deduplication] 🛡️ Déjà en position sur ${key}. Signal ignoré.`);
+      recordSkipReason('already_in_position', source, { conditionId: key });
+      recordSignalAudit(signal, 'SKIPPED_DEDUPLICATION', { conditionId: key });
+      return;
+    }
 
     // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
     const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
     const adjustedThreshold = SIGNAL_GAP_THRESHOLD * ofiMultiplier;
-
 
     // --- v14.17 : Momentum Transparency Layer (Calcul avant verrouillage) ---
     const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
@@ -5383,7 +5434,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     let spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
     const state = getAssetState(asset || signal.asset || 'BTC');
     
-    if (state && spotPrice > 0) {
+    if (state && spotPrice > 0 && strikePrice > 0) {
       if (!state.pythRefPrice) {
         const cur = perpState.get(asset || signal.asset || 'BTC')?.pyth;
         if (cur) {
@@ -5393,19 +5444,19 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         }
       }
 
-      if (state.pythRefPrice) {
-        const deltaPct = (spotPrice / state.pythRefPrice) - 1;
-        const strikePrice = Number(signal.strike);
-        if (Number.isFinite(strikePrice) && strikePrice > 0 && Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
-          const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-          
-          // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
-          signal.probFairAtEntry = probFairLive;
-          signal.spotAtDetection = spotPrice;
-          signal.thresholdAtDetection = adjustedThreshold;
+      // v2026: Delta must be calculated against the STRIKE, not the START price for Fair Value.
+      const deltaPct = (spotPrice / strikePrice) - 1; 
 
-          console.log(`[${asset}] 🚀 Momentum Trace: Base 0=${state.pythRefPrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
-        }
+      if (Math.abs(deltaPct) >= ENTRY_WINDOW.minDeltaPct) {
+        const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
+        
+        // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
+        signal.probFairAtEntry = probFairLive;
+        signal.spotAtDetection = spotPrice;
+        signal.deltaPctAtDetection = deltaPct; // v2026: Store for Audit
+        signal.thresholdAtDetection = adjustedThreshold;
+
+        console.log(`[${asset}] 🚀 Momentum Trace (Strike Anchor): Strike=${strikePrice.toFixed(2)} | Spot=${spotPrice.toFixed(2)} | Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
       }
     }
 
@@ -5419,6 +5470,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         ...timingDetails,
       });
       logSignalInRangeButNoOrder(source, 'timing_forbidden', signal, { ...timingDetails });
+      recordSignalAudit(signal, 'SKIPPED_TIMING', { timingDetails });
       return;
     }
     if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
@@ -5500,6 +5552,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     if (ENABLE_SNIPER_STRATEGY && (signal.asset === 'BTC' || slug.includes('btc-updown-5m'))) {
         if (bestAskLive < SNIPER_PRICE_MIN || bestAskLive > SNIPER_PRICE_MAX) {
             console.log(`[Sniper] \u26d4 Hors fen\u00eatre de prix : ${bestAskLive.toFixed(2)} (Attendu: ${SNIPER_PRICE_MIN}-${SNIPER_PRICE_MAX})`);
+            recordSignalAudit(signal, 'SKIPPED_SNIPER_PRICE', { price: bestAskLive, min: SNIPER_PRICE_MIN, max: SNIPER_PRICE_MAX });
             return;
         }
         
@@ -5507,7 +5560,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         amountUsd = await getCompoundedSniperStake(balance || 0);
         console.log(`[Sniper] \ud83c\udfaf Cible Verrouill\u00e9e : Prix=${bestAskLive.toFixed(2)} | Mise Dynamique=${amountUsd} USDC`);
     } else if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-        const activePositions = readActivePositions();
         const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
         amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
     } else {
@@ -5525,9 +5577,6 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
     if (!safety.ok) return;
 
-    const strikePrice = Number(signal.strike);
-
-    const activePositions = readActivePositions();
     const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
     const currentCount = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length;
     console.log(`[Trace] 03 Exposure Check: ${currentCount}/${assetLimit} positions active for ${signal.asset}`);
@@ -5536,6 +5585,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     if (amountUsd < orderSizeMinUsd) {
       console.log(`[Trace] 04 Amount Below Min: ${amountUsd.toFixed(2)} < ${orderSizeMinUsd}`);
       logSignalInRangeButNoOrder('ws', 'amount_below_min', signal, { amountUsd, balance });
+      recordSignalAudit(signal, 'SKIPPED_AMOUNT_MIN', { amountUsd, orderSizeMinUsd });
       return;
     }
 
@@ -5555,6 +5605,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
       recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
+      recordSignalAudit(signal, 'SKIPPED_STRIKE_MISSING', { asset, strike: signal.strike });
       return;
     }
     
@@ -5566,12 +5617,14 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
     if (vwapPrice > 0.98) {
       recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset });
+      recordSignalAudit(signal, 'SKIPPED_PRICE_PROTECTION', { vwapPrice });
       return;
     }
 
     // v9.3.2 : SÃ©curitÃ© ProfitabilitÃ© Maker (v14.1 : 0.2% net minimum)
     if (netEdge < 0.002) {
       recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.002 });
+      recordSignalAudit(signal, 'SKIPPED_EDGE_MIN', { netEdge });
       return;
     }
 
@@ -5591,6 +5644,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
           adjThreshold: (adjustedThreshold != null ? Number(adjustedThreshold.toFixed(4)) : 0)
       });
       recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
+      recordSignalAudit(signal, 'SKIPPED_EDGE_THRESHOLD', { netEdge, threshold: adjustedThreshold });
       return;
     }
 
@@ -5650,6 +5704,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         amountUsd: Math.round(amountUsd * 100) / 100,
         error: String(result?.error || '').slice(0, 240),
       });
+      recordSignalAudit(signal, 'FAILED_ORDER', { error: String(result?.error || '').slice(0, 240) });
       logJson('error', `Erreur ordre ${source.toUpperCase()}`, { takeSide: signal.takeSide, error: result.error });
       console.error(`[${time}] [${source.toUpperCase()}] Erreur ${signal.takeSide}: ${result.error}`);
     }
@@ -5973,20 +6028,13 @@ async function run() {
 
       if (hasEvent && slug) {
         const state = getAssetState(asset);
+        
+        // v10.7 : Référence Pyth pour le momentum
         if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
            const curPyth = perpState.get('BTC').pyth;
            state.pythRefPrice = curPyth;
            state.pythRefAtMs = Date.now();
-           console.log(`[${asset}] 🏁 Slot Open detected: ${slug}. Binance Base 0 anchored at ${curPyth}.`);
-
-           const strikeData = await captureStrikeAtSlotOpen(asset, slug);
-           state.currentSlotStrike = strikeData;
-           
-           // v10.7 : Archiver le strike pour le signal-engine (Indispensable pour le trading réel)
-           if (strikeData && strikeData.price && Number.isFinite(strikeData.price)) {
-             saveStrike(asset, strikeData.price);
-             console.log(`[${asset}] 🏁 Momentum base established: $${strikeData.price}`);
-           }
+           console.log(`[${asset}] 📊 Slot tracking updated for ${slug}. Momentum anchor set.`);
         }
         
         // v10.5 : Robustesse - Si l'ancrage initial a échoué (curPyth null), on réessaie ou on fetch l'historique
@@ -6138,21 +6186,20 @@ function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, vo
   const state = getAssetState(asset);
   const secondsRemaining = Math.max(1, timeToExpirySec);
 
-  // v10.6 : Modèle Momentum Log-Normal de Juste Valeur
-  if (state.pythRefPrice && Number.isFinite(state.pythRefPrice)) {
-    // 1. Calcul du Delta % par rapport à l'ancrage T-zéro
-    const deltaPct = (currentPrice / state.pythRefPrice) - 1;
+  // v2026 : Modèle de Juste Valeur par rapport au STRIKE (P(S_T > K))
+  if (strikePrice && Number.isFinite(strikePrice)) {
+    // 1. Calcul du Delta % par rapport au STRIKE
+    const deltaPct = (currentPrice / strikePrice) - 1;
     
     // 2. Récupération de la Volatilité (Annualisée)
     let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
     if (!volOverwrite) {
-      const parkinson = (dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : 0;
+      const parkinson = (typeof dailyHigh24h !== 'undefined' && dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : 0;
       const realized = Number(state.vol) || 0;
       vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
     }
 
     // 3. Modèle CDF Normal : P(S_T > K)
-    // d = (Distance en %) / (Volatilité sur le temps restant)
     const timeInYears = secondsRemaining / (365 * 24 * 3600);
     const volRemaining = vol * Math.sqrt(timeInYears);
     
@@ -6172,7 +6219,7 @@ function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, vo
 }
 
 /**
- * Calcule la Volatilité Parkinson (24h) basée sur le High/Low de Binance.
+ * Calcule la Volatilité Parkinson (24h) basée sur le High/Low de référence (Oracle/External).
  * Plus robuste qu'une simple constante car s'adapte à la peur du marché.
  */
 function calculateParkinsonVol(high, low) {
@@ -6433,10 +6480,11 @@ function extractStrikeFromQuestion(question) {
 
   if (candidates.length === 0) return null;
   
-  // 2. Choisir le candidat le plus proche du prix actuel du BTC (Validation Heuristique)
-  if (binanceBtcPrice > 0) {
+  // 2. Choisir le candidat le plus proche du prix actuel du BTC (Validation Heuristique via Pyth Oracle)
+  const pythBtcPrice = perpState.get('BTC')?.pyth || 0;
+  if (pythBtcPrice > 0) {
     return candidates.reduce((prev, curr) => 
-      Math.abs(curr - binanceBtcPrice) < Math.abs(prev - binanceBtcPrice) ? curr : prev
+      Math.abs(curr - pythBtcPrice) < Math.abs(prev - pythBtcPrice) ? curr : prev
     );
   }
   
@@ -6590,6 +6638,28 @@ async function main() {
   setInterval(backupStateFiles, backupConfig.intervalMs);
   console.log(`[Resilience] 🛡️ Service de Backup activé (${backupConfig.intervalMs / 1000}s).`);
   console.log('[Resilience] 🛡️ Handlers SIGTERM/SIGINT enregistrés.');
+
+  if (wallet) {
+    console.log('[Startup] 🔐 Vérification des identifiants Polymarket (Real Signer)...');
+    try {
+      const client = await buildClobClientCachedCreds();
+      console.log('[Startup] ✅ Identifiants Polymarket validés avec succès.');
+      
+      // Récupération du solde USDC réel (v2026 : Feedback Précision)
+      const realBalance = await getUsdcSpendableViaClob(client);
+      if (realBalance != null) {
+        console.log(`[Startup] 💰 Solde USDC Réel détecté : $${realBalance.toFixed(2)}`);
+      } else {
+        console.warn('[Startup] ⚠️ Impossible de récupérer le solde USDC (CLOB Timeout?).');
+      }
+    } catch (e) {
+      console.error('[Startup] ❌ ÉCHEC VALIDATION RÉELLE :', e.message);
+      if (!IS_SIMULATION) {
+         console.error('[Startup] Arrêt critique : Identifiants invalides en mode RÉEL.');
+         process.exit(1);
+      }
+    }
+  }
   for (;;) {
     try {
       lastHeartbeatMs = Date.now(); // Mise à jour watchdog

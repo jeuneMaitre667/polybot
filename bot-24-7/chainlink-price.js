@@ -107,16 +107,53 @@ export async function getChainlinkBtcPrice() {
   return getChainlinkPrice('BTC');
 }
 
-export async function captureStrikeAtSlotOpen(asset, slotSlug, maxRetries = 3) {
+/**
+ * captureStrikeAtSlotOpen(asset, slotSlug, targetTimestampMs, maxRetries)
+ * v7.0.0 : Chasse le prix Chainlink officiel.
+ * On attend que l'oracle publie un prix dont l'updatedAt est >= au début théorique du slot.
+ */
+export async function captureStrikeAtSlotOpen(asset, slotSlug, targetTimestampMs = 0, maxRetries = 20) {
+  console.log(`[Strike] Lancement capture pour ${asset} (Cible: ${new Date(targetTimestampMs).toISOString()})`);
+  
   for (let i = 0; i < maxRetries; i++) {
     const result = await getChainlinkPrice(asset);
-    if (result.price != null && !result.stale) {
-      console.log(`[Strike] [${asset}] Capturé via ${result.rpcLabel}: $${result.price.toFixed(2)}`);
-      return { price: result.price, slotSlug, asset, capturedAt: new Date().toISOString(), source: 'chainlink_polygon', roundId: result.roundId };
+    
+    // Condition de succès : un prix existe et il est "frais" (mis à jour au début du slot ou après)
+    if (result.price != null && result.updatedAt >= targetTimestampMs) {
+      const precisionMs = result.updatedAt - targetTimestampMs;
+      console.log(`[Strike] [${asset}] ✅ ANCRÉ via ${result.rpcLabel}: $${result.price.toFixed(2)} (Offset: +${precisionMs}ms)`);
+      return { 
+        price: result.price, 
+        slotSlug, 
+        asset, 
+        capturedAt: new Date().toISOString(), 
+        source: 'chainlink_polygon', 
+        updatedAt: result.updatedAt,
+        roundId: result.roundId 
+      };
     }
-    await new Promise(r => setTimeout(r, 1000));
+    
+    // Log de progression tous les 3 essais
+    if (i % 3 === 0) {
+      const currentAge = result.updatedAt ? Math.floor((Date.now() - result.updatedAt) / 1000) : 'N/A';
+      console.log(`[Strike] [${asset}] Attente update oracle... (Dernier: ${currentAge}s ago, attempt ${i+1}/${maxRetries})`);
+    }
+    
+    await new Promise(r => setTimeout(r, 1500)); // Polling toutes les 1.5s
   }
-  return { price: null, slotSlug, asset, capturedAt: new Date().toISOString(), source: 'capture_failed', roundId: null };
+  
+  // Backup: Si on n'a vraiment rien après 30s, on prend la dernière valeur connue
+  console.warn(`[Strike] [${asset}] ⚠️TIMEOUT: Impossible de trouver un prix post-ouverture. Utilisation du fallback.`);
+  const fallback = await getChainlinkPrice(asset);
+  return { 
+    price: fallback.price, 
+    slotSlug, 
+    asset, 
+    capturedAt: new Date().toISOString(), 
+    source: 'chainlink_fallback', 
+    updatedAt: fallback.updatedAt,
+    roundId: fallback.roundId 
+  };
 }
 
 export function getChainlinkHealthStats(asset = 'BTC') {
