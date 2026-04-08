@@ -48,7 +48,6 @@ import {
   FEE_SAFETY_BUFFER,
   ENTRY_WINDOW,
   STATE_BACKUP_CONFIG,
-  POLYMARKET_TAKER_FEE,
   EXPECTED_SLIPPAGE,
   MAX_DAILY_DRAWDOWN_PCT,
   MAX_ALLOWED_LAG_MS,
@@ -1073,7 +1072,7 @@ function applyMaxStakeUsd(amountUsd) {
   return Math.min(x, maxStakeUsd);
 }
 /** Ordre au marché par défaut (exécution immédiate, latence min). USE_MARKET_ORDER=false pour ordre limite. */
-const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
+const useMarketOrder = ORDER_EXECUTION_TYPE === 'MARKET';
 /**
  * Si FAK ne remplit qu’une partie du stake, ré-envoyer uniquement le reliquat (même worst price / FAK),
  * avec délai entre envois et plafond de tentatives / fenêtre temps. PARTIAL_FILL_RETRY=false pour désactiver.
@@ -3604,17 +3603,26 @@ async function trySimulationPaperRedeem() {
         continue;
       }
     }
-    let market;
+    // v2026 : Résolution Forcée Paper (30 min)
+    const isExpired = marketEndByCid && marketEndByCid.has(String(cid).trim()) && 
+                    (nowMs > marketEndByCid.get(String(cid).trim()) + (30 * 60 * 1000));
+
+    let market = null;
+    let isClosed = false;
     try {
       market = await simulationTrade.fetchGammaMarketForCondition(cid);
+      isClosed = simulationTrade.isGammaMarketClosed(market);
     } catch (e) {
-      logJson('warn', 'PAPER redeem: Gamma indisponible', {
-        cid: cid.slice(0, 14),
-        err: String(e?.message || e).slice(0, 120),
-      });
-      continue;
+      if (!isExpired) {
+        logJson('warn', 'PAPER redeem: Gamma indisponible', {
+          cid: cid.slice(0, 14),
+          err: String(e?.message || e).slice(0, 120),
+        });
+        continue;
+      }
     }
-    if (!simulationTrade.isGammaMarketClosed(market)) continue;
+    
+    if (!isClosed && !isExpired) continue;
     const winner = simulationTrade.winnerFromGammaMarket(market);
     const takeSide = lastEv.takeSide === 'Up' || lastEv.takeSide === 'Down' ? lastEv.takeSide : null;
     const tokens = Number(lastEv.filledOutcomeTokens);
@@ -3673,14 +3681,38 @@ async function resolveActivePositionsAnalytics() {
 
     // On attend au moins 1 minute après la fin théorique du marché pour éviter les race conditions
     const marketEndMs = pos.marketEndMs ?? pos.endDate;
+    const isSimulation = pos.simulationTrade === true;
+    
+    // v2026 : Sécurité de Résolution Forcée (30 min)
+    const isExpired = marketEndMs && (nowMs > marketEndMs + (30 * 60 * 1000));
+
     if (marketEndMs && nowMs < marketEndMs + 60000) continue;
 
     try {
-      const market = await simulationTrade.fetchGammaMarketForCondition(pos.conditionId);
-      if (!simulationTrade.isGammaMarketClosed(market)) continue;
+      let market = null;
+      let isClosed = false;
 
-      const winner = simulationTrade.winnerFromGammaMarket(market);
-      if (!winner) continue;
+      try {
+        market = await simulationTrade.fetchGammaMarketForCondition(pos.conditionId);
+        isClosed = simulationTrade.isGammaMarketClosed(market);
+      } catch (gammaErr) {
+        // Ignorer l'erreur Gamma si on est en Expired
+      }
+
+      // Si le marché n'est pas clos et qu'on n'est pas en timeout forcé, on attend.
+      if (!isClosed && !isExpired) continue;
+
+      let winner = simulationTrade.winnerFromGammaMarket(market);
+      
+      // Fallback si Gamma ne répond plus pour un vieux marché (Force Resolve)
+      if (!winner && isExpired) {
+          console.warn(`[Analytics] ⚠️ Marché ${pos.eventSlug} introuvable ou non clos après 30m. Résolution forcée par Timeout.`);
+          // On marque comme perdu ou on essaie de deviner ? 
+          // Par sécurité et pour ne pas gonfler artificiellement le PnL, on marque comme 0 (ou perte).
+          winner = 'EXPIRED_UNKNOWN';
+      }
+
+      if (!winner && !isExpired) continue;
 
       const isWin = pos.takeSide === winner;
       // PnL Simplifié : Si Win => Mise * (1/Prix - 1). Si Loss => -Mise.
@@ -3690,6 +3722,7 @@ async function resolveActivePositionsAnalytics() {
       pos.resolved = true;
       pos.payout = Math.round(pnl * 100) / 100;
       pos.winner = winner;
+      pos.forceResolved = isExpired && winner === 'EXPIRED_UNKNOWN';
       changed = true;
 
       // Mise à jour des Stats Journalières pour le Circuit Breaker
@@ -3709,10 +3742,11 @@ async function resolveActivePositionsAnalytics() {
         pnl: pos.payout,
         netGapAtEntry: pos.netGapAtEntry,
         spotAtEntry: pos.spotAtEntry,
-        strike: pos.strike
+        strike: pos.strike,
+        forceResolved: pos.forceResolved
       }) + '\n');
 
-      console.log(`[Analytics 3.0] Position résolue: ${pos.eventSlug} | Résultat: ${isWin ? 'Gagné' : 'Perdu'} | PnL: ${pos.payout} USDC`);
+      console.log(`[Analytics 3.0] Position résolue: ${pos.eventSlug} | Résultat: ${isWin ? 'Gagné' : 'Perdu'} | PnL: ${pos.payout} USDC${pos.forceResolved ? ' (FORCE CLOSE)' : ''}`);
     } catch (err) {
       // Gamma peut être lent ou 404 temporairement
     }
@@ -5381,9 +5415,9 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     const strikePrice = Number(signal.strike);
     const key = getSignalKey(signal);
 
-    // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId)
-    if (activePositions.some(p => p.conditionId === key && !p.resolved)) {
-      console.log(`[Deduplication] 🛡️ Déjà en position sur ${key}. Signal ignoré.`);
+    // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId, strictement)
+    if (activePositions.some(p => p.conditionId === key)) {
+      console.log(`[Deduplication] 🛡️ Créneau ${key} déjà traité (Un seul trade par slot). Signal ignoré.`);
       recordSkipReason('already_in_position', source, { conditionId: key });
       recordSignalAudit(signal, 'SKIPPED_DEDUPLICATION', { conditionId: key });
       return;
@@ -5563,6 +5597,14 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
     if (!safety.ok) return;
 
+    // v2026 : Verrouillage par cr\u00e9neau (One trade per slot)
+    const alreadyTradedSlot = activePositions.some(p => (p.eventSlug === (signal.slug || signal.eventSlug)) || p.conditionId === key);
+    if (alreadyTradedSlot) {
+      console.log(`[Sniper] \u26a0\ufe0f Cr\u00e9neau d\u00e9j\u00e0 trait\u00e9 (${signal.slug || signal.eventSlug}). Rejet de la r\u00e9-entr\u00e9e.`);
+      recordSignalAudit(signal, 'SKIPPED_ALREADY_TRADED_SLOT', { slug: signal.slug || signal.eventSlug });
+      return;
+    }
+
     const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
     const currentCount = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length;
     console.log(`[Trace] 03 Exposure Check: ${currentCount}/${assetLimit} positions active for ${signal.asset}`);
@@ -5652,6 +5694,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
         at: time,
         asset: signal.asset || 'BTC',
         underlying: signal.asset || 'BTC',
+        eventSlug: signal.slug || signal.eventSlug,
         takeSide: signal.takeSide,
         amountUsd,
         conditionId: key,
@@ -6299,7 +6342,8 @@ function getEffectivePriceFromLevels(levels, stakeUsdc = DEFAULT_STAKE_USDC) {
  */
 function calculatePolymarketTakerFee(price) {
   if (!price || price <= 0 || price >= 1) return 0;
-  // Blindage 2026 : Courbe parabolique (Rate * (1 - P)) avec 5% de marge.
+  // Blindage 2026 : Formule officielle 0.072 * p * (1-p)
+  // En pourcentage du stake investi (p), cela revient à 0.072 * (1 - p).
   const basePct = POLYMARKET_FEE_RATE * (1 - price);
   return basePct * FEE_SAFETY_BUFFER;
 }

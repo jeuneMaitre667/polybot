@@ -27,16 +27,15 @@ export const SIGNAL_MIN_DWELL_MS = Number(process.env.SIGNAL_MIN_DWELL_MS) || 50
 // Math & Strategy
 export const SKEW_ADJUSTMENT = Number(process.env.SKEW_ADJUSTMENT) || -0.03;
 export const SIGNAL_GAP_THRESHOLD = Number(process.env.SIGNAL_GAP_THRESHOLD) || 0.005; // v9.3.6: 0.5% Maker Gap
-export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
+export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'MARKET';
 export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
 
 // v7.3.0 Inventory Skewing
 export const INVENTORY_CAP = Number(process.env.INVENTORY_CAP) || 1000; // tokens max par actif
 export const SKEW_REDUCTION_OFFSET = Number(process.env.SKEW_REDUCTION_OFFSET) || 0.005; // -0.5% si surexposé
 export const BTC_ANNUALIZED_VOLATILITY = Number(process.env.BTC_ANNUALIZED_VOLATILITY) || 0.20;
-export const POLYMARKET_FEE_RATE = 0; // v9.3.6: Maker Strategy (Zero Fee)
+export const POLYMARKET_FEE_RATE = 0.072; // v2026: Official Dynamic Fee Rate
 export const DEFAULT_FEE_RATE_BPS = 30; // v2026: Standard Taker Fee (30 bps)
-export const POLYMARKET_TAKER_FEE = 0.0030; // 0.30% (v2026 Docs)
 export const EXPECTED_SLIPPAGE = 0.0005;   // 0.05% buffer
 export const FEE_SAFETY_BUFFER = 1.05;
 
