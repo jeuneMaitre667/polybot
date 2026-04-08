@@ -25,5 +25,5 @@ jobs:
           # Node 22 LTS — corrige MISSING_EXPORT avec Vite 8 + Rolldown sur ubuntu-latest.
           node-version: '22'
           cache: npm
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
       - run: npm run build
