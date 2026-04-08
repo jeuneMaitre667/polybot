@@ -16,6 +16,7 @@ export const getStrike = (asset, startTime) => {
         const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
         const key = `${ms}_${cleanAsset}`;
         
+        const strike = data[key];
         if (strike) {
             // Throttling console feedback (v8.1.1 : Quiet mode)
             const now = Date.now();

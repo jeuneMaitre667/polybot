@@ -5409,7 +5409,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     if (signal.strike == null) {
         const start = signal.m?.startDate || signal.startDate;
-        signal.strike = getStrike(asset, start) || lookupBoundaryStrike(asset, start, null, slug);
+        signal.strike = getStrike(asset, start);
     }
     const activePositions = readActivePositions();
     const strikePrice = Number(signal.strike);
