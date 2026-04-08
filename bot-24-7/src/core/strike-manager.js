@@ -16,20 +16,24 @@ export const getStrike = (asset, startTime) => {
         const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
         const key = `${ms}_${cleanAsset}`;
         
-        const strike = data[key];
         if (strike) {
             // Throttling console feedback (v8.1.1 : Quiet mode)
             const now = Date.now();
             const lastLog = getStrike.lastLogTs?.[key] || 0;
-            if (now - lastLog > 120000) { // 2 minutes
+            if (now - lastLog > 300000) { // 5 minutes (plus calme)
                 console.log(`[Strike] [HIT] ${key}: ${strike}`);
                 getStrike.lastLogTs = { ...(getStrike.lastLogTs || {}), [key]: now };
             }
             return strike;
         }
         
-        const availableKeys = Object.keys(data).join(', ');
-        console.warn(`[Strike] [MISS] key="${key}" (startTime=${startTime}). Dispo: [${availableKeys}]`);
+        const now = Date.now();
+        const lastMissLog = getStrike.lastMissLogTs?.[key] || 0;
+        if (now - lastMissLog > 600000) { // 10 minutes pour les MISS
+            const availableKeys = Object.keys(data).slice(-3).join(', ');
+            console.warn(`[Strike] [MISS] key="${key}". Dispo: [...${availableKeys}]`);
+            getStrike.lastMissLogTs = { ...(getStrike.lastMissLogTs || {}), [key]: now };
+        }
         return null;
     } catch (e) {
         console.error('[Strike] Lookup Error:', e.message);

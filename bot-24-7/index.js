@@ -5417,9 +5417,11 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
     // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId, strictement)
     if (activePositions.some(p => p.conditionId === key)) {
-      console.log(`[Deduplication] 🛡️ Créneau ${key} déjà traité (Un seul trade par slot). Signal ignoré.`);
-      recordSkipReason('already_in_position', source, { conditionId: key });
-      recordSignalAudit(signal, 'SKIPPED_DEDUPLICATION', { conditionId: key });
+      if (shouldAuditSlot(key, 'SKIPPED_DEDUPLICATION')) {
+        console.log(`[Deduplication] 🛡️ Créneau ${key} déjà traité (Un seul trade par slot). Signal ignoré.`);
+        recordSkipReason('already_in_position', source, { conditionId: key });
+        recordSignalAudit(signal, 'SKIPPED_DEDUPLICATION', { conditionId: key });
+      }
       return;
     }
 
@@ -5450,9 +5452,11 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
 
       // 1. Magnitude Check (0.1% Minimum)
       if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
-        console.log(`[${asset}] 🚫 Momentum Delta insuffisant : ${(deltaPct * 100).toFixed(3)}% < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%. Signal ignoré.`);
-        recordSkipReason('momentum_insufficient', source, { deltaPct, min: ENTRY_WINDOW.minDeltaPct, strike: strikePrice, spot: spotPrice });
-        recordSignalAudit(signal, 'SKIPPED_MOMENTUM', { deltaPct, strike: strikePrice, spot: spotPrice });
+        if (shouldAuditSlot(key, 'SKIPPED_MOMENTUM')) {
+            console.log(`[${asset}] 🚫 Momentum Delta insuffisant : ${(deltaPct * 100).toFixed(3)}% < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%. Signal ignoré.`);
+            recordSkipReason('momentum_insufficient', source, { deltaPct, min: ENTRY_WINDOW.minDeltaPct, strike: strikePrice, spot: spotPrice });
+            recordSignalAudit(signal, 'SKIPPED_MOMENTUM', { deltaPct, strike: strikePrice, spot: spotPrice });
+        }
         return;
       }
 
@@ -5462,9 +5466,11 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
       const isDirectionalMatch = (isUp && deltaPct > 0) || (isDown && deltaPct < 0);
 
       if (!isDirectionalMatch) {
-        console.log(`[${asset}] 🚫 Momentum INVERSE : Signal=${signal.takeSide} mais Delta=${(deltaPct * 100).toFixed(3)}%. Signal ignoré.`);
-        recordSkipReason('direction_mismatch', source, { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
-        recordSignalAudit(signal, 'SKIPPED_DIRECTION_MISMATCH', { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
+        if (shouldAuditSlot(key, 'SKIPPED_DIRECTION_MISMATCH')) {
+            console.log(`[${asset}] 🚫 Momentum INVERSE : Signal=${signal.takeSide} mais Delta=${(deltaPct * 100).toFixed(3)}%. Signal ignoré.`);
+            recordSkipReason('direction_mismatch', source, { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
+            recordSignalAudit(signal, 'SKIPPED_DIRECTION_MISMATCH', { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
+        }
         return;
       }
 
@@ -5571,14 +5577,14 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     // --- LOGIQUE SNIPER 5M BTC (v2026 : Compounding Active) ---
     if (ENABLE_SNIPER_STRATEGY && (signal.asset === 'BTC' || slug.includes('btc-updown-5m'))) {
         if (bestAskLive < SNIPER_PRICE_MIN || bestAskLive > SNIPER_PRICE_MAX) {
-            console.log(`[Sniper] \u26d4 Hors fen\u00eatre de prix : ${bestAskLive.toFixed(2)} (Attendu: ${SNIPER_PRICE_MIN}-${SNIPER_PRICE_MAX})`);
+            console.log(`[Sniper] ⛔ Hors fenêtre de prix : ${bestAskLive.toFixed(2)} (Attendu: ${SNIPER_PRICE_MIN}-${SNIPER_PRICE_MAX})`);
             recordSignalAudit(signal, 'SKIPPED_SNIPER_PRICE', { price: bestAskLive, min: SNIPER_PRICE_MIN, max: SNIPER_PRICE_MAX });
             return;
         }
         
         // Calcul de la mise dynamique basÃ©e sur la balance actuelle
         amountUsd = await getCompoundedSniperStake(balance || 0);
-        console.log(`[Sniper] \ud83c\udfaf Cible Verrouill\u00e9e : Prix=${bestAskLive.toFixed(2)} | Mise Dynamique=${amountUsd} USDC`);
+        console.log(`[Sniper] 🎯 Cible Verrouillée : Prix=${bestAskLive.toFixed(2)} | Mise Dynamique=${amountUsd} USDC`);
     } else if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
         const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
         amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
@@ -5600,7 +5606,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     // v2026 : Verrouillage par cr\u00e9neau (One trade per slot)
     const alreadyTradedSlot = activePositions.some(p => (p.eventSlug === (signal.slug || signal.eventSlug)) || p.conditionId === key);
     if (alreadyTradedSlot) {
-      console.log(`[Sniper] \u26a0\ufe0f Cr\u00e9neau d\u00e9j\u00e0 trait\u00e9 (${signal.slug || signal.eventSlug}). Rejet de la r\u00e9-entr\u00e9e.`);
+      console.log(`[Sniper] ⚠️ Créneau déjà traité (${signal.slug || signal.eventSlug}). Rejet de la ré-entrée.`);
       recordSignalAudit(signal, 'SKIPPED_ALREADY_TRADED_SLOT', { slug: signal.slug || signal.eventSlug });
       return;
     }
@@ -5623,7 +5629,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     // FIX FALLBACK SIMULATION (v14.53) - Bypass 429 Rate Limit
     if (vwapPrice == null && IS_SIMULATION) {
       vwapPrice = bestAskLive || 0.50; // Fallback sur le meilleur prix vu
-      console.log(`[PAPER] \u26a0\ufe0f VWAP failed (429?), using Signal Price as Fallback: ${vwapPrice}`);
+      console.log(`[PAPER] ⚠️ VWAP failed (429?), using Signal Price as Fallback: ${vwapPrice}`);
     }
 
     console.log(`[Trace] 06 VWAP Result: ${vwapPrice}`);
@@ -5752,6 +5758,22 @@ const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
 /** (lastBoundaryMinute moved to top v7.16.14) */
+
+/** v2026 : Mémoire des logs pour éviter le spam (Deduplication / Momentum skips) */
+const lastAuditBySlot = new Map(); // key -> { timestamp, auditType }
+
+function shouldAuditSlot(key, type) {
+    const now = Date.now();
+    const entry = lastAuditBySlot.get(key);
+    if (entry && entry.auditType === type && (now - entry.timestamp < 60000)) return false; // Max once per minute per slot
+    lastAuditBySlot.set(key, { timestamp: now, auditType: type });
+    // Cleanup old keys
+    if (lastAuditBySlot.size > 200) {
+        const oldest = [...lastAuditBySlot.keys()].slice(0, 100);
+        oldest.forEach(k => lastAuditBySlot.delete(k));
+    }
+    return true;
+}
 
 // ——— WebSocket CLOB (temps réel) ———
 const wsState = { tokenToSignal: new Map(), tokenIds: [] };
