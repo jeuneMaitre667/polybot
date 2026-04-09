@@ -65,7 +65,7 @@ import { startStrikeWorker } from './strike-worker.js';
 const ENABLE_SNIPER_STRATEGY = true;
 const SNIPER_WINDOW_START_S = 60;  // t-60s (Assoupli pour collecter plus de données)
 const SNIPER_WINDOW_END_S = 20;    // t-20s
-const SNIPER_PRICE_MIN = 0.87;     // 87 cents (Assoupli pour plus d'opportunités)
+const SNIPER_PRICE_MIN = 0.87;     // 87 cents (Retour au seuil original)
 const SNIPER_PRICE_MAX = 0.97;     // 97 cents
 const SNIPER_STAKE = 10;           // 10 USDC
 
@@ -2320,15 +2320,15 @@ async function fetchRewardsUserPercentages(clobClient) {
 }
 
 async function checkAndCancelStaleOrders(clobClient) {
-  console.log(`[CrashAudit] typeof clobClient: ${typeof clobClient} | isNull: ${clobClient === null} | isUndefined: ${clobClient === undefined}`);
+  //console.log(`[CrashAudit] typeof clobClient: ${typeof clobClient} | isNull: ${clobClient === null} | isUndefined: ${clobClient === undefined}`);
   if (!clobClient) {
-      console.warn('[CrashAudit] REJECTED: clobClient is falsy');
+      //console.warn('[CrashAudit] REJECTED: clobClient is falsy');
       return;
   }
   // v7.4.0: Detect Fills via SDK comparison
   let activeOrderIds = new Set();
   try {
-    console.log(`[CrashAudit] Calling getOpenOrders with current state...`);
+    //console.log(`[CrashAudit] Calling getOpenOrders with current state...`);
     const res = await clobClient.getOpenOrders();
     const openClobOrders = Array.isArray(res) ? res : (res?.data || []);
     activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
@@ -5433,7 +5433,7 @@ async function tryPlaceOrderForSignal(signal, source = 'ws') {
     };
 
     if (signal.strike == null) {
-        const start = signal.m?.startDate || signal.startDate;
+        const start = signal.m?.startDate || signal.startDate || (signal.slug && signal.slug.includes('-') ? signal.slug.split('-').pop() * 1000 : null);
         signal.strike = getStrike(asset, start);
         
         // v2026 : Late Catch Fallback (Si restart en milieu de créneau)
@@ -6067,7 +6067,7 @@ async function run() {
     try {
       if (wallet?.provider) {
         currentBlock = await wallet.provider.getBlockNumber();
-        logJson('debug', 'RPC: Diagnostic Check', { currentBlock });
+        //logJson('debug', 'RPC: Diagnostic Check', { currentBlock });
       }
     } catch (e) {
       logJson('error', 'RPC: Connection Failure', { error: e.message });

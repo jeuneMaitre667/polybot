@@ -39,17 +39,22 @@ export default function App() {
   }, []);
 
   return (
-    <div className="layout app-root bg-black min-h-screen">
-      <header className="pm-header sticky top-0 z-50 backdrop-blur-md bg-black/60 border-b border-white/5">
-        <div className="logo">
-          <div className="logo-mark bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.4)]">PM</div>
+    <div className="layout app-root bg-[#030712] min-h-screen">
+      <header className="pm-header sticky top-0 z-50 backdrop-blur-xl bg-black/40 border-b border-white/5 px-8">
+        <div className="logo py-2">
+          <img 
+            src="/polymarket-assets/logos/logo-blue-full.svg" 
+            alt="Polymarket" 
+            className="h-8 w-auto hover:opacity-80 transition-opacity"
+          />
+          <div className="h-4 w-[1px] bg-white/10 mx-2" />
           <div>
-            <div className="logo-text">Polymarket Sniper</div>
-            <div className="logo-sub text-indigo-400 font-bold uppercase tracking-widest text-[8px]">BTC 5m Console</div>
+            <div className="logo-text text-sm font-bold tracking-tight text-white/90">Sniper Console</div>
+            <div className="logo-sub text-blue-500 font-black uppercase tracking-[0.2em] text-[7px]">High Frequency BTC 5m</div>
           </div>
         </div>
         <div className="header-right">
-          <div className="timestamp font-mono text-white/40">{clock}</div>
+          <div className="timestamp font-mono text-[10px] text-white/30 bg-white/5 px-3 py-1 rounded-full border border-white/5">{clock}</div>
         </div>
       </header>
 

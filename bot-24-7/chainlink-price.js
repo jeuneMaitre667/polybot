@@ -95,6 +95,9 @@ export async function getChainlinkPrice(asset = 'BTC') {
     // v7.16.57 : Seuil de fraîcheur réduit à 60s (Demande utilisateur pour éviter strike décalé)
     return { ...result, stale: result.ageSec > 60 };
   } catch (err) {
+    if (err.errors) {
+      console.warn(`[Chainlink] [${cleanAsset}] RPC Errors detail:`, err.errors.map(e => e.message));
+    }
     console.warn(`[Chainlink] [${cleanAsset}] Tous les RPC ont échoué ou prix invalide ! tentative de récupération depuis le cache.`);
     if (cache.price != null) return { ...cache, stale: true, source: 'chainlink_stale_cache' };
     return { price: null, updatedAt: null, roundId: null, source: 'chainlink_unavailable', stale: true };
@@ -115,13 +118,17 @@ export async function getChainlinkBtcPrice() {
 export async function captureStrikeAtSlotOpen(asset, slotSlug, targetTimestampMs = 0, maxRetries = 20) {
   console.log(`[Strike] Lancement capture pour ${asset} (Cible: ${new Date(targetTimestampMs).toISOString()})`);
   
+  // Attente de sécurité d'un cycle block (ex: 2.5s) au lieu de 10s, 
+  // pour être juste sur la ligne de départ et capter le prix actif à la seconde exacte.
+  await new Promise(r => setTimeout(r, 2500));
+  
   for (let i = 0; i < maxRetries; i++) {
     const result = await getChainlinkPrice(asset);
     
-    // Condition de succès : un prix existe et il est "frais" (mis à jour au début du slot ou après)
-    if (result.price != null && result.updatedAt >= targetTimestampMs) {
-      const precisionMs = result.updatedAt - targetTimestampMs;
-      console.log(`[Strike] [${asset}] ✅ ANCRÉ via ${result.rpcLabel}: $${result.price.toFixed(2)} (Offset: +${precisionMs}ms)`);
+    // Condition de succès : un prix existe et n'est pas périmé > 2h (protection contre nodes désync)
+    const ageMs = targetTimestampMs - result.updatedAt;
+    if (result.price != null && ageMs < 7200000) {
+      console.log(`[Strike] [${asset}] ✅ ANCRÉ via ${result.rpcLabel}: $${result.price.toFixed(2)} (Différence update/début slot: ${-ageMs}ms)`);
       return { 
         price: result.price, 
         slotSlug, 
@@ -135,8 +142,7 @@ export async function captureStrikeAtSlotOpen(asset, slotSlug, targetTimestampMs
     
     // Log de progression tous les 3 essais
     if (i % 3 === 0) {
-      const currentAge = result.updatedAt ? Math.floor((Date.now() - result.updatedAt) / 1000) : 'N/A';
-      console.log(`[Strike] [${asset}] Attente update oracle... (Dernier: ${currentAge}s ago, attempt ${i+1}/${maxRetries})`);
+      console.log(`[Strike] [${asset}] Attente oracle... (attempt ${i+1}/${maxRetries})`);
     }
     
     await new Promise(r => setTimeout(r, 1500)); // Polling toutes les 1.5s

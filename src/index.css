@@ -5,9 +5,25 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+@font-face {
+  font-family: 'Inter';
+  src: url('/polymarket-assets/fonts/Inter-Polymarket-VariableFont_opsz,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/polymarket-assets/fonts/Inter-Polymarket-Italic-VariableFont_opsz,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: italic;
+}
+
 /* ====== Arbitrage 2.0 Premium Styles ====== */
 .glass-panel {
-  background: rgba(13, 18, 32, 0.7);
+  background: rgba(3, 7, 18, 0.7);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 20px;
@@ -100,7 +116,7 @@
 
 body {
   margin: 0;
-  font-family: 'Syne', sans-serif;
+  font-family: 'Inter', sans-serif;
   background: var(--bg-base);
   color: var(--text-1);
   min-height: 100vh;
@@ -182,7 +198,7 @@ body {
     --sidebar-ring: oklch(0.556 0 0);
   }
   .theme {
-    --font-sans: 'Syne', sans-serif;
+    --font-sans: 'Inter', sans-serif;
   }
   * {
     border-color: var(--border);
@@ -213,11 +229,11 @@ body {
 
 /* ===== Overrides & system variables (dashboard CSS variables) ===== */
 :root {
-  --bg-base: #000000;
-  --bg-card: rgba(10, 15, 30, 0.4);
-  --bg-card2: rgba(20, 25, 45, 0.6);
+  --bg-base: #030712;
+  --bg-card: rgba(15, 23, 42, 0.4);
+  --bg-card2: rgba(30, 41, 59, 0.6);
   --border: rgba(255, 255, 255, 0.05);
-  --border-glow: rgba(79, 70, 229, 0.3);
+  --border-glow: rgba(0, 82, 255, 0.3);
   --green: #10b981;
   --green-dim: #059669;
   --green-muted: rgba(16, 185, 129, 0.08);
@@ -225,10 +241,10 @@ body {
   --amber-muted: rgba(245, 158, 11, 0.08);
   --red: #ef4444;
   --red-muted: rgba(239, 68, 68, 0.08);
-  --blue: #3b82f6;
-  --blue-muted: rgba(59, 130, 246, 0.08);
-  --indigo: #6366f1;
-  --indigo-muted: rgba(99, 102, 241, 0.12);
+  --blue: #0052FF;
+  --blue-muted: rgba(0, 82, 255, 0.08);
+  --indigo: #0052FF;
+  --indigo-muted: rgba(0, 82, 255, 0.12);
   --text-1: #ffffff;
   --text-2: #94a3b8;
   --text-3: #475569;
@@ -260,7 +276,7 @@ body {
 body {
   background: var(--bg-base) !important;
   color: var(--text-1) !important;
-  font-family: 'Syne', sans-serif !important;
+  font-family: 'Inter', sans-serif !important;
 }
 
 /* Noise overlay */
@@ -372,7 +388,7 @@ body::after {
 }
 
 .card-title {
-  font-family: 'Syne', sans-serif;
+  font-family: 'Inter', sans-serif;
   font-size: 17px;
   font-weight: 700;
   line-height: 1.2;
@@ -380,7 +396,7 @@ body::after {
 }
 
 .card-description {
-  font-family: 'Syne', sans-serif;
+  font-family: 'Inter', sans-serif;
   font-size: 13px;
   line-height: 1.55;
   color: var(--text-2);
