@@ -51,7 +51,7 @@ export const getStrike = (asset, startTime) => {
 export const saveStrike = (asset, price, slotOverride = null) => {
     try {
         const data = safeReadJson(STRIKES_FILE);
-        const slot = slotOverride || (Math.floor(Date.now() / 900000) * 900000);
+        const slot = slotOverride || (Math.floor(Date.now() / 300000) * 300000);
         const cleanAsset = asset.trim().toUpperCase();
         const key = `${slot}_${cleanAsset}`;
         
@@ -83,8 +83,6 @@ export const resolveStrikeLate = async (asset, startTime, getChainlinkPrice) => 
     try {
         const result = await getChainlinkPrice(asset);
         if (result.price != null) {
-            // Optionnel : vérifier result.updatedAt pour être sûr qu'on n'est pas trop loin du début du slot
-            // Mais pour un Sniper v2026, la tolérance est de quelques minutes.
             saveStrike(asset, result.price, ms);
             return result.price;
         }
@@ -96,32 +94,39 @@ export const resolveStrikeLate = async (asset, startTime, getChainlinkPrice) => 
 
 /**
  * fetchStrikeFromPolymarket(asset, startTime)
- * v9.0.0 : Direct metadata sync from Gamma API
+ * v10.0.0 : Direct metadata sync with robust retry loop (60s)
  */
 export const fetchStrikeFromPolymarket = async (asset, startTime) => {
-    try {
-        const cleanAsset = asset.trim().toUpperCase();
-        // Normalisation en secondes pour le slug
-        const sec = startTime > 10000000000 ? Math.floor(startTime / 1000) : startTime;
-        const slug = `${cleanAsset.toLowerCase()}-updown-5m-${sec}`;
-        const url = `https://gamma-api.polymarket.com/events/slug/${slug}`;
+    const cleanAsset = asset.trim().toUpperCase();
+    const sec = startTime > 10000000000 ? Math.floor(startTime / 1000) : startTime;
+    const slug = `${cleanAsset.toLowerCase()}-updown-5m-${sec}`;
+    const url = `https://gamma-api.polymarket.com/events/slug/${slug}`;
 
-        console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
-        
-        const response = await axios.get(url, { timeout: 10000 }); // Augmenté à 10s pour être sûr
-        const strike = response.data?.eventMetadata?.priceToBeat;
+    console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
 
-        if (strike != null) {
-            const numericStrike = Number(strike);
-            console.log(`[Strike] [API] ✅ SUCCÈS : Strike extrait = ${numericStrike}`);
-            saveStrike(asset, numericStrike, sec * 1000);
-            return numericStrike;
+    // Retry loop : tenter toutes les 10s pendant 3 minutes (18 tentatives)
+    for (let attempt = 1; attempt <= 18; attempt++) {
+        try {
+            const response = await axios.get(url, { timeout: 10000 });
+            const strike = response.data?.eventMetadata?.priceToBeat;
+
+            if (strike != null) {
+                const numericStrike = Number(strike);
+                console.log(`[Strike] [API] ✅ SUCCÈS (Tentative ${attempt}) : Strike extrait = ${numericStrike}`);
+                saveStrike(asset, numericStrike, sec * 1000);
+                return numericStrike;
+            }
+
+            if (attempt < 18) {
+                console.warn(`[Strike] [API] ⏳ Tentative ${attempt}/18 : Strike non encore publié. Attente 10s...`);
+                await new Promise(r => setTimeout(r, 10000));
+            }
+        } catch (e) {
+            console.warn(`[Strike] [API] ❌ Tentative ${attempt}/18 échouée (${e.message}).`);
+            if (attempt < 18) await new Promise(r => setTimeout(r, 10000));
         }
-
-        console.warn(`[Strike] [API] ⚠️ Champ 'priceToBeat' non trouvé pour ${slug}.`);
-        return null;
-    } catch (e) {
-        console.warn(`[Strike] [API] ❌ Échec récupération (${e.message}).`);
-        return null;
     }
+
+    console.error(`[Strike] [API] 💀 Échec définitif pour ${slug} après 3 minutes.`);
+    return null;
 };

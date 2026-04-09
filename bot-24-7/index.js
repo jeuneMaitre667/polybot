@@ -6616,6 +6616,7 @@ function startRpcSentinel() {
 }
 
 async function main() {
+  startStrikeWorker(); // v2026 : Start High-Precision Strike Sync (API + Chainlink)
   loadOpenOrders(); // v7.1.0 Persistence
   console.log('[System] Initialisation du Bot v13.1 (Market: BTC 5m)...');
   startRpcSentinel();
