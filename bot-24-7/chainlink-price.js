@@ -120,7 +120,7 @@ export async function captureStrikeAtSlotOpen(asset, slotSlug, targetTimestampMs
   
   // Attente de sécurité d'un cycle block (ex: 2.5s) au lieu de 10s, 
   // pour être juste sur la ligne de départ et capter le prix actif à la seconde exacte.
-  await new Promise(r => setTimeout(r, 2500));
+  await new Promise(r => setTimeout(r, 5000));
   
   for (let i = 0; i < maxRetries; i++) {
     const result = await getChainlinkPrice(asset);

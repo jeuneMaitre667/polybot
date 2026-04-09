@@ -19,7 +19,7 @@ function TestWrapper({ children }) {
 describe('App', () => {
   it('renders header with logo', () => {
     render(<App />, { wrapper: TestWrapper });
-    expect(screen.getByText(/Polymarket Sniper/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sniper Console/i)).toBeInTheDocument();
   });
 
   it('renders main sections', () => {
