@@ -1,5 +1,6 @@
 import { atomicWriteJson, safeReadJson } from './persistence-layer.js';
 import path from 'path';
+import axios from 'axios';
 
 const STRIKES_FILE = path.join(process.cwd(), 'boundary-strikes.json');
 
@@ -91,4 +92,36 @@ export const resolveStrikeLate = async (asset, startTime, getChainlinkPrice) => 
         console.error(`[Strike] [LATE-CATCH] Failed: ${e.message}`);
     }
     return null;
+};
+
+/**
+ * fetchStrikeFromPolymarket(asset, startTime)
+ * v9.0.0 : Direct metadata sync from Gamma API
+ */
+export const fetchStrikeFromPolymarket = async (asset, startTime) => {
+    try {
+        const cleanAsset = asset.trim().toUpperCase();
+        // Normalisation en secondes pour le slug
+        const sec = startTime > 10000000000 ? Math.floor(startTime / 1000) : startTime;
+        const slug = `${cleanAsset.toLowerCase()}-updown-5m-${sec}`;
+        const url = `https://gamma-api.polymarket.com/events/slug/${slug}`;
+
+        console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
+        
+        const response = await axios.get(url, { timeout: 10000 }); // Augmenté à 10s pour être sûr
+        const strike = response.data?.eventMetadata?.priceToBeat;
+
+        if (strike != null) {
+            const numericStrike = Number(strike);
+            console.log(`[Strike] [API] ✅ SUCCÈS : Strike extrait = ${numericStrike}`);
+            saveStrike(asset, numericStrike, sec * 1000);
+            return numericStrike;
+        }
+
+        console.warn(`[Strike] [API] ⚠️ Champ 'priceToBeat' non trouvé pour ${slug}.`);
+        return null;
+    } catch (e) {
+        console.warn(`[Strike] [API] ❌ Échec récupération (${e.message}).`);
+        return null;
+    }
 };
