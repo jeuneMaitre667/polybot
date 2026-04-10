@@ -1,17 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '@/hooks/useBotStatus.js';
-import { cn } from '@/lib/utils';
 
-function uptimeStrFrom(uptimeMs) {
-  if (uptimeMs == null) return null;
-  const s = Math.floor(uptimeMs / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h) return `${h}h ${m % 60}min`;
-  if (m) return `${m} min`;
-  return `${s} s`;
-}
+
+
 
 /** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir. Optionnel : statusUrl + label (ex. "15m"). */
 export function BotStatusBadge({ statusUrl: statusUrlProp, label, refreshIntervalMs = 2000 }) {
@@ -51,7 +43,6 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label, refreshInterva
     : data?.timestamp
       ? now - Number(data.timestamp)
       : null;
-  const uptimeStr = uptimeStrFrom(uptimeMs);
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
   const isWsOnline = data?.wsConnected === true;
