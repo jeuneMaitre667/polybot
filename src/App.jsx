@@ -4,7 +4,6 @@ import { BotStatusBadge } from './components/BotStatus';
 import {
   DEFAULT_BOT_STATUS_URL,
   DEFAULT_BOT_STATUS_URL_15M,
-  areBotStatusUrlsDuplicate,
 } from './hooks/useBotStatus.js';
 
 /** Ancienne page backtest retirée — évite un hash mort dans la barre d’adresse (favoris / onglet). */
