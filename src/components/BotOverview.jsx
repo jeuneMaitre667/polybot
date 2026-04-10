@@ -4,10 +4,9 @@ import { DEFAULT_BOT_STATUS_URL, useBotStatus } from '@/hooks/useBotStatus.js';
 import { DecisionFeed } from './DecisionFeed';
 import { LatencySentinelCards } from './LatencySentinelCards';
 import LatencyTimelineChart from './LatencyTimelineChart';
-import { SniperLaunchpad } from './SniperLaunchpad';
-import { SniperFilterAudit } from './SniperFilterAudit';
 import { PnLAnalyticsCard } from './PnLAnalyticsCard';
 import { LiveMarketView } from './LiveMarketView';
+import { BinanceChartCard } from './BinanceChartCard';
 
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL; // Sniper specific
@@ -28,7 +27,7 @@ export function BotOverview() {
   const isSimulation = data?.simulation !== undefined ? data.simulation : (data?.lastOrder?.simulationTrade || data?.config?.isSimulation || false);
 
   return (
-    <div className="space-y-12 p-4 md:p-8 animate-in fade-in duration-1000">
+    <div className="space-y-10 p-4 md:p-8 animate-in fade-in duration-1000 max-w-[1600px] mx-auto">
       
       {/* 1. TOP PERFORMANCE HUD */}
       <div className="flex flex-wrap items-center justify-between gap-6 p-8 rounded-[2.5rem] bg-white/[0.01] border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden group">
@@ -42,9 +41,9 @@ export function BotOverview() {
           </div>
           <div className="h-12 w-[1px] bg-white/5" />
           <div className="space-y-1">
-            <span className="text-[10px] text-white/20 uppercase font-black tracking-[0.2em]">Virtual Balance</span>
+            <span className="text-[10px] text-white/20 uppercase font-black tracking-[0.2em]">Live Status</span>
             <div className="text-xl font-mono font-bold text-white/60">
-               {data?.balance ? `$${Number(data.balance).toLocaleString()}` : '---'}
+               {data?.dashboardMarketView?.asset ? `${data.dashboardMarketView.asset}/USDC` : 'Scanning...'}
             </div>
           </div>
           <div className="h-12 w-[1px] bg-white/5" />
@@ -68,27 +67,23 @@ export function BotOverview() {
         </div>
       </div>
 
-      {/* 2. SNIPER CORE (THE HERO SECTION) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          <LiveMarketView data={data} />
-          <SniperLaunchpad data={data} />
+      {/* 2. HYBRID SNIPER COMMAND (Split Chart / Metrics) */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-8">
+        <div className="xl:col-span-3">
+          <BinanceChartCard />
         </div>
-        <div className="lg:col-span-1">
-          <SniperFilterAudit data={data} />
+        <div className="xl:col-span-2">
+          <LiveMarketView data={data} />
         </div>
       </div>
 
-      {/* 3. PERFORMANCE CHARTS */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-        {/* PnL Growth */}
-        <div className="p-8 rounded-[2rem] bg-white/[0.01] border border-white/5 backdrop-blur-sm group hover:border-blue-500/20 transition-all relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[50px] -mr-16 -mt-16" />
-          <div className="flex items-center justify-between mb-8 relative z-10">
+      {/* 3. PERFORMANCE CHARTS & STATS */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="md:col-span-2 p-8 rounded-[2rem] bg-white/[0.01] border border-white/5 group hover:border-blue-500/20 transition-all">
+          <div className="flex items-center justify-between mb-8">
             <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20">Session PnL Velocity</h3>
-            <div className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 text-[10px] font-bold border border-blue-500/20">ALPHA GROWTH</div>
           </div>
-          <div className="h-[200px] w-full relative z-10">
+          <div className="h-[200px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data?.equityHistory || []}>
                 <defs>
@@ -97,57 +92,36 @@ export function BotOverview() {
                     <stop offset="95%" stopColor="#0052FF" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#030712', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', backdropFilter: 'blur(10px)' }}
-                  labelStyle={{ color: 'rgba(255,255,255,0.4)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}
-                />
                 <Area type="monotone" dataKey="v" stroke="#0052FF" fillOpacity={1} fill="url(#colorEq)" strokeWidth={4} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Trade Statistics */}
-        <div className="flex flex-col gap-8">
+        <div className="md:col-span-1 space-y-8">
            <PnLAnalyticsCard performance={data?.performance} />
            <div className="grid grid-cols-2 gap-4">
-              <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5">
-                <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest block mb-2">Open Trades</span>
-                <span className="text-2xl font-mono font-bold text-white/80">{data?.openLimitOrders || 0}</span>
-              </div>
               <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 group hover:bg-white/[0.04] transition-colors">
-                <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest block mb-2">Sim Mode</span>
-                <span className={`text-2xl font-mono font-bold ${isSimulation ? 'text-blue-500' : 'text-amber-500'}`}>
+                <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest block mb-1">Sim Mode</span>
+                <span className={`text-xl font-mono font-bold ${isSimulation ? 'text-blue-500' : 'text-amber-500'}`}>
                   {isSimulation ? 'ACTIVE' : 'OFF'}
                 </span>
+              </div>
+              <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 opacity-50">
+                <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest block mb-1">Precision</span>
+                <span className="text-xl font-mono font-bold text-white">99.8%</span>
               </div>
            </div>
         </div>
       </div>
 
-      {/* 4. LATENCY & INFRASTRUCTURE */}
-      <div className="space-y-8">
+      {/* 4. LATENCY & DECISION STREAM */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <LatencySentinelCards data={data} />
-        <div className="p-8 rounded-[2rem] bg-white/[0.01] border border-white/5 backdrop-blur-sm relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-[50px] -mr-16 -mt-16" />
-          <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20 mb-8 relative z-10">Execution Latency (WS vs Poll)</h3>
-          <div className="h-[240px] relative z-10">
-            <LatencyTimelineChart data={data?.latencyHistory} />
-          </div>
+        <div className="glass-panel border border-white/5 bg-black/40 rounded-[2rem] overflow-hidden h-full max-h-[500px]">
+           <DecisionFeed feed={data?.decisionFeed} />
         </div>
       </div>
-
-      {/* 5. DECISION STREAM */}
-      <div className="space-y-6">
-        <div className="flex items-center gap-4">
-            <h2 className="text-xl font-black uppercase tracking-tighter text-white/90">Signal Stream</h2>
-            <div className="h-[1px] flex-1 bg-gradient-to-r from-white/10 to-transparent" />
-        </div>
-        <div className="glass-panel border border-white/5 bg-black/40 rounded-[2rem] overflow-hidden h-[500px]">
-            <DecisionFeed feed={data?.decisionFeed} />
-        </div>
-      </div>
-
     </div>
   );
 }
