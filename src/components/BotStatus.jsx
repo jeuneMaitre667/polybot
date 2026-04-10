@@ -9,15 +9,10 @@ import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from
 export function BotStatusBadge({ statusUrl: statusUrlProp, label, refreshIntervalMs = 2000 }) {
   const statusUrl = statusUrlProp ?? DEFAULT_BOT_STATUS_URL;
   const { data, loading, error, refresh } = useBotStatus(statusUrl, refreshIntervalMs);
-  const [now, setNow] = useState(() => Date.now());
   const wasOnlineRef = useRef(false);
   const hadWsAlertRef = useRef(false);
 
-  useEffect(() => {
-    if (data?.status !== 'online') return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [data?.status]);
+
 
   useEffect(() => {
     const isOnline = data?.status === 'online';
