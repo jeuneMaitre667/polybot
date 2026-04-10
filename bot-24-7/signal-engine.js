@@ -60,25 +60,32 @@ export async function fetchSignals(asset, context = {}) {
             // Note: m.groupItemTitle contient souvent "Yes" ou "No"
             const takeSide = m.groupItemTitle || "Yes";
             
-            // v5.4.1: Handle clobTokenIds (plural array) for 5m markets
-            let tokenIdToBuy = m.clobTokenId;
-            if (!tokenIdToBuy && m.clobTokenIds) {
+            // v5.4.1: Handle clobTokenIds (Yes/No pair) for 5m markets
+            let tokenIdYes = null;
+            let tokenIdNo = null;
+            
+            if (m.clobTokenIds) {
                 try {
                     const ids = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-                    if (Array.isArray(ids) && ids.length > 0) tokenIdToBuy = ids[0];
-                } catch (e) {
-                    // fallback to conditionId
-                }
+                    if (Array.isArray(ids)) {
+                        tokenIdYes = ids[0];
+                        tokenIdNo = ids[1] || null;
+                    }
+                } catch (e) {}
             }
-            if (!tokenIdToBuy) tokenIdToBuy = m.conditionId;
+            
+            // Fallback for older market formats
+            if (!tokenIdYes) tokenIdYes = m.clobTokenId || m.conditionId;
 
-            console.log(`[${asset}] Signal detect: ${takeSide} @ ${m.outcomePrices} -> tokenId: ${tokenIdToBuy}`);
+            console.log(`[${asset}] Signal detect: ${takeSide} @ ${m.outcomePrices} -> Yes:${tokenIdYes} | No:${tokenIdNo}`);
 
             return {
                 asset,
                 slug,
                 conditionId: m.conditionId,
-                tokenIdToBuy: tokenIdToBuy,
+                tokenIdToBuy: tokenIdYes, // Maintain backward compatibility
+                tokenIdYes,
+                tokenIdNo,
                 strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), slug) || extractStrikeFromQuestion(m.question || m.groupItemTitle),
                 takeSide,
                 priceUp: yesPrice,

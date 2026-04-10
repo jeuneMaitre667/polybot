@@ -97,21 +97,23 @@ async function reportingLoop() {
         let bestAskUp = 0;
         let bestAskDown = 0;
 
-        // Scan all discovered markets to find BOTH sides
+        // Scan all discovered markets to find BOTH sides using official Yes/No tokens
         for (const sig of allBtcSignals) {
             try {
-                const market = await clobClient.getMarket(sig.tokenIdToBuy).catch(() => null);
-                const ask = market?.best_ask ? parseFloat(market.best_ask) : 0;
-                
-                // Categorize by direction (Slug keyword lookup + Question Context)
-                const question = (market?.question || '').toLowerCase();
-                const isUp = sig.tokenIdToBuy.toLowerCase().includes('u') || question.includes('above');
-                const isDown = sig.tokenIdToBuy.toLowerCase().includes('d') || question.includes('below');
-
-                if (ask > 0) {
-                   if (isUp) bestAskUp = ask;
-                   if (isDown) bestAskDown = ask;
+                // Poll Yes (UP)
+                if (sig.tokenIdYes) {
+                    const mYes = await clobClient.getMarket(sig.tokenIdYes).catch(() => null);
+                    if (mYes?.best_ask) bestAskUp = parseFloat(mYes.best_ask);
                 }
+                
+                // Poll No (DOWN)
+                if (sig.tokenIdNo) {
+                    const mNo = await clobClient.getMarket(sig.tokenIdNo).catch(() => null);
+                    if (mNo?.best_ask) bestAskDown = parseFloat(mNo.best_ask);
+                }
+
+                // If we found any price, we stop searching for this specific asset
+                if (bestAskUp > 0 || bestAskDown > 0) break;
             } catch (e) {}
         }
         
