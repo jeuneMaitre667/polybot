@@ -56,10 +56,12 @@ export function SniperFilterAudit({ data }) {
           <h2 className="text-xs font-bold text-white/60 tracking-tight">ENGINE FILTER AUDIT</h2>
         </div>
         <div className="text-right">
-          <div className={`text-xs font-mono font-black uppercase tracking-[0.2em] ${getStatusColor(status)}`}>
-            {status || 'Standby'}
+          <div className={`text-xs font-mono font-black uppercase tracking-[0.2em] ${getStatusColor(status || 'monitoring')}`}>
+            {status === 'idle' || !status ? 'Monitoring' : status}
           </div>
-          <div className="text-[9px] text-white/20 font-mono mt-2 bg-white/5 px-2 py-0.5 rounded leading-none">{reason || 'Waiting for signal...'}</div>
+          <div className="text-[9px] text-white/40 font-mono mt-2 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded leading-none">
+            {reason || 'Scanning for High Momentum...'}
+          </div>
         </div>
       </div>
 

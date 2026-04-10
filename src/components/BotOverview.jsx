@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { DEFAULT_BOT_STATUS_URL_15M, useBotStatus } from '@/hooks/useBotStatus.js';
+import { DEFAULT_BOT_STATUS_URL, useBotStatus } from '@/hooks/useBotStatus.js';
 import { DecisionFeed } from './DecisionFeed';
 import { LatencySentinelCards } from './LatencySentinelCards';
 import LatencyTimelineChart from './LatencyTimelineChart';
 import { SniperLaunchpad } from './SniperLaunchpad';
 import { SniperFilterAudit } from './SniperFilterAudit';
 import { PnLAnalyticsCard } from './PnLAnalyticsCard';
+import { LiveMarketView } from './LiveMarketView';
 
 export function BotOverview() {
-  const statusUrl = DEFAULT_BOT_STATUS_URL_15M; // Sniper specific
+  const statusUrl = DEFAULT_BOT_STATUS_URL; // Sniper specific
   const { data, loading } = useBotStatus(statusUrl, 2000);
   
   // --- CLOCK & STALENESS ---
@@ -69,7 +70,8 @@ export function BotOverview() {
 
       {/* 2. SNIPER CORE (THE HERO SECTION) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 space-y-8">
+          <LiveMarketView data={data} />
           <SniperLaunchpad data={data} />
         </div>
         <div className="lg:col-span-1">

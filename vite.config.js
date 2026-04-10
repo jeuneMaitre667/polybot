@@ -24,6 +24,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/api/bot-status': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
       '/api/': {
         target: 'https://gamma-api.polymarket.com',
         changeOrigin: true,

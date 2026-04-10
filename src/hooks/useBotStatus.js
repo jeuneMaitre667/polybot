@@ -26,15 +26,15 @@ export function useBotStatus(url, refreshIntervalMs = 15000) {
   const [error, setError] = useState(null);
 
   const fetchStatus = useCallback(async () => {
-    if (!url || !url.startsWith('http')) {
-      setData(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+    // Si l'URL est absente ou relative, on utilise un chemin relatif qui passera par le proxy Vite
+    const baseUrl = (url && url.startsWith('http')) 
+      ? url.replace(/\/$/, '') + '/api/bot-status'
+      : '/api/bot-status';
+    const fetchUrl = `${baseUrl}?t=${Date.now()}`;
+      
     setError(null);
     try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/api/bot-status`, { method: 'GET' });
+      const res = await fetch(fetchUrl, { method: 'GET' });
       if (!res.ok) throw new Error(res.status === 401 ? 'Token invalide' : `HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -48,7 +48,7 @@ export function useBotStatus(url, refreshIntervalMs = 15000) {
 
   useEffect(() => {
     fetchStatus();
-    if (!url || !url.startsWith('http')) {
+    if (!url) {
       setLoading(false);
       return;
     }

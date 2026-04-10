@@ -176,4 +176,5 @@ Arborescence classée et décrite. Fichiers à ne pas committer : `.env`, `*.pem
 - **Lancer le bot en local** : `cd bot-24-7 && npm start`.
 - **Déployer le bot sur Lightsail** : `.\deploy-bot.ps1` ou `.\setup-lightsail-git.ps1` (puis en SSH : `bash ~/bot-24-7/redeploy.sh`).
 - **Mettre à jour le bot sur Lightsail** : en SSH `bash ~/bot-24-7/redeploy.sh` ou `bash ~/bot-24-7/update-and-restart.sh`.
-- **Voir le statut du bot** : dashboard (header) ou `http://IP_LIGHTSAIL:3001/api/bot-status`.
+- **Voir le statut du bot** : dashboard (header) ou `http://localhost:3001/api/bot-status` (via bridge).
+- **Relier le Dashboard au Serveur** : Lancez `npm run bot:connect` localement pour ouvrir le tunnel SSH (Port Forwarding 3001).

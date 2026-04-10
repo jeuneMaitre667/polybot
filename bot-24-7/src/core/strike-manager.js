@@ -130,3 +130,35 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
     console.error(`[Strike] [API] 💀 Échec définitif pour ${slug} après 3 minutes.`);
     return null;
 };
+
+/**
+ * getBinanceStrike(asset, startTime)
+ * v2025 : Récupère le prix d'ouverture Binance.
+ * v2025.1 : Ajout d'un fallback REST pour backfill l'opening si le worker a raté le slot.
+ */
+export const getBinanceStrike = async (asset, startTime) => {
+    try {
+        const filePath = path.join(process.cwd(), 'binance-strikes.json');
+        const data = safeReadJson(filePath);
+        const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
+        
+        if (data && data[asset]) {
+            const match = data[asset].find(p => Math.abs(p.at - ms) < 10000);
+            if (match) return match.price;
+        }
+
+        // --- FALLBACK: Backfill via Binance Klines API ---
+        console.log(`[Strike] [BACKFILL] Fetching ${asset} open price for ${new Date(ms).toISOString()}...`);
+        const symbol = `${asset.trim().toUpperCase()}USDT`;
+        const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`);
+        
+        if (res.data && res.data[0]) {
+            const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
+            console.log(`[Strike] [BACKFILL] Recovered ${asset} Open: ${openPrice}`);
+            return openPrice;
+        }
+    } catch (e) {
+        console.warn('[Strike] Binance Backfill Fail:', e.message);
+    }
+    return null;
+};

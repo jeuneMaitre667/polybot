@@ -59,14 +59,9 @@ export default function App() {
       </header>
 
       <div className="bots-row px-4 py-2 border-b border-white/5 bg-white/[0.01]">
-        {areBotStatusUrlsDuplicate(DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M) ? (
-          <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER NODE" />
-        ) : (
-          <div className="flex gap-4">
-            {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="NODE 1H" />}
-            {DEFAULT_BOT_STATUS_URL_15M && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL_15M} label="SNIPER NODE" />}
-          </div>
-        )}
+        <div className="flex gap-4">
+          {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER 5M" />}
+        </div>
       </div>
 
       <main className="app-main">

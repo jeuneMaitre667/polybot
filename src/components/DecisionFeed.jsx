@@ -30,15 +30,18 @@ export function DecisionFeed({ feed }) {
           const asset = entry.asset || 'BTC';
           
           const formatReason = (reason) => {
-            if (!reason) return 'Unknown Signal';
+            if (!reason) return 'Active Analysis...';
             const mapping = {
               'latency_exceeded': 'Signal Skipped: Network Lag (Stale)',
               'missing_strike_data': 'Analysis Failed: Strike Data Empty',
-              'momentum_insufficient': 'Momentum below Threshold',
+              'momentum_insufficient': 'Momentum below Threshold (<0.1%)',
+              'momentum_inverse': 'Momentum Direction Mismatch',
               'order_placed': 'TRADE EXECUTED',
               'correlation_limit': 'Risk Limit: Correlation High',
+              'already_traded': 'Slot Guard: Already Traded',
+              'strike_not_at_boundary': 'Wait: Strike Boundary Delay'
             };
-            return mapping[reason] || reason.replace(/_/g, ' ');
+            return mapping[reason] || reason.replace(/_/g, ' ').toUpperCase();
           };
 
           return (

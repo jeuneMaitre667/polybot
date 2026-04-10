@@ -4,20 +4,17 @@
  * Étapes :
  * 1. Connexion wallet Polygon (clé privée)
  * 2. Boucle : récupérer les signaux Gamma (prix dans MIN_SIGNAL_P–MAX_SIGNAL_P, défaut 77–78 %)
- * 3. Pour chaque signal : respect des fenêtres « pas de trade » (5m = grille ET) → placer ordre CLOB (marché ou limite)
+ * 3. Pour chaque signal : respect des fenêtres « pas de trade » (15m = quart d’heure ET comme le dashboard ; 1h = 5 min avant fin) → placer ordre CLOB (marché ou limite)
  * 4. Ne pas placer deux fois pour le même créneau (mémorisation par conditionId)
  * 5. Au début de chaque cycle : redeem positions résolues → USDC (EOA ou relayer si proxy/Safe + clés Relayer ou Builder)
  *
  * Usage : npm install && PRIVATE_KEY=0x... npm start
  * Config : .env (voir .env.example)
  */
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '.env') });
 import { ethers } from 'ethers';
 import { encodeFunctionData, zeroHash } from 'viem';
 import { createWalletClient, http } from 'viem';
@@ -26,123 +23,10 @@ import { polygon } from 'viem/chains';
 import { RelayClient, RelayerTxType } from '@polymarket/builder-relayer-client';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
-import { calculateMakerPrice, TICK_SIZE } from './limit-order-utils.js';
-import { WebSocket } from 'ws';
+import WebSocket from 'ws';
 import axios from 'axios';
-import crypto from 'crypto';
-/** Aide Ã  la journalisation : Ã©moji selon la latence (v14.53) */
-function brandEmoji(latencyMs) {
-  if (latencyMs < 150) return '\ud83c\udfce\ufe0f'; // 🏎️
-  if (latencyMs < 350) return '\u26a1';             // ⚡
-  if (latencyMs < 600) return '\ud83d\udc22';         // 🐢
-  return '\ud83d\udc0c';                              // 🐌
-}
-
-import { 
-  BITCOIN_UPDOWN_5M_PREFIX,
-  MARKET_MODE,
-  POLYMARKET_FEE_RATE,
-  SIGNAL_GAP_THRESHOLD,
-  BTC_ANNUALIZED_VOLATILITY,
-  FEE_SAFETY_BUFFER,
-  ENTRY_WINDOW,
-  STATE_BACKUP_CONFIG,
-  EXPECTED_SLIPPAGE,
-  MAX_DAILY_DRAWDOWN_PCT,
-  MAX_ALLOWED_LAG_MS,
-  RPC_PING_INTERVAL_MS,
-  SUPPORTED_ASSETS,
-  PYTH_FEED_IDS,
-  PYTH_HERMES_URL,
-  DEFAULT_FEE_RATE_BPS,
-  STRATEGY_AUDIT_FILE
-} from './config.js';
-
-import { startStrikeWorker } from './strike-worker.js';
-
-// --- MOTEUR SNIPER 5M BTC (Stratégie v2026) ---
-const ENABLE_SNIPER_STRATEGY = true;
-const SNIPER_WINDOW_START_S = 60;  // t-60s (Assoupli pour collecter plus de données)
-const SNIPER_WINDOW_END_S = 20;    // t-20s
-const SNIPER_PRICE_MIN = 0.87;     // 87 cents (Retour au seuil original)
-const SNIPER_PRICE_MAX = 0.97;     // 97 cents
-const SNIPER_STAKE = 10;           // 10 USDC
-
-// --- CONFIG COMPOUNDING (v2026) ---
-const SNIPER_STAKE_START = 10; // Mise de départ
-const SNIPER_STAKE_MIN = 1;   // Pas moins de 1$
-const SNIPER_STAKE_MAX = 100;  // Mise max de sécurité
-
-const SNIPER_COMPOUNDING_FILE = path.join(process.cwd(), 'sniper-compounding.json');
-
-
-// --- v9.6.0 Simulation & Diagnostics ---
-// --- v9.7.0 Real-Trading Recovery & RPC Failover ---
-// --- v9.8.5 High-Stability Simulation Lockdown ---
-export const IS_SIMULATION = true; // SIMULATION FORCED (v9.8.5)
-export const ORDER_EXECUTION_TYPE = process.env.ORDER_EXECUTION_TYPE || 'LIMIT';
-export const LIMIT_ORDER_TTL_MS = Number(process.env.LIMIT_ORDER_TTL_MS) || 30000;
-export const DEEP_ORDER_ENABLED = process.env.DEEP_ORDER_ENABLED !== 'false';
-export const DEEP_ORDER_OFFSET = Number(process.env.DEEP_ORDER_OFFSET) || 0.005; // 0.5% d'écart supplémentaire
-
-// --- Smart Rate Limiter / Cloudflare (Blindage 2026) ---
-const lastRateLimitInfo = { limit: 0, remaining: 0, reset: 0, lastUpdate: 0 };
-let last425ErrorAt = 0;
-function updateRateLimitFromHeaders(headers) {
-  if (!headers) return;
-  const limit = Number(headers['x-ratelimit-limit'] || headers['X-RateLimit-Limit']);
-  const remaining = Number(headers['x-ratelimit-remaining'] || headers['X-RateLimit-Remaining']);
-  const reset = Number(headers['x-ratelimit-reset'] || headers['X-RateLimit-Reset']);
-  
-  if (Number.isFinite(limit)) lastRateLimitInfo.limit = limit;
-  if (Number.isFinite(remaining)) lastRateLimitInfo.remaining = remaining;
-  if (Number.isFinite(reset)) lastRateLimitInfo.reset = reset;
-  lastRateLimitInfo.lastUpdate = Date.now();
-  
-  // Mettre à jour health.json pour le dashboard (Blindage 2026)
-  writeHealth({ lastRateLimitInfo });
-  
-  // Si on approche du seuil critique (20%), on log pour le dashboard.
-  if (limit > 0 && (remaining / limit) < 0.2) {
-    logJson('warn', 'Approche limite Rate-Limit (Cloudflare)', { limit, remaining, reset });
-  }
-}
-
-// Intercepteur global pour tous les appels axios directs (Gamma, etc.)
-axios.interceptors.response.use(
-  (res) => {
-    updateRateLimitFromHeaders(res.headers);
-    return res;
-  },
-  (err) => {
-    if (err.response) {
-      updateRateLimitFromHeaders(err.response.headers);
-      if (err.response.status === 425) {
-        console.warn('[Blindage 2026] ⚠️ 425 Too Early (Matching Engine Restart). Cooldown actif.');
-        last425ErrorAt = Date.now();
-        writeHealth({ last425ErrorAt });
-      }
-    }
-    return Promise.reject(err);
-  }
-);
-
-function checkRateLimitProactive() {
-  const { limit, remaining, lastUpdate } = lastRateLimitInfo;
-  const now = Date.now();
-  
-  // On ne se fie aux données que si elles sont récentes (< 10s)
-  if (now - lastUpdate > 10000) return 0;
-  
-  // Si moins de 20% de quota restant, on ralentit pour éviter la file d'attente Cloudflare.
-  if (limit > 0 && remaining < (limit * 0.2)) {
-    const delay = Math.round(500 + Math.random() * 500); // 500-1000ms de délais volontaire
-    console.warn(`[RateLimit] Seuil 20% atteint (${remaining}/${limit}). Throttling de ${delay}ms pour éviter Latency Bloat.`);
-    return delay;
-  }
-  return 0;
-}
 import {
   sendTelegramAlert,
   telegramTradeAlertsEnabled,
@@ -163,182 +47,25 @@ import {
   getLocalHourMinute,
 } from './middayDigest.js';
 import {
-  getSlotEntryTimingDetail,
-  isSlotEntryTimeForbiddenNow,
+  get15mSlotEntryTimingDetail,
+  is15mSlotEntryTimeForbiddenNow,
   ENTRY_FORBID_FIRST_MIN_RESOLVED,
   ENTRY_FORBID_LAST_MIN_RESOLVED,
-} from './entryTiming.js';
+} from './et15mEntryTiming.js';
 import {
   mergeGammaEventMarketForUpDown,
   getAlignedUpDownGammaPrices,
   getAlignedUpDownTokenIds,
   getTokenIdForSide,
-  ORDER_TYPE_FOK,
-  ORDER_TYPE_GTC,
 } from './gammaUpDownOrder.js';
 import { isInsufficientBalanceOrAllowance, resolveSellAmountFromSpendable } from './stopLossUtils.js';
 import * as simulationTrade from './simulationTrade.js';
-import { captureStrikeAtSlotOpen } from './chainlink-price.js';
-import { fetchSignals, getSignalKey, shouldSkipTradeTiming, lookupBoundaryStrike } from './signal-engine.js';
-import { getStrike, saveStrike } from './src/core/strike-manager.js';
-import { calculateConsensusPrice, getUnifiedFairValue } from './src/core/price-engine.js';
-import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 
 const CLOB_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const WS_RECONNECT_MS = 5000;
 const WS_REFRESH_SUBSCRIPTIONS_MS = 30 * 1000;
-const WS_PING_INTERVAL_MS = 10 * 1000; 
-const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 10; 
-
-// État global des prix Perp par Asset (v2026 : BTC Only)
-const perpState = new Map([
-  ['BTC', { pyth: 0, pythTs: 0 }],
-]);
-
-/** v7.16.26 : Gestion des Strikes intégrée pour une fiabilité absolue */
-// v8.0.0 : Logic moved to src/core/strike-manager.js
-const STRIKES_FILE = path.resolve(process.cwd(), 'boundary-strikes.json');
-
-// v7.16.53 : Check plus fréquent (5s) pour ne rater aucune ouverture de slot
-startStrikeWorker();
-
-const OPEN_LIMIT_ORDERS = new Map(); // { conditionId: { orderId: string, at: number, price: number, asset: string, tokenId: string } }
-const ACTIVE_REDEMPTIONS = new Set();
-let clobClient = null; // v9.2.2 : Global scope fix for background tasks
-let clobCircuitBreaker = { errorCount: 0, lastErrorAt: 0, pausedUntil: 0 };
-const CLOB_CB_THRESHOLD = 3; 
-const CLOB_CB_PAUSE_MS = 300000; // 5 min
-
-/** v12.1 : Circuit Breaker check */
-function isClobPaused() {
-    if (clobCircuitBreaker.pausedUntil > Date.now()) return true;
-    // Auto-reset si la pause est finie
-    if (clobCircuitBreaker.pausedUntil > 0 && Date.now() >= clobCircuitBreaker.pausedUntil) {
-        clobCircuitBreaker.pausedUntil = 0;
-        clobCircuitBreaker.errorCount = 0;
-        console.log('[Resilience] 🛡️ CLOB Circuit Breaker: Safety Pause lift. Service resumed.');
-    }
-    return false;
-}
-
-function recordClobError() {
-    const now = Date.now();
-    // Reset si la dernière erreur date d'il y a plus de 10 min
-    if (now - clobCircuitBreaker.lastErrorAt > 600000) {
-        clobCircuitBreaker.errorCount = 0;
-    }
-    clobCircuitBreaker.errorCount++;
-    clobCircuitBreaker.lastErrorAt = now;
-    
-    if (clobCircuitBreaker.errorCount >= CLOB_CB_THRESHOLD) {
-        clobCircuitBreaker.pausedUntil = now + CLOB_CB_PAUSE_MS;
-        console.warn(`[Resilience] 🚨 CLOB Circuit Breaker: ${clobCircuitBreaker.errorCount} errors detected. PAUSING all trades for 5m.`);
-    }
-}
-let lastRewardsFetch = 0;
-let cachedRewardsData = null;
-let currentCycleStartMs = Date.now(); // v14.2.1 : Suivi global pour le LAG guard
-
-/** Cache global des prix Polymarket (via WS) pour le SL Miroir et l'enrichissement */
-const latestPrices = new Map(); // assetId -> { bestBid, bestAsk }
-const ofiState = new Map(); // assetId -> { prevBidPrice, prevBidSize, ..., ofi }
-// v5.4.2 : État spécifique par actif (BTC Only)
-const assetSpecificState = new Map();
-function getAssetState(asset) {
-  if (!assetSpecificState.has(asset)) {
-    const defaultVol = Number(process.env[`${asset}_ANNUALIZED_VOLATILITY`]) || 0.20;
-    assetSpecificState.set(asset, {
-      vol: defaultVol,
-      priceHistory: [],
-      currentSlotStrike: null,
-      pythRefPrice: null, // v10.1: Base 0 for Momentum
-      pythRefAtMs: null   // v10.1: Timestamp of base
-    });
-  }
-  return assetSpecificState.get(asset);
-}
-
-/** État global du dernier signal sniper pour le Dashboard (Audit) */
-let lastSniperDecision = {
-  at: null,
-  asset: 'BTC',
-  status: 'idle',
-  reason: 'Initialisé',
-  momentumDelta: 0,
-  isDuplicate: false,
-  isStrong: false,
-  isSignMatch: false
-};
-
-/// État global des Strikes par Asset (v2026 : BTC Only)
-const assetStrikes = {
-  BTC: { price: null, slotSlug: null, capturedAt: null, isOfficial: false, lastFetchPrice: null, stableCount: 0 }
-};
-const assetLastSlugs = { BTC: null };
-
-async function fetchPolymarketStrikeOfficial(startTimeIso, endTimeIso, symbol = 'BTC') {
-  try {
-    const url = `https://polymarket.com/api/crypto/crypto-price?symbol=${symbol}&eventStartTime=${startTimeIso}&variant=fifteen&endDate=${endTimeIso}`;
-    const resp = await axios.get(url, { timeout: 5000 });
-    if (resp.data && resp.data.openPrice != null) {
-      return Number(resp.data.openPrice);
-    }
-  } catch (err) {
-    console.warn(`[Strike] Échec capture officielle Polymarket (${startTimeIso}): ${err.message}`);
-  }
-  return null;
-}
-let lastKnownSlotSlug = null; // Pour détecter le changement de slot
-let pythSpotPrice = 0; // Prix Chainlink live (mis à jour à chaque cycle)
-
-
-
-const DEFAULT_STAKE_USDC = 300; 
-
-/** Vérifie si le côté du trade correspond au sens du carnet d'ordres (v5.8.2) */
-function isOfiSideMatch(side, ofiScore) {
-  const s = String(side || '').toLowerCase();
-  const isUp = (s === 'up' || s === 'yes');
-  const isDown = (s === 'down' || s === 'no');
-  return (isUp && ofiScore > 0) || (isDown && ofiScore < 0);
-}
-
-/** Calculateur de multiplicateur de seuil basé sur l'OFI (v6.2.2 : Neutralisé suite à l'Audit Alpha) */
-function getOfiThresholdMultiplier(asset, ofiScore, side) {
-  // Audit v6.2.0 : Accuracy 14-20% (Contrarian). On repasse à 1.0 (Neutre) pour la collecte 48h.
-  return 1.0;
-}
-
-console.log("=== 🛡️ Blindage 2026 v5.3.0 Engine Active ===");
-
-const SKEW_ADJUSTMENT = Number(process.env.SKEW_ADJUSTMENT) || -0.03; // Biais BTC historique
-const MAX_CHAINLINK_AGE_SEC = 8; // Sécurité Stale Chainlink (v5.2.0 : Audit Compliance)
-const POLYMARKET_MAINTENANCE_DAY_UTC = 2; // Mardi
-const POLYMARKET_MAINTENANCE_HOUR_UTC = 11; // 11h UTC = 13h Paris (pendant DST)
-const ORDER_TYPE_SIGNAL = 'FOK'; // Fill-Or-Kill recommandé par la doc
-const USE_KELLY_SIZING = process.env.USE_KELLY_SIZING !== 'false'; // Activé par défaut en 3.0
-const strikeHistoryCacheMap = new Map(); // Cache de Strike par Slug pour le mode 5m
-
-// --- Paramètres Signal Engine 3.0 (Capital Optimization) ---
-const KELLY_FRACTION = Number(process.env.KELLY_FRACTION) || 0.25; // Quarter-Kelly
-const KELLY_MAX_BANKROLL_PCT = Number(process.env.KELLY_MAX_BANKROLL_PCT) || 0.25;
-const ABSOLUTE_MAX_STAKE_USD = Number(process.env.ABSOLUTE_MAX_STAKE_USD) || 200; // Cap absolu (v5.8.0)
-const MAX_CONCURRENT_BTC_EXPOSURE = Number(process.env.MAX_CONCURRENT_BTC_EXPOSURE) || 15;
-// v7.9.1: Per-asset exposure limits (Surgical Calibration)
-const MAX_POSITIONS_PER_ASSET = {
-  'BTC': 15
-};
-const MAX_DAILY_LOSS_USDC = 500; 
-const STRIKE_DRIFT_THRESHOLD = Number(process.env.STRIKE_DRIFT_THRESHOLD) || 0.03; 
-
-// v7.12.0: Inventory Skew Constants
-const INVENTORY_CAP = 500; // parts max avant skew
-const SKEW_REDUCTION_OFFSET = 0.005; // 0.5% de réduction du bid
-
-const TARGET_PROFIT = Number(process.env.TARGET_PROFIT) || 0.05;
-const MAX_LOSS = Number(process.env.MAX_LOSS) || 0.10;
-const EXIT_GAP_THRESHOLD = Number(process.env.EXIT_GAP_THRESHOLD) || 0.01;
-
+const WS_PING_INTERVAL_MS = 10 * 1000; // doc Polymarket : garder la connexion alive
+const WS_DEBOUNCE_MS = Number(process.env.WS_DEBOUNCE_MS) || 300; // évite rafales d'ordres sur même token
 const CREDS_CACHE_TTL_MS = Number(process.env.CREDS_CACHE_TTL_MS) || 6 * 60 * 60 * 1000;
 const ENABLE_HEARTBEAT = process.env.ENABLE_HEARTBEAT === 'true';
 /** Cache de pré-signature : create + sign en avance, seul le POST au moment du trade. TTL 60s. */
@@ -352,16 +79,12 @@ const BALANCE_FILE = path.join(BOT_DIR, 'balance.json');
 const BALANCE_HISTORY_FILE = path.join(BOT_DIR, 'balance-history.json');
 const ORDERS_LOG_FILE = path.join(BOT_DIR, 'orders.log');
 const BOT_JSON_LOG_FILE = path.join(BOT_DIR, 'bot.log');
-const DECISION_LOG_FILE = path.join(BOT_DIR, 'decisions.log');
 const STOP_LOSS_METRICS_FILE = path.join(BOT_DIR, 'stop-loss-metrics.json');
 const LIQUIDITY_HISTORY_FILE = path.join(BOT_DIR, 'liquidity-history.json');
 const TRADE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'trade-latency-history.json');
 const CYCLE_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'cycle-latency-history.json');
 const SIGNAL_DECISION_LATENCY_HISTORY_FILE = path.join(BOT_DIR, 'signal-decision-latency-history.json');
 const HEALTH_FILE = path.join(BOT_DIR, 'health.json');
-const ACTIVE_POSITIONS_FILE = path.join(BOT_DIR, 'active-positions.json');
-const DAILY_STATS_FILE = path.join(BOT_DIR, 'daily-stats.json');
-const ANALYTICS_LOG_FILE = path.join(BOT_DIR, 'analytics.log');
 /** `conditionId` déjà redeemés avec succès (évite de retenter indéfiniment ; remplit le bot au fil des trades). */
 const REDEEMED_CONDITION_IDS_FILE = path.join(BOT_DIR, 'redeemed-condition-ids.json');
 /** État des 3 digests (matin / après-midi / journée) ; migre depuis midday-digest-last.json si besoin. */
@@ -381,46 +104,6 @@ const CYCLE_LATENCY_HISTORY_MAX = 5000;
 const SIGNAL_DECISION_LATENCY_HISTORY_DAYS = 7;
 const SIGNAL_DECISION_LATENCY_HISTORY_MAX = 10000;
 
-// v6.2.0 : Rolling history for dashboard charts
-const wsLatencyHistory = []; 
-const pollLatencyHistory = [];
-const LATENCY_HISTORY_MAX_SAMPLES = 100;
-
-// v6.3.0 : Self-Healing Watchdog
-let lastHeartbeatMs = Date.now();
-const WATCHDOG_STALL_THRESHOLD_MS = 60_000;
-
-function checkHeartbeat() {
-  const delta = Date.now() - lastHeartbeatMs;
-  if (delta > WATCHDOG_STALL_THRESHOLD_MS) {
-    console.error(`[WATCHDOG] 🚨 ENGINE STALL DETECTED! Delta=${Math.round(delta)}ms. Terminating for PM2 restart...`);
-    // On force la sortie pour que PM2 relance proprement
-    process.exit(1);
-  }
-  // v10.1 : Mise à jour régulière du dashboard
-  writeHealth({});
-}
-// Surveillance toutes les 15s
-setInterval(checkHeartbeat, 15_000);
-
-// v6.3.0 : PnL & Performance Cache
-let cachedPerformanceStats = null;
-async function refreshPerformanceStats() {
-  const stats = await calculateSessionStats();
-  if (stats) cachedPerformanceStats = stats;
-}
-// Rafraîchissement toutes les 60s
-setInterval(refreshPerformanceStats, 60_000);
-// Premier appel immédiat
-setTimeout(refreshPerformanceStats, 2000);
-
-function addLatencyHistorySample(type, ms) {
-  if (!Number.isFinite(ms) || ms < 0) return;
-  const target = type === 'ws' ? wsLatencyHistory : pollLatencyHistory;
-  target.push({ t: Date.now(), v: Math.round(ms) });
-  if (target.length > LATENCY_HISTORY_MAX_SAMPLES) target.shift();
-}
-
 // Assure que le fichier existe pour que le dashboard puisse agréger même si aucun trade n'a encore eu lieu.
 function ensureJsonArrayFileExists(filePath) {
   try {
@@ -430,24 +113,8 @@ function ensureJsonArrayFileExists(filePath) {
 ensureJsonArrayFileExists(TRADE_LATENCY_HISTORY_FILE);
 ensureJsonArrayFileExists(REDEEMED_CONDITION_IDS_FILE);
 
-let dailyHigh24h = null;
-let dailyLow24h = null;
-let lastDaily24hFetchAt = 0;
-
-async function refreshDaily24hStats() {
-  if (Date.now() - lastDaily24hFetchAt < 60_000) return;
-  try {
-    const res = await axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
-    if (res.data && res.data.highPrice && res.data.lowPrice) {
-      dailyHigh24h = Number(res.data.highPrice);
-      dailyLow24h = Number(res.data.lowPrice);
-      lastDaily24hFetchAt = Date.now();
-      console.log(`[Quant] 📊 Volatilité 24h (Ref) rafraîchie : High ${dailyHigh24h} | Low ${dailyLow24h}`);
-    }
-  } catch (_) {}
-}
-
-const GAMMA_EVENTS_CACHE_MS = 200; // Débridage HFT v3.6.0
+// Cache Gamma (évite de retaper l'API Gamma deux fois par cycle : fetchSignals + fetchActiveWindows).
+const GAMMA_EVENTS_CACHE_MS = Number(process.env.GAMMA_EVENTS_CACHE_MS) || 4000;
 const gammaEventsCache = new Map(); // cacheKey -> { expiresAt, events, profile }
 /** Fast-path "slot courant" : cache dédié du GET /events/slug (utilisé par fetchSignals). */
 const GAMMA_SLOT_EVENT_CACHE_MS = Math.max(1000, Number(process.env.GAMMA_SLOT_EVENT_CACHE_MS) || 60_000);
@@ -456,9 +123,10 @@ const gammaSlotEventCache = new Map(); // slotSlugLower -> { expiresAt, event }
 
 function computeGammaSlotEventCacheExpiresAt(slotSlugLower, nowMs = Date.now()) {
   const base = nowMs + GAMMA_SLOT_EVENT_CACHE_MS;
-  // 5m mode: invalidate at slot boundary
-  const endMs = slotEndMsFrom5mSlug(slotSlugLower);
+  if (MARKET_MODE !== '15m') return base;
+  const endMs = slotEndMsFrom15mSlug(slotSlugLower);
   if (!Number.isFinite(endMs)) return base;
+  // Invalidation naturelle au changement de créneau + petite marge.
   return Math.min(base, endMs + 5000);
 }
 
@@ -536,171 +204,37 @@ function readLastOrder() {
   }
 }
 
-/** État de santé local en mémoire pour éviter les corruptions de fichier par lecture/réécriture concurrente. */
-let currentHealthState = {
-  wsConnected: false,
-  wsLastConnectedAt: null,
-  wsLastBidAskAt: null,
-  lastOrderAt: null,
-  lastOrderSource: null,
-  at: null,
-};
-
-/** Met à jour health.json (lu par status-server). */
-function writeHealth(updates, extra = {}) {
+/** Met à jour health.json (lu par status-server pour /api/bot-status). Fusionne updates avec l'état existant. */
+function writeHealth(updates) {
   try {
-    // 1. Fusionner avec l'état en mémoire
-    currentHealthState = { 
-      ...currentHealthState, 
-      ...updates, 
-      at: new Date().toISOString() 
+    let state = {
+      wsConnected: false,
+      wsLastChangeAt: null,
+      wsLastConnectedAt: null,
+      wsLastBidAskAt: null,
+      lastOrderAt: null,
+      lastOrderSource: null,
+      geoblockOk: null,
+      killSwitchActive: false,
+      polymarketDegraded: false,
+      degradedReason: null,
+      degradedUntil: null,
+      staleWsData: false,
+      staleWsDataAt: null,
+      executionDelayed: false,
+      executionDelayedAt: null,
+      at: null,
     };
-
-
-    // 2. Enrichir avec les données globales actuelles (v5.6.1)
-    const fullState = {
-      ...currentHealthState,
-      parkinsonVol: (dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : null,
-      perpSources: Object.fromEntries(
-        [...perpState.entries()].map(([k, v]) => [k, { ...v, lastUpdate: v.pythTs || 0 }])
-      ),
-
-      assetStates: Object.fromEntries(
-        [...assetSpecificState.entries()].map(([asset, state]) => [asset, {
-          realizedVol60m: state.vol,
-          currentSlot: state.currentSlotStrike?.slotSlug || null,
-          strike: state.currentSlotStrike?.strike || null,
-          ofiScore: (() => {
-            let total = 0; let count = 0;
-            for (const [tid, o] of ofiState.entries()) {
-              const sig = wsState.tokenToSignal.get(tid);
-              if (sig && sig.asset === asset) {
-                total += (sig.takeSide === 'Up' ? o.ofi : -o.ofi);
-                count++;
-              }
-            }
-            return count > 0 ? total / count : 0;
-          })(),
-          strikeLocked: state.currentSlotStrike?.isOfficial || false,
-          pythRefPrice: state.pythRefPrice || null,
-          pythRefAtMs: state.pythRefAtMs || null
-        }])
-      ),
-      lastRateLimitInfo: typeof lastRateLimitInfo !== 'undefined' ? lastRateLimitInfo : null,
-      isMaintenance: isMaintenanceWindow(),
-      kellyFraction: KELLY_FRACTION,
-      kellyMaxBankrollPct: KELLY_MAX_BANKROLL_PCT,
-      maxConcurrentPositions: MAX_CONCURRENT_BTC_EXPOSURE,
-      availableCapital: typeof availableCapital !== 'undefined' ? availableCapital : null,
-      uptimeStart: process.uptime(), // Secondes depuis démarrage
-      sniperFilterAudit: lastSniperDecision || { status: 'idle', reason: 'Waiting for signal' },
-      // v6.2.0 : Historisation pour les charts
-      latencyHistory: {
-        ws: wsLatencyHistory,
-        poll: pollLatencyHistory
-      },
-      performance: cachedPerformanceStats || {
-        totalVolume: 0,
-        netProfit: 0,
-        winRatePct: 0,
-        tradeCount: 0,
-        updatedAt: new Date().toISOString()
-      },
-      openLimitOrders: OPEN_LIMIT_ORDERS.size,
-      executionMode: ORDER_EXECUTION_TYPE,
-      rewards: cachedRewardsData,
-      trendHistory: (currentHealthState && currentHealthState.trendHistory) || [],
-      equityHistory: (currentHealthState && currentHealthState.equityHistory) || []
-    };
-
-    // v7.4.0 Analytics: Store trends every cycle (throttled by 5m in caller usually)
-    const maxReward = (cachedRewardsData && Array.isArray(cachedRewardsData)) ? Math.max(...(cachedRewardsData.map(r => Number(r.reward_percentage) || 0))) : 0;
-    const currentVol = (fullState.performance && fullState.performance.totalVolume) || 0;
-    
-    // Only push if time passed > 5m or first point
-    const lastPoint = fullState.trendHistory[fullState.trendHistory.length - 1];
-    if (!lastPoint || (Date.now() - new Date(lastPoint.t).getTime() > 300000)) {
-        fullState.trendHistory.push({
-            t: new Date().toISOString(),
-            vol: currentVol,
-            rew: maxReward
-        });
-        if (fullState.trendHistory.length > 100) fullState.trendHistory.shift();
-    }
-
-    // v7.6.0 PnL Logic: Store equity trends (v7.7.1: Robustness fix)
-    const extraVal = typeof extra !== 'undefined' ? extra : {};
-    if (extraVal && extraVal.totalUsd) {
-       const lastEq = fullState.equityHistory[fullState.equityHistory.length - 1];
-       if (!lastEq || (Date.now() - new Date(lastEq.t).getTime() > 300000)) {
-           fullState.equityHistory.push({
-               t: new Date().toISOString(),
-               v: (extraVal.totalUsd != null ? Number(extraVal.totalUsd).toFixed(2) : "0.00")
-           });
-           if (fullState.equityHistory.length > 100) fullState.equityHistory.shift();
-       }
-    }
-
-    // 3. Écriture atomique
-    atomicWriteJson(HEALTH_FILE, fullState);
+    try {
+      const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
+      const prev = JSON.parse(raw);
+      if (prev && typeof prev === 'object') state = { ...state, ...prev };
+    } catch (_) {}
+    state = { ...state, ...updates, at: new Date().toISOString() };
+    fs.writeFileSync(HEALTH_FILE, JSON.stringify(state), 'utf8');
   } catch (e) {
     console.error('[health] writeHealth échoué:', e?.message ?? e);
   }
-}
-
-/** 
- * v11 : Service d'archivage automatique vers ./backups 
- */
-function backupStateFiles() {
-    try {
-        const config = STATE_BACKUP_CONFIG || { dir: './backups', files: [] };
-        if (!fs.existsSync(config.dir)) fs.mkdirSync(config.dir, { recursive: true });
-        
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        config.files.forEach(file => {
-            const src = path.join(process.cwd(), file);
-            if (fs.existsSync(src)) {
-                const dst = path.join(config.dir, `${path.basename(file, '.json')}_${timestamp}.json`);
-                fs.copyFileSync(src, dst);
-            }
-        });
-        
-        // Log périodique silencieux (santé)
-        console.log(`[Backup] ✅ Archivage effectué : ${config.files.length} fichiers sauvegardés.`);
-        
-        // v11.1 : Rotation des backups (on garde les 10 derniers soit 50 min)
-        const oldFiles = fs.readdirSync(config.dir).sort().reverse();
-        if (oldFiles.length > 50) { // 10 fichiers * 5 types = 50 total
-            oldFiles.slice(50).forEach(f => fs.unlinkSync(path.join(config.dir, f)));
-        }
-    } catch (e) {
-        console.error('[Backup] ❌ Échec de la rotation/sauvegarde:', e.message);
-    }
-}
-
-/** 
- * v11 : Graceful Shutdown Handler (Dernier Souffle)
- * Sauvegarde l'état critique avant l'arrêt coordonné de PM2/Docker.
- */
-async function gracefulShutdown(signal) {
-    console.log(`\n[Shutdown] 🛑 Signal ${signal} reçu. Sécurisation de l'état...`);
-    try {
-        // 1. Sauvegardes de persistance finale
-        saveOpenOrders();
-        writeActivePositions(readActivePositions());
-        writeHealth({ status: 'shutdown_complete', lastSignal: signal });
-
-        // 2. Alertes (Optionnel)
-        if (typeof sendTelegramAlert === 'function' && telegramTradeAlertsEnabled) {
-            await sendTelegramAlert(`🏗️ *SNIPER SHUTDOWN*\nStatus: Saved & Exited safely.`);
-        }
-
-        console.log('[Shutdown] ✅ État sauvegardé. Fermeture sécurisée.');
-        process.exit(0);
-    } catch (e) {
-        console.error('[Shutdown] ❌ Erreur fatale pendant la fermeture:', e.message);
-        process.exit(1);
-    }
 }
 
 function readStopLossMetrics() {
@@ -728,90 +262,10 @@ function readStopLossMetrics() {
   }
 }
 
-function writeDailyStats(next) {
+function writeStopLossMetrics(next) {
   try {
-    atomicWriteJson(DAILY_STATS_FILE, next);
+    fs.writeFileSync(STOP_LOSS_METRICS_FILE, JSON.stringify(next), 'utf8');
   } catch (_) {}
-}
-
-function readDailyStats() {
-  const now = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  const base = { date: now, dailyPnl: 0, consecutiveLosses: 0 };
-  try {
-    const raw = fs.readFileSync(DAILY_STATS_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || parsed.date !== now) return base;
-    return { ...base, ...parsed };
-  } catch (_) {
-    return base;
-  }
-}
-
-function writeActivePositions(positions) {
-  try {
-    atomicWriteJson(ACTIVE_POSITIONS_FILE, positions);
-  } catch (_) {}
-}
-
-async function getBalance() {
-  const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
-  if (viaClob != null) return viaClob;
-  const viaRpc = await getUsdcBalanceRpc();
-  return (viaRpc != null ? viaRpc : 0); // v9.3.3 : Safe default 0
-}
-
-function readActivePositions() {
-  try {
-    if (!fs.existsSync(ACTIVE_POSITIONS_FILE)) return [];
-    const raw = fs.readFileSync(ACTIVE_POSITIONS_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_) {
-    return [];
-  }
-}
-
-/** 7.13.0: Met à jour une position spécifique dans active-positions.json */
-function updateActivePosition(pos) {
-  if (!pos || !pos.conditionId) return;
-  const positions = readActivePositions();
-  const idx = positions.findIndex(p => p.conditionId === pos.conditionId);
-  if (idx !== -1) {
-    positions[idx] = { ...positions[idx], ...pos };
-    writeActivePositions(positions);
-  }
-}
-
-async function updateActivePositionsFromFill(fill) {
-   try {
-      const positions = readActivePositions();
-      console.log(`[Sync] 📡 Fill detected (${fill.side}). Updating active positions...`);
-      
-      if (fill.side === 'buy' || fill.side === 'BUY') {
-         positions.push({
-            at: new Date().toISOString(),
-            side: fill.side,
-            asset: fill.asset,
-            underlying: fill.asset,
-            amountUsd: Number(fill.filledUsdc || fill.size * fill.price || 0),
-            price: Number(fill.price),
-            tokenId: fill.asset_id || fill.tokenId,
-            resolved: false
-         });
-      } else {
-         // Sell: On marque la position correspondante comme résolue (simplifié: on retire la plus ancienne)
-         const idx = positions.findIndex(p => !p.resolved && (p.underlying === fill.asset || p.tokenId === fill.asset_id));
-         if (idx !== -1) positions.splice(idx, 1);
-      }
-      
-      atomicWriteJson(ACTIVE_POSITIONS_FILE, positions);
-      // Force immediate balance refresh
-      getBalance().then(b => (b != null ? writeHealth({ balance: b.toFixed(2) }) : null));
-      return true;
-   } catch (err) {
-      console.error(`[Sync] ❌ Update failed: ${err.message}`);
-      return false;
-   }
 }
 
 function recordStopLossMetric(event, payload = {}) {
@@ -906,12 +360,9 @@ const CLOB_BOOK_URL = 'https://clob.polymarket.com/book';
 const CLOB_PRICE_URL = 'https://clob.polymarket.com/price';
 const CHAIN_ID = 137;
 // Fenêtre de prix pour signaux et mise max : 77 % – 78 % (override MIN_SIGNAL_P / MAX_SIGNAL_P dans .env).
-const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.05; // v14.2 : Restoration de la plage complète
-const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.95; // v14.2 : Restoration de la plage complète
-const SIGNAL_MIN_DWELL_MS = Math.max(0, Number(process.env.SIGNAL_MIN_DWELL_SEC) * 1000 || 1000);
-const signalEntryTimes = new Map(); // tokenId -> premier instant vu en ms
-const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.98; // v14.2 : Alignement avec la plage complÃ¨te (v14.2)
-const UTC_OFFSET_SEC = Number(process.env.UTC_OFFSET_SEC) || 0; // v14.3.1 : Correction drift serveur
+const MIN_P = Number(process.env.MIN_SIGNAL_P) || 0.77;
+const MAX_P = Number(process.env.MAX_SIGNAL_P) || 0.78;
+const MAX_PRICE_LIQUIDITY = Number(process.env.MAX_PRICE_LIQUIDITY) || 0.78;
 /**
  * Plafond worst price pour les ordres marché BUY (prix max accepté pour le matching), ex. 0.99 = 99¢.
  * Indépendant de MAX_SIGNAL_P (fenêtre de détection du signal, ex. 77–78 %).
@@ -926,33 +377,39 @@ marketWorstPriceP = Math.min(0.99, Math.max(0.01, marketWorstPriceP));
  */
 const marketOrderTif = (process.env.MARKET_ORDER_TIF || 'FAK').trim().toUpperCase();
 const marketOrderType = marketOrderTif === 'FOK' ? OrderType.FOK : OrderType.FAK;
-/** Fin de fenêtre 5m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 300 s. */
-function slotEndMsFrom5mSlug(slug) {
+const BITCOIN_UP_DOWN_SLUG = 'bitcoin-up-or-down';
+const BITCOIN_UP_DOWN_15M_SLUG = 'btc-updown-15m';
+/** Fin de fenêtre 15m (ms UTC) : suffixe slug = `eventStart` Gamma → fin = start + 900 s (comme le dashboard). */
+function slotEndMsFrom15mSlug(slug) {
   if (!slug || typeof slug !== 'string') return null;
-  const m = slug.match(/btc-updown-5m-(\d+)$/i);
+  const m = slug.match(/btc-updown-15m-(\d+)$/i);
   if (!m) return null;
   const raw = parseInt(m[1], 10);
   if (!Number.isFinite(raw)) return null;
   const startSec = raw < 1e12 ? raw : Math.floor(raw / 1000);
-  return (startSec + 300) * 1000;
+  return (startSec + 900) * 1000;
 }
-const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // Legacy, kept for safety
+const NO_TRADE_LAST_MS_HOURLY = 5 * 60 * 1000; // 5 min avant la fin pour le marché horaire
 
-// MARKET_MODE is imported from config.js ('5m')
-// No local redeclaration — this was the crash cause.
+/** hourly = créneaux 1h (bitcoin-up-or-down), 15m = créneaux 15 min (btc-updown-15m). Défaut hourly. */
+const MARKET_MODE = (process.env.MARKET_MODE || 'hourly').toLowerCase() === '15m' ? '15m' : 'hourly';
 
-// Cache /book (overridable via BOOK_CACHE_MS).
-const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || 3000;
+// Cache /book : plus long sur 15m pour réduire variance/ratelimits (overridable via BOOK_CACHE_MS).
+const BOOK_CACHE_MS = Number(process.env.BOOK_CACHE_MS) || (MARKET_MODE === '15m' ? 3000 : 1500);
 
 /**
  * Prix utilisés pour décider si fetchSignals() émet un signal (poll).
- * 5m mode: always use CLOB best ask for precision.
+ * - gamma : outcomePrices Gamma (lissé / mid, défaut historique 1h).
+ * - clob : best ask CLOB par token Up/Down (aligné exécution, défaut auto pour MARKET_MODE=15m).
+ * Défaut si non défini : 15m → clob, hourly → gamma. Override : SIGNAL_PRICE_SOURCE=gamma|clob
  */
 const signalPriceSourceEnv = (process.env.SIGNAL_PRICE_SOURCE || '').trim().toLowerCase();
 const signalPriceSource =
   signalPriceSourceEnv === 'gamma' || signalPriceSourceEnv === 'clob'
     ? signalPriceSourceEnv
-    : 'clob';
+    : MARKET_MODE === '15m'
+      ? 'clob'
+      : 'gamma';
 /** Cache court best ask pour fetchSignals (évite 2 hits CLOB identiques dans le même cycle). */
 const BEST_ASK_SIGNAL_CACHE_MS = Number(process.env.BEST_ASK_SIGNAL_CACHE_MS) || 400;
 
@@ -961,21 +418,20 @@ const isPlaceholder = !privateKeyRaw || privateKeyRaw === 'your_hex_private_key_
 // Détecter si l'utilisateur a mis l'adresse (0x + 40 hex) au lieu de la clé privée (0x + 64 hex)
 const hexPart = (privateKeyRaw || '').replace(/^0x/i, '');
 const looksLikeAddress = hexPart.length === 40 && /^[0-9a-fA-F]+$/.test(hexPart);
-const privateKey = isPlaceholder ? '' : privateKeyRaw;
+const privateKey = isPlaceholder || looksLikeAddress ? '' : privateKeyRaw;
 if (privateKeyRaw && looksLikeAddress) {
-  console.warn('ATTENTION: PRIVATE_KEY ressemble à une ADRESSE. Le bot va tenter de l’utiliser quand même, mais cela risque de crasher. Vérifiez votre .env !');
-}
-if (!privateKey) {
-  console.error('CRITICAL: Signer PRIVATE_KEY is MISSING or PLACEHOLDER. Bot will crash on order placement.');
-} else {
-  console.log('Signer: PRIVATE_KEY present in .env. Initializing wallet...');
+  console.error('ERREUR: PRIVATE_KEY ressemble à une ADRESSE (0x + 40 caractères). Il faut la CLÉ PRIVÉE (0x + 64 caractères hex). Récupère-la depuis Phantom/MetaMask : Paramètres → Sécurité → Exporter clé privée. Puis dans ~/bot-24-7/.env mets PRIVATE_KEY=0x...');
 }
 /** RPC Polygon : par défaut publicnode (plus fiable depuis un VPS). polygon-rpc.com provoque souvent NETWORK_ERROR. */
-const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+const polygonRpc = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
+/** Ankr public sans clé renvoie souvent 401 — utiliser une URL avec clé ou retirer Ankr d’ici. */
 const polygonRpcFallbacks = (
-  process.env.POLYGON_RPC_FALLBACKS ||
-  'https://1rpc.io/matic,https://rpc.ankr.com/polygon,https://polygon.llamarpc.com'
-).split(',').map(u => u.trim()).filter(Boolean);
+  process.env.POLYGON_RPC_FALLBACK ||
+  'https://polygon-rpc.com,https://polygon-bor-rpc.publicnode.com'
+)
+  .split(',')
+  .map((u) => u.trim())
+  .filter(Boolean);
 /** Montant minimum pour placer un ordre (USDC). En dessous, on skip. Défaut 1. */
 const orderSizeMinUsd = Number(process.env.ORDER_SIZE_MIN_USD) || 1;
 /** Si true, la taille de chaque ordre = solde USDC du wallet (réinvestissement des gains). Sinon ordre fixe ORDER_SIZE_USD. */
@@ -991,7 +447,7 @@ const orderSizeUsd = Number(process.env.ORDER_SIZE_USD) || 10;
  */
 const botBudgetMode = process.env.BOT_BUDGET_MODE?.trim() || '';
 const budgetModeReserveExcessFromStart = botBudgetMode === 'reserve_excess_from_start';
-const botStartStakeUsd = Math.max(1.0, Number(process.env.BOT_START_STAKE_USD) || orderSizeUsd);
+const botStartStakeUsd = Number(process.env.BOT_START_STAKE_USD) || orderSizeUsd;
 const botReservedExtraUsdOverride = Number(process.env.BOT_RESERVED_EXTRA_USD);
 const hasBotReservedExtraUsdOverride = Number.isFinite(botReservedExtraUsdOverride) && botReservedExtraUsdOverride >= 0;
 
@@ -1085,7 +541,7 @@ function applyMaxStakeUsd(amountUsd) {
   return Math.min(x, maxStakeUsd);
 }
 /** Ordre au marché par défaut (exécution immédiate, latence min). USE_MARKET_ORDER=false pour ordre limite. */
-const useMarketOrder = ORDER_EXECUTION_TYPE === 'MARKET';
+const useMarketOrder = process.env.USE_MARKET_ORDER !== 'false';
 /**
  * Si FAK ne remplit qu’une partie du stake, ré-envoyer uniquement le reliquat (même worst price / FAK),
  * avec délai entre envois et plafond de tentatives / fenêtre temps. PARTIAL_FILL_RETRY=false pour désactiver.
@@ -1117,13 +573,13 @@ const STOP_LOSS_FAST_INTERVAL_MS = Math.max(
 /** Priorise l'entrée en position: reporte les relevés de liquidité lourds si un signal est présent. */
 const entryFastPathEnabled = process.env.ENTRY_FAST_PATH_ENABLED !== 'false';
 /** Placer les ordres en auto (défaut: true). Mettre à false pour faire tourner le bot sans trader. */
-/** Autotrade désactivé par défaut — AUTO_PLACE_ENABLED=true pour placer des ordres. */
+/** Autotrade désactivé par défaut — les deux bots (1h / 15m) doivent avoir AUTO_PLACE_ENABLED=true pour placer des ordres. */
 const autoPlaceEnabled = process.env.AUTO_PLACE_ENABLED === 'true';
 /** Simulation : solde virtuel (fichier simulation-paper.json), mêmes signaux / sizing / Telegram [PAPER], aucun ordre CLOB réel. */
 const simulationTradeEnabled = simulationTrade.isSimulationTradeEnabled();
 /** Garde-fou: couper la position avant résolution si le bid du côté acheté passe sous un seuil absolu. */
 const stopLossEnabled = process.env.STOP_LOSS_ENABLED !== 'false';
-const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.10));
+const stopLossTriggerPriceP = Math.max(0.01, Math.min(0.99, Number(process.env.STOP_LOSS_TRIGGER_PRICE_P) || 0.6));
 /** Désactiver la condition drawdown avec STOP_LOSS_DRAWDOWN_ENABLED=false (le SL ne déclenche alors que sur le prix). */
 const stopLossDrawdownEnabled = process.env.STOP_LOSS_DRAWDOWN_ENABLED !== 'false';
 /** Option hybride: déclenchement aussi sur drawdown max fixe (en %) depuis le prix d’entrée. */
@@ -1159,19 +615,19 @@ const STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS = Math.max(
 );
 /** Escalade Telegram si la position reste ouverte après déclenchement SL. */
 const STOP_LOSS_ESCALATION_MS = Math.max(10_000, Number(process.env.STOP_LOSS_ESCALATION_MS) || 60_000);
-
-
 /** Tenter de redeem les tokens gagnants (marchés résolus) en USDC au début de chaque cycle. Sinon le solde ne inclut pas les gains tant qu'on n'a pas redeem. */
 const redeemEnabled = process.env.REDEEM_ENABLED !== 'false';
 /**
  * N’essaie pas le redeem avant `fin du marché (Gamma) + N ms` pour ce `conditionId` (évite STATE_FAILED tout de suite après la cloche).
- * Défaut si non défini : **60_000 ms (1 min)**. `REDEEM_AFTER_MARKET_END_MS=0` désactive.
+ * Défaut si non défini : **60_000 ms (1 min) en MARKET_MODE=15m**, **0** en hourly. `REDEEM_AFTER_MARKET_END_MS=0` désactive.
  */
 const redeemAfterMarketEndMsRaw = process.env.REDEEM_AFTER_MARKET_END_MS;
 const REDEEM_AFTER_MARKET_END_MS =
   redeemAfterMarketEndMsRaw !== undefined && String(redeemAfterMarketEndMsRaw).trim() !== ''
     ? Math.max(0, Number(redeemAfterMarketEndMsRaw) || 0)
-    : 60_000; // Forçons 1 minute par défaut pour éviter les conflits de solde entre créneaux
+    : MARKET_MODE === '15m'
+      ? 60_000
+      : 0;
 /**
  * Si REDEEM_AFTER_MARKET_END_MS > 0 et qu’un trade n’a ni marketEndMs ni endDate dans les logs : sans ça, le bot tentait quand même le redeem → erreurs / Telegram avant fin de créneau.
  * Défaut **false** : sans fin de marché connue pour ce conditionId, on ne tente pas le redeem. `REDEEM_ALLOW_UNKNOWN_MARKET_END_MS=true` réactive l’ancien comportement.
@@ -1232,7 +688,7 @@ const walletConfigured = !!privateKey;
 // ——— Wallet & provider ———
 // ethers v6 : 2e argument = chainId (number), pas un objet { chainId }
 let provider = new ethers.JsonRpcProvider(polygonRpc, CHAIN_ID);
-let wallet = walletConfigured
+const wallet = walletConfigured
   ? new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : '0x' + privateKey, provider)
   : null;
 
@@ -1357,17 +813,6 @@ function shouldLogRedeemRelayerNoSuccess(cid) {
 const REDEEM_FAIL_BACKOFF_MS = Math.max(30_000, Number(process.env.REDEEM_FAIL_BACKOFF_MS) || 120_000);
 const redeemFailNextAttemptAt = new Map(); // conditionId -> timestamp ms
 /** Une seule alerte Telegram « échec redeem » par conditionId jusqu’au succès (évite spam à chaque retry / cycle). */
-// Caching des signaux par ASSET (v5.4.0)
-const fetchSignalsCacheEntries = new Map(); // asset -> { expiresAt, signals, createdAt }
-const fetchSignalsInFlightMap = new Map();  // asset -> Promise
-const fetchSignalsCacheHitCount = new Map();
-const fetchSignalsCacheMissCount = new Map();
-
-// Initialisation globale
-SUPPORTED_ASSETS.forEach(a => {
-  fetchSignalsCacheHitCount.set(a, 0);
-  fetchSignalsCacheMissCount.set(a, 0);
-});
 const redeemTelegramFailureNotified = new Set();
 
 /** Stop-loss Telegram : évite le spam sur un même `conditionId`. */
@@ -1381,6 +826,8 @@ let stopLossPassBusy = false;
 let fetchSignalsCacheEntry = null;
 let fetchSignalsInFlight = null;
 const fetchSignalsPerfWindowMs = [];
+let fetchSignalsCacheHitCount = 0;
+let fetchSignalsCacheMissCount = 0;
 let fetchSignalsPerfLastLogAt = 0;
 let fetchSignalsBreakdownLastLogAt = 0;
 
@@ -1422,22 +869,13 @@ function maybeLogFetchSignalsBreakdown(profile) {
   if (now - fetchSignalsBreakdownLastLogAt < 20_000) return;
   fetchSignalsBreakdownLastLogAt = now;
   console.log(
-    `[fetchSignals_breakdown] total=${Math.round(totalMs)}ms eventsFetch=${Math.round(profile.eventsFetchMs ?? 0)}ms resolve5m=${Math.round(profile.resolve5mMs ?? 0)}ms loop=${Math.round(profile.loopMs ?? 0)}ms priceLookups=${profile.priceLookups ?? 0} priceAvg=${Math.round(profile.priceLookupMsAvg ?? 0)}ms eventsRaw=${profile.eventCountRaw ?? 0} eventsAfter=${profile.eventCountAfterResolve ?? 0} markets=${profile.marketCountVisited ?? 0} strategy=${profile.strategy ?? 'n/a'}`
+    `[fetchSignals_breakdown] total=${Math.round(totalMs)}ms eventsFetch=${Math.round(profile.eventsFetchMs ?? 0)}ms resolve15m=${Math.round(profile.resolve15mMs ?? 0)}ms loop=${Math.round(profile.loopMs ?? 0)}ms priceLookups=${profile.priceLookups ?? 0} priceAvg=${Math.round(profile.priceLookupMsAvg ?? 0)}ms eventsRaw=${profile.eventCountRaw ?? 0} eventsAfter=${profile.eventCountAfterResolve ?? 0} markets=${profile.marketCountVisited ?? 0} strategy=${profile.strategy ?? 'n/a'}`
   );
 }
 
 function telegramStopLossAlertsEnabled() {
   // Par défaut activé si bot Telegram configuré, désactivable via ALERT_TELEGRAM_STOPLOSS=false
   return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_STOPLOSS !== 'false';
-}
-
-function getAssetBranding(asset) {
-  if (!asset) return { emoji: '🤖', label: 'Bot' };
-  const up = String(asset).toUpperCase();
-  if (up === 'BTC') return { emoji: '🟠', label: 'BTC' };
-  if (up === 'ETH') return { emoji: '🔵', label: 'ETH' };
-  if (up === 'SOL') return { emoji: '🟣', label: 'SOL' };
-  return { emoji: '💎', label: up };
 }
 
 async function notifyTelegramStopLossTriggered(p) {
@@ -1452,10 +890,8 @@ async function notifyTelegramStopLossTriggered(p) {
     const bestBidCents = Number.isFinite(p?.bestBidP) ? p.bestBidP * 100 : null;
     const triggerCents = Number.isFinite(p?.stopLossTriggerPriceP) ? p.stopLossTriggerPriceP * 100 : null;
     const pre = p?.simulationTrade ? '[PAPER] ' : '';
-    const brand = getAssetBranding(p?.underlying || p?.asset);
     const lines = [
-      `${pre}${brand.emoji} Stop-loss déclenché (${reason})`,
-      `Asset : ${brand.label}`,
+      `${pre}⚠️ Stop-loss déclenché (${reason})`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `entry : ${entryCents != null ? `${entryCents.toFixed(2)}¢` : '—'}`,
@@ -1480,10 +916,9 @@ async function notifyTelegramStopLossFilled(p) {
   stopLossTelegramFilledNotified.add(cid);
 
   try {
-    const brand = getAssetBranding(p?.underlying || p?.asset);
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `${pre}${brand.emoji} Stop-loss vente remplie`,
-      `Asset : ${brand.label}`,
+      `${pre}✅ Stop-loss vente remplie`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       `filled : ${p?.filledUsdc != null && Number.isFinite(p.filledUsdc) ? p.filledUsdc.toFixed(2) : '?'} USDC`,
@@ -1503,10 +938,9 @@ async function notifyTelegramStopLossExitFailed(p) {
   if (!cid || stopLossTelegramExitFailedNotified.has(cid)) return;
   stopLossTelegramExitFailedNotified.add(cid);
   try {
-    const brand = getAssetBranding(p?.underlying || p?.asset);
+    const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `${pre}${brand.emoji} Stop-loss automatique refusé`,
-      `Asset : ${brand.label}`,
+      `${pre}❌ Stop-loss déclenché mais vente refusée`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       p?.errorHint ? `raison : ${String(p.errorHint).slice(0, 180)}` : '',
@@ -1526,11 +960,9 @@ async function notifyTelegramStopLossEscalation(p) {
   if (!cid || stopLossTelegramEscalatedNotified.has(cid)) return;
   stopLossTelegramEscalatedNotified.add(cid);
   try {
-    const brand = getAssetBranding(p?.underlying || p?.asset);
     const pre = p?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
-      `${pre}🚨 ${brand.emoji} Escalade SL: position non clôturée`,
-      `Asset : ${brand.label}`,
+      `${pre}🚨 Escalade SL: position non clôturée`,
       `conditionId : ${cid.slice(0, 20)}…`,
       `takeSide : ${p?.takeSide ?? '?'}`,
       Number.isFinite(p?.openSinceMs) ? `ouvert depuis : ${Math.round(Number(p.openSinceMs) / 1000)}s` : '',
@@ -1628,13 +1060,6 @@ function markConditionRedeemedSuccess(cid) {
   try {
     const sorted = [...set].sort();
     fs.writeFileSync(REDEEMED_CONDITION_IDS_FILE, JSON.stringify(sorted, null, 0) + '\n', 'utf8');
-    // v2026 : Audit System (Win/Loss Outcome)
-    fs.appendFileSync(STRATEGY_AUDIT_FILE, JSON.stringify({
-      at: new Date().toISOString(),
-      conditionId: key,
-      status: 'RESOLVED_SUCCESS',
-      type: 'outcome'
-    }) + '\n', 'utf8');
   } catch (e) {
     console.warn('[Redeem] écriture redeemed-condition-ids.json impossible:', e?.message || e);
   }
@@ -1745,113 +1170,6 @@ const executionCooldownByCondition = new Map(); // conditionId/eventSlug -> next
 const stopLossNextAttemptByCondition = new Map(); // conditionId -> timestamp ms
 let wsLastBidAskAtMs = 0;
 const lastSkipReasonThrottle = new Map(); // reason|source -> ts
-const marketConfigCache = new Map(); // tokenId -> { tickSize: string, minOrderSize: number }
-const equityHistory = []; // { t: ISO, v: USD }
-
-async function calculateTotalValue(clobClient) {
-  try {
-    const balRes = await clobClient.getBalanceAllowance({ asset_type: 'COLLATERAL' });
-    let totalUsd = Number(balRes.balance) || 0;
-    
-    // Scan active assets (simpler list for latency)
-    for (const [tokenId, config] of marketConfigCache.entries()) {
-       try {
-          const res = await clobClient.getBalanceAllowance({ token_id: tokenId });
-          const bal = Number(res.balance) || 0;
-          if (bal > 0) {
-             const book = await clobClient.getOrderBook(tokenId);
-             const price = (book.bids && book.bids.length > 0) ? Number(book.bids[0].price) : 0.5;
-             const header = `🎯 *MANUAL SNIPER ENTRY*`;
-             const lines = [
-                 header,
-                 `Asset: ${asset}`,
-                 `Side: ${side.toUpperCase()}`,
-                 `Price: ${price}¢`,
-             ];
-             totalUsd += (bal * price);
-          }
-       } catch (_) {}
-    }
-    return totalUsd;
-  } catch (err) {
-    return 0;
-  }
-}
-
-function detectWhales(asset, side, book) {
-   const threshold = 1000; // $1,000
-   const levels = side === 'bid' ? book.bids : book.asks;
-   for (const level of (levels || []).slice(0, 5)) {
-      const value = Number(level.size) * Number(level.price);
-      if (value > threshold) {
-         console.log(`[${asset}] 🐳 WHALE ALERT: ${side.toUpperCase()} of $${value.toFixed(0)} at ${level.price}¢`);
-         if (telegramTradeAlertsEnabled) {
-            sendTelegramAlert(`🐳 *ORACLE WHALE DETECTED*\nAsset: ${asset}\nSide: ${side.toUpperCase()}\nValue: $${value.toFixed(0)}\nPrice: ${level.price}¢`);
-         }
-         return true;
-      }
-   }
-   return false;
-}
-
-let lastGasAlertAt = 0;
-async function checkNativeGasBalance(clobClient) {
-  try {
-    const address = await clobClient.signer.getAddress();
-    const balanceBN = await clobClient.signer.getBalance();
-    const balance = Number(balanceBN) / 1e18; // POL/MATIC has 18 decimals
-    
-    if (balance < 0.5 && (Date.now() - lastGasAlertAt > 3600000)) {
-       console.warn(`[Gas] ⛽ CRITICAL: Low POL/MATIC balance (${balance.toFixed(4)}). Refill wallet!`);
-       if (telegramTradeAlertsEnabled) {
-          sendTelegramAlert(`⛽ *GAS REQUIRED*\nWallet: ${address.slice(0,6)}...${address.slice(-4)}\nBalance: ${balance.toFixed(4)} POL\n*Action*: Refill MATIC/POL to keep the Sniper active!`);
-       }
-       lastGasAlertAt = Date.now();
-    }
-    return balance;
-  } catch (err) {
-    return null;
-  }
-}
-
-// runAutoRedeem removed (broken SDK call and redundant with tryRedeemResolvedPositions)
-
-async function getMarketConfig(clobClient, tokenId) {
-  if (marketConfigCache.has(tokenId)) return marketConfigCache.get(tokenId);
-  try {
-    const tickSize = await clobClient.getTickSize(tokenId);
-    const config = { tickSize: tickSize || '0.001', minOrderSize: 0.1 };
-    marketConfigCache.set(tokenId, config);
-    return config;
-  } catch (err) {
-    return { tickSize: '0.001', minOrderSize: 0.1 };
-  }
-}
-
-/**
- * v2026 : Enregistrement d'audit stratégique pour backtest futur.
- * @param {object} signal 
- * @param {string} status EXECUTED | SKIPPED | REJECTED
- * @param {object} context 
- */
-function recordSignalAudit(signal, status, context = {}) {
-  try {
-    const entry = {
-      at: new Date().toISOString(),
-      asset: signal.asset || 'BTC',
-      slug: signal.slug || signal.eventSlug || 'unknown',
-      strike: signal.strike,
-      spot: signal.spotAtDetection,
-      delta: signal.deltaPctAtDetection, // v14.11 rename
-      fair: signal.probFairAtEntry,
-      status: status,
-      ...context
-    };
-    fs.appendFileSync(STRATEGY_AUDIT_FILE, JSON.stringify(entry) + '\n', 'utf8');
-  } catch (e) {
-    console.warn('[Audit] Erreur écriture audit signal:', e.message);
-  }
-}
 
 function recordSkipReason(reason, source = 'unknown', details = {}) {
   const r = String(reason || 'unknown_skip');
@@ -1888,15 +1206,11 @@ function recordSkipReason(reason, source = 'unknown', details = {}) {
     };
   }
   writeHealth(healthPayload);
-  try {
-    const obj = { at: skipAtIso, reason: r, source: s, ...safeDetails };
-    fs.appendFileSync(DECISION_LOG_FILE, JSON.stringify(obj) + '\n', 'utf8');
-  } catch (e) {
-    // Silence error to avoid infinite loop if disk is full
-  }
 }
 
-
+function getSignalKey(signal) {
+  return signal.market?.conditionId ?? signal.eventSlug ?? '';
+}
 
 /** Prix “best ask” du côté acheté (Up = priceUp, Down = priceDown) pour logs / garde-fous. */
 function pickSignalBestAskP(signal) {
@@ -1939,16 +1253,6 @@ function logSignalInRangeButNoOrder(source, reason, signal, fields = {}) {
     ...restFields,
   };
   logJson('info', 'signal_in_range_but_no_order', payload);
-  if (cond && cond !== 'na' && bestAskP != null) {
-    const endMs = parseMarketEndDateToMs(signal.endDate);
-    virtualWatchEntries.set(cond, {
-      entryPriceP: bestAskP,
-      tokenId: signal.tokenIdToBuy,
-      takeSide: signal.takeSide,
-      endMs,
-      at: now,
-    });
-  }
   try {
     console.log(`[signal_in_range_but_no_order] ${JSON.stringify(payload)}`);
   } catch (_) {}
@@ -2059,12 +1363,6 @@ function clearPolymarketDegradedIfExpired() {
   writeHealth({ polymarketDegraded: false, degradedReason: null, degradedUntil: null });
 }
 
-function writeStopLossMetrics(metrics) {
-  try {
-    atomicWriteJson(path.join(BOT_DIR, 'stop-loss-metrics.json'), metrics);
-  } catch (err) {}
-}
-
 function inPolymarketDegradedMode() {
   clearPolymarketDegradedIfExpired();
   return degradedModeUntilMs > Date.now();
@@ -2103,285 +1401,7 @@ function purgeExpiredPreSignCache() {
  * plus tard, la déplacer dans un worker_thread si les mesures montrent un pic de latence ici.
  */
 async function createSignedMarketOrder(client, userMarketOrder) {
-  // v2026: Always include feeRateBps for Taker orders
-  const options = { 
-    negRisk: false, 
-    feeRateBps: userMarketOrder.feeRateBps || DEFAULT_FEE_RATE_BPS 
-  };
-  return client.createMarketOrder(userMarketOrder, options);
-}
-
-async function createSignedLimitOrder(client, userLimitOrder) {
-  // v2026: Maker orders use 0 fee, Takers use explicit feeRateBps
-  const options = { 
-    negRisk: false,
-    feeRateBps: userLimitOrder.feeRateBps ?? DEFAULT_FEE_RATE_BPS
-  };
-  return client.createLimitOrder(userLimitOrder, options);
-}
-
-/**
- * Place a LIMIT order as a Maker.
- * v7.0.0 Pivot.
- */
-async function placeLimitOrderAtOptimalPrice(signal, amountUsd, clobClient) {
-  const side = 'bid'; // v7.12.0 Fix
-  const asset = signal.underlying || signal.asset || 'BTC';
-  const tokenId = signal.tokenIdToBuy;
-
-  // v9.3.16 : Nuclear Signer Guard
-  if (!clobClient || !wallet) {
-     console.warn('[placeLimitOrderAtOptimalPrice] Emergency Stop: clobClient or wallet is NULL.');
-     return { ok: false, reason: 'missing_client_or_signer' };
-  }
-  
-  // v7.4.0: Emergency Inventory Brake (Safety 1500 tokens)
-  const EMERGENCY_CAP = 1500;
-  try {
-     const balRes = await clobClient.getBalanceAllowance({ token_id: tokenId });
-     const balance = Number(balRes.balance) || 0;
-     if (balance > EMERGENCY_CAP) {
-        console.error(`[${asset}] 🚨 EMERGENCY: Inventory too high (${balance.toFixed(0)} > ${EMERGENCY_CAP}). DELEVERAGING NOW.`);
-        if (telegramTradeAlertsEnabled) {
-           await sendTelegramAlert(`🛑 *SNIPER EMERGENCY STOP*\nAsset: ${asset}\nInventory: ${balance.toFixed(0)}\nAction: Panic Sell Triggered`);
-        }
-        await clobClient.createAndPostMarketOrder({ tokenId, amount: balance, side: Side.SELL }, { tickSize: '0.001' });
-        return { ok: false, reason: 'emergency_brake_triggered' };
-     }
-  } catch (_) {}
-  
-  try {
-    // 1. Get Order Book
-    const book = await clobClient.getOrderBook(tokenId);
-    const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
-    const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 1;
-    
-    // 2. Inventory Skewing (Safety Engine v7.3.0)
-    let inventorySkew = 0;
-    try {
-       const balRes = await clobClient.getBalanceAllowance({ token_id: tokenId });
-       const balance = Number(balRes.balance) || 0;
-       if (balance > (INVENTORY_CAP * 0.7)) {
-          inventorySkew = SKEW_REDUCTION_OFFSET;
-          console.warn(`[${asset}] 🛡️ Inventory Skew active: balance ${balance.toFixed(0)} tokens. Reducing bid by ${(inventorySkew * 100).toFixed(1)}%.`);
-       }
-    } catch (_) {}
-
-    // v7.5.0: Compliance (Dynamic Tick Size & GTD Expiry)
-    const config = await getMarketConfig(clobClient, tokenId);
-    const tickNum = parseFloat(config.tickSize);
-    const decimals = config.tickSize.includes('.') ? config.tickSize.split('.')[1].length : 0;
-
-    // v7.6.0: Whale Sentinel
-    detectWhales(asset, 'bid', book);
-    detectWhales(asset, 'ask', book);
-
-    // v7.8.0: Pre-Expiration Safety (T-90s)
-    const state = getAssetState(asset);
-    if (state.currentSlotStrike) {
-       const endTime = state.currentSlotStrike.endMs;
-       const remaining = endTime - Date.now();
-       if (remaining > 0 && remaining < 90000) { // < 90s
-          logJson('warn', `🛡️ [${asset}] Pre-Expiration Safety (T-90s): Halt quoting.`, { remainingMs: remaining });
-          return null; 
-       }
-    }
-
-    // 3. Calculate Maker Price (Best Bid + Tick - inventorySkew)
-    // v7.8.0: Symmetric Skewing (Shift both Bid and Ask when overloaded)
-    const bidPrice = Number((bestBid + tickNum - inventorySkew).toFixed(decimals));
-    const askPrice = Number((bestAsk - tickNum - inventorySkew).toFixed(decimals));
-    
-    const limitPrice = side === 'bid' ? bidPrice : askPrice;
-    
-    // 4. Round amount to min_order_size (usually 0.1 tokens)
-    const rawTokens = amountUsd / limitPrice;
-    const tokens = Math.floor(rawTokens * 10) / 10;
-    
-    console.log(`[${asset}] [DEBUG] Limit Order Calculation (Tick: ${config.tickSize}): $${amountUsd} / ${limitPrice} = ${tokens} tokens`);
-
-    if (tokens < config.minOrderSize || !Number.isFinite(tokens)) return { ok: false, error: 'Amount too low for limit order' };
-
-    const userLimitOrder = {
-      tokenId,
-      price: limitPrice,
-      side: Side.BUY,
-      size: tokens,
-      feeRateBps: 0,
-      expiration: Math.floor(Date.now() / 1000) + 60 + 300 // v7.5.0: 5m GTD safety window
-    };
-
-    const signedOrder = await createSignedLimitOrder(clobClient, userLimitOrder);
-    
-    // v7.5.0: Switch to GTD (Good-Til-Date) for absolute safety
-    const result = await clobClient.postOrder(signedOrder, OrderType.GTD, false, true);
-
-    if (result.success && result.orderID) {
-      OPEN_LIMIT_ORDERS.set(signal.conditionId, {
-        orderId: result.orderID,
-        at: Date.now(),
-        price: limitPrice,
-        asset,
-        tokenId
-      });
-      saveOpenOrders(); // v7.1.0 Persistence
-      
-      // v7.3.0: Liquidity Ladder (3-Tier Bidding)
-      // Tier 1 (Primary) is already placed. Now Tier 2 (Volume) and Tier 3 (Deep).
-      const ladderSteps = [
-         { name: 'Volume', offset: 0.002, suffix: 'vol' },
-         { name: 'Deep', offset: 0.006, suffix: 'deep' }
-      ];
-
-      for (const step of ladderSteps) {
-         try {
-           const stepPrice = (limitPrice - step.offset).toFixed(3);
-           if (stepPrice <= 0.01) continue;
-           
-           const stepTokens = (amountUsd / Number(stepPrice)).toFixed(1);
-           const stepOrder = { ...userLimitOrder, price: Number(stepPrice), size: stepTokens };
-           const stepSigned = await createSignedLimitOrder(clobClient, stepOrder);
-           const resStep = await clobClient.postOrder(stepSigned, OrderType.GTC, false, true);
-           
-           if (resStep.success) {
-              OPEN_LIMIT_ORDERS.set(`${signal.conditionId}_${step.suffix}`, {
-                orderId: resStep.orderID,
-                at: Date.now(),
-                price: Number(stepPrice),
-                asset,
-                tokenId
-              });
-              console.log(`[${asset}] 🪜 ${step.name} ladder step placed at ${stepPrice}`);
-           }
-         } catch (_) {}
-      }
-      saveOpenOrders();
-
-      recordSignalAudit(signal, 'EXECUTED', { status: 'posted', result: result });
-      return { ok: true, orderId: result.orderID, price: limitPrice, filledUsd: 0 }; // Maker is not filled yet
-    }
-    
-    return { ok: false, error: result.errorMsg || 'Clob post failed' };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-/**
- * Monitor and cancel stale limit orders (v7.0.0).
- * Runs at the end of each cycle.
- */
-const OPEN_ORDERS_FILE = path.join(__dirname, 'open-orders.json');
-
-function saveOpenOrders() {
-  try {
-    const data = Object.fromEntries(OPEN_LIMIT_ORDERS);
-    atomicWriteJson(OPEN_ORDERS_FILE, data);
-  } catch (e) {
-    console.error('[Persistence] Error saving open orders:', e.message);
-  }
-}
-
-function loadOpenOrders() {
-  try {
-    if (fs.existsSync(OPEN_ORDERS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(OPEN_ORDERS_FILE, 'utf8'));
-      for (const [key, val] of Object.entries(data)) {
-        OPEN_LIMIT_ORDERS.set(key, val);
-      }
-      console.log(`[Persistence] Loaded ${OPEN_LIMIT_ORDERS.size} orders from disk.`);
-    }
-  } catch (e) {
-    console.error('[Persistence] Error loading open orders:', e.message);
-  }
-}
-
-/**
- * Fetch Rewards Score from Polymarket (v7.1.0).
- * Requires API credentials.
- */
-async function fetchRewardsUserPercentages(clobClient) {
-  if (!clobClient) return null;
-  try {
-    // v7.3.0: Using native SDK method for 100% reliable rewards monitor
-    const res = await clobClient.getRewardPercentages();
-    // v7.4.3: Robust array detection for various SDK/API return formats
-    if (Array.isArray(res)) return res;
-    if (res && Array.isArray(res.data)) return res.data;
-    return [];
-  } catch (err) {
-    if (err.message.includes('403') || err.message.includes('401')) {
-       // Silently fail if auth is not ready yet
-    } else {
-       console.warn(`[Rewards] Native fetch failed: ${err.message}`);
-    }
-    return null;
-  }
-}
-
-async function checkAndCancelStaleOrders(clobClient) {
-  //console.log(`[CrashAudit] typeof clobClient: ${typeof clobClient} | isNull: ${clobClient === null} | isUndefined: ${clobClient === undefined}`);
-  if (!clobClient) {
-      //console.warn('[CrashAudit] REJECTED: clobClient is falsy');
-      return;
-  }
-  // v7.4.0: Detect Fills via SDK comparison
-  let activeOrderIds = new Set();
-  try {
-    //console.log(`[CrashAudit] Calling getOpenOrders with current state...`);
-    const res = await clobClient.getOpenOrders();
-    const openClobOrders = Array.isArray(res) ? res : (res?.data || []);
-    activeOrderIds = new Set(openClobOrders.map(o => o.orderID));
-  } catch (err) {
-     warnClobClientIfThrottled(`[Monitor] Could not fetch active CLOB orders: ${err.message}`);
-     return; // Safety: don't delete anything if we can't verify status
-  }
-
-  const now = Date.now();
-  for (const [condId, data] of OPEN_LIMIT_ORDERS.entries()) {
-    // 0. Fill Detection (Order exists in our map but NOT in CLOB API)
-    if (!activeOrderIds.has(data.orderId)) {
-        console.log(`[${data.asset}] 🌊 LADDER FILL DETECTED: Order ${data.orderId} at ${data.price}¢`);
-        if (telegramTradeAlertsEnabled) {
-           await sendTelegramAlert(`🌊 *LADDER SNIPER FILL*\nAsset: ${data.asset}\nPrice: ${data.price}¢\nType: Maker Fill Detected`);
-        }
-        OPEN_LIMIT_ORDERS.delete(condId);
-        saveOpenOrders();
-        continue;
-    }
-
-    const ageMs = now - data.at;
-    
-    // 1. Time-based Expiration (TTL)
-    if (ageMs > LIMIT_ORDER_TTL_MS) {
-       // ... existing cancel logic ...
-      console.log(`[${data.asset}] 🕒 Cancel stale LIMIT order ${data.orderId} (Age: ${Math.round(ageMs/1000)}s)`);
-      try {
-        await clobClient.cancelOrder(data.orderId);
-        OPEN_LIMIT_ORDERS.delete(condId);
-        saveOpenOrders(); // v7.1.0 Persistence
-      } catch (err) {
-        warnClobClientIfThrottled(`Error cancelling order ${data.orderId}: ${err.message}`);
-      }
-      continue;
-    }
-
-    // 2. Market-based Stale (Price moved too far)
-    try {
-        const book = await clobClient.getOrderBook(data.tokenId);
-        const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
-        const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 1;
-        
-        if (isOrderStale(data.price, bestBid, bestAsk, 0.005)) {
-            console.log(`[${data.asset}] 📉 Market move: Cancel stale LIMIT order ${data.orderId}`);
-            await clobClient.cancelOrder(data.orderId);
-            OPEN_LIMIT_ORDERS.delete(condId);
-            saveOpenOrders(); // v7.1.0 Persistence
-        }
-    } catch (err) {
-        // Silent fail on book fetch
-    }
-  }
+  return client.createMarketOrder(userMarketOrder, { negRisk: false });
 }
 
 /** Taille max du JSON `clobResponse` dans last-order / orders.log (évite fichiers énormes). */
@@ -2736,19 +1756,8 @@ async function getUsdcBalanceForTelegramAlerts() {
  * @param {Record<string, unknown>} orderData
  * @param {import('@polymarket/clob-client').ClobClient | null} clobClient
  */
-const notifiedTelegramTradeOrders = new Set();
-
 async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
   if (!telegramTradeAlertsEnabled()) return;
-  const orderId = orderData?.orderID ?? orderData?.order_id;
-  if (orderId && notifiedTelegramTradeOrders.has(String(orderId))) return;
-  if (orderId) notifiedTelegramTradeOrders.add(String(orderId));
-  // Limiter la taille du set pour éviter les fuites mémoire sur le long terme (on garde les 1000 derniers)
-  if (notifiedTelegramTradeOrders.size > 1000) {
-    const first = notifiedTelegramTradeOrders.values().next().value;
-    notifiedTelegramTradeOrders.delete(first);
-  }
-
   try {
     let balanceAfter = null;
     if (orderData?.simulationTrade) {
@@ -2778,7 +1787,6 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       tokenId &&
       typeof tokenId === 'string';
 
-    const brand = getAssetBranding(orderData?.asset || orderData?.underlying);
     let mtmLine = '';
     if (hasFilled) {
       const bid = await getBestBid(tokenId);
@@ -2808,12 +1816,11 @@ async function notifyTelegramTradeSuccess(source, orderData, clobClient) {
       Number.isFinite(totalLatencyMs) && totalLatencyMs > 0 && Number.isFinite(placeOrderMs) && placeOrderMs >= 0
         ? Math.max(0, Math.min(1, placeOrderMs / totalLatencyMs))
         : null;
-    const assetLabel = brand.label;
     const paperPre = orderData?.simulationTrade ? '[PAPER] ' : '';
     const lines = [
       hasFilled
-        ? `${paperPre}${brand.emoji} Trade Success (${brand.label})`
-        : `${paperPre}⚠️ [${assetLabel}] Trade accepté (remplissage nul)`,
+        ? `${paperPre}✅ Trade (${source === 'ws' ? 'WebSocket' : 'poll'})`
+        : `${paperPre}⚠️ Trade accepté (remplissage immédiat nul)`,
       `Côté : ${orderData?.takeSide ?? '?'}`,
       `Montant demandé : ${amtStr} USDC`,
       `Exécuté : ${usdc != null && Number.isFinite(usdc) ? usdc.toFixed(2) : '?'} USDC (remplissage ${fr})`,
@@ -3175,8 +2182,7 @@ async function executePaperStopLossExit(p) {
   }
   
   if (Number.isFinite(bestBidLive) && bestBidLive > 0 && bestBidLive < 1) {
-    // v14.53 : Si le prix actuel est meilleur que le prix de stop-loss (Take Profit), on utilise le profit rÃ©el.
-    worstPricePUsed = bestBidLive;
+    worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
   }
   worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
   const rawTakerLoop = tokensToSell * worstPricePUsed * 1e6;
@@ -3273,258 +2279,515 @@ async function executePaperStopLossExit(p) {
     worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
     filledUsdc: totalFilledUsdc,
   });
-
-  pos.resolved = true;
-  updateActivePosition(pos);
 }
 
-/** 
- * 7.13.1 : Surveille et clôture une position spécifique (SL/TP/Time-Exit). 
- */
-async function processSinglePositionExit(pos, clobClient) {
-  if (pos.resolved || pos.stopLossExit === true) return false;
-  if (!pos.simulationTrade && !clobClient) return false;
+async function tryStopLossForOpenPosition(clobClient) {
+  if (!stopLossEnabled || !walletConfigured || !wallet) return;
+  const last = readLastOrder();
+  if (!last || typeof last !== 'object') return;
+  if (last.stopLossExit === true) return;
+  if (!last.simulationTrade && !clobClient) return;
+  const conditionId = String(last.conditionId || '').trim();
+  const tokenId = String(last.tokenId || '').trim();
+  const takeSide = last.takeSide === 'Up' || last.takeSide === 'Down' ? last.takeSide : null;
+  if (!conditionId || !tokenId || !takeSide) return;
 
-  const conditionId = String(pos.conditionId || '').trim();
-  const tokenId = String(pos.tokenId || '').trim();
-  const takeSide = pos.takeSide === 'Up' || pos.takeSide === 'Down' ? pos.takeSide : null;
-  if (!conditionId || !tokenId || !takeSide) return false;
+  const endMs = parseMarketEndDateToMs(last.marketEndMs ?? last.endDate);
+  // Si fin de marché connue et déjà passée : plus de carnet / sortie gérée ailleurs (redeem).
+  // Si endMs absent (vieux last-order sans marketEndMs) : ne pas bloquer le SL — avant ça on sortait
+  // toujours (`!Number.isFinite(endMs)` → aucun stop-loss possible → perte totale à la résolution).
+  if (Number.isFinite(endMs) && Date.now() >= endMs) return;
+  const enteredAtMs = last?.at ? new Date(last.at).getTime() : null;
+  if (Number.isFinite(enteredAtMs) && Date.now() - enteredAtMs < STOP_LOSS_MIN_HOLD_MS) return;
 
-  const endMs = parseMarketEndDateToMs(pos.marketEndMs ?? pos.endDate);
-  const nowMs = Date.now();
-  if (Number.isFinite(endMs) && nowMs >= endMs) return false;
-  
   const nextAllowed = stopLossNextAttemptByCondition.get(conditionId) || 0;
-  if (nowMs < nextAllowed) return false;
+  if (Date.now() < nextAllowed) return;
 
-  const entryPriceP = Number(pos.averageFillPriceP || pos.pricePrompt || 0.5);
-  if (!(entryPriceP > 0)) return false;
+  const entryPriceRaw = Number(last.averageFillPriceP);
+  const entryPriceP = Number.isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null;
+  if (!(entryPriceP > 0)) return;
 
   const bestBid = await getBestBid(tokenId);
-  const targetProfitPct = Math.min(0.20, Math.max(0.025, Number(pos.edge || 0.05)));
-  const netProfitPct = (bestBid - entryPriceP) / entryPriceP;
-  console.log(`[Monitor] \ud83d\udcca Position ${pos.underlying} | Bid: ${bestBid} | Target: +${(targetProfitPct*100).toFixed(1)}% | Net: +${(netProfitPct*100).toFixed(1)}%`);
-  
-  if (!(bestBid > 0 && bestBid < 1)) return false;
-  const secondsLeft = Number.isFinite(endMs) ? (endMs - nowMs) / 1000 : 999;
+  if (!(bestBid > 0 && bestBid < 1)) return;
 
-  // --- LOGIQUE SNIPER 5M BTC (v2026 : SL Fixe 10%) ---
-  const stopLossThreshold = 0.10; // -10% Fixe pendant toute la position
-  const triggerSL = (netProfitPct <= -stopLossThreshold);
+  const drawdownPct = ((bestBid - entryPriceP) / entryPriceP) * 100;
+  const triggerByPrice = bestBid < stopLossTriggerPriceP;
+  const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
+  if (!triggerByPrice && !triggerByDrawdown) return;
 
-  // 1. Take Profit (Convergence)
-  const triggerTP = (netProfitPct >= targetProfitPct);
+  logStopLossTouchedWatch({
+    conditionId,
+    tokenId,
+    takeSide,
+    bestBid,
+    entryPriceP,
+    drawdownPct,
+    triggerByPrice,
+    triggerByDrawdown,
+  });
 
-  // 3. Time-Based Exit (Fermeture de secours hors Sniper)
-  const isSniper = ENABLE_SNIPER_STRATEGY && (pos.asset === 'BTC' || (pos.eventSlug && pos.eventSlug.includes('btc-updown-5m')));
-  const triggerTimeForce = !isSniper && secondsLeft < 30; 
-  const triggerTimeCut = !isSniper && secondsLeft < 60 && netProfitPct < 0;
-
-  const triggered = triggerTP || triggerSL || triggerTimeForce || triggerTimeCut;
-  if (!triggered) {
-    stopLossNextAttemptByCondition.set(conditionId, nowMs + 10000);
-    return false;
-  }
-
-  const isSniperTrade = ENABLE_SNIPER_STRATEGY && (pos.asset === 'BTC' || (pos.eventSlug && pos.eventSlug.includes('btc-updown-5m')));
-  const triggerReason = triggerTP ? 'CONVERGENCE_TP' : 
-                       (triggerSL && isSniperTrade) ? (stopLossThreshold === 0.05 ? 'SNIPER_SL_5PCT' : 'SNIPER_SL_10PCT') :
-                       triggerSL ? 'HARD_STOP_LOSS' :
-                       triggerTimeForce ? 'TIME_FORCE_EXIT' : 'TIME_CUT_LOSS';
-
-  const drawdownPct = netProfitPct * 100;
-  let tokensToSell = Number(pos.filledOutcomeTokens);
+  let tokensToSell = Number(last.filledOutcomeTokens);
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
-     tokensToSell = (Number(pos.filledUsdc || pos.amountUsd) || 10) / entryPriceP;
+    const stakeUsd = Number(last.filledUsdc ?? last.amountUsd);
+    if (Number.isFinite(stakeUsd) && stakeUsd > 0) {
+      tokensToSell = stakeUsd / entryPriceP;
+    }
+  }
+  if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) return;
+
+  if (last.simulationTrade === true) {
+    const filledUsdForDustSim = Number(last.filledUsdc);
+    if (Number.isFinite(filledUsdForDustSim) && filledUsdForDustSim >= 0 && filledUsdForDustSim < 0.05) {
+      logJson('warn', 'Stop-loss PAPER: entrée négligeable', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        filledUsdc: filledUsdForDustSim,
+      });
+      return;
+    }
+    await executePaperStopLossExit({
+      conditionId,
+      tokenId,
+      takeSide,
+      endMs,
+      entryPriceP,
+      bestBid,
+      drawdownPct,
+      triggerByPrice,
+      triggerByDrawdown,
+      tokensToSell,
+      originalStakeUsd: Number(last.filledUsdc ?? last.amountUsd),
+    });
+    return;
   }
 
-  if (pos.simulationTrade) {
-     await executePaperStopLossExit({
-        conditionId, tokenId, takeSide, endMs, entryPriceP, bestBid, drawdownPct,
-        triggerByPrice: true, triggerByDrawdown: false, tokensToSell,
-        originalStakeUsd: Number(pos.filledUsdc || pos.amountUsd),
-     });
-     return true;
-  }
-
-  // --- EXECUTION CLOB REELLE ---
   const spendableTokensFromClob = await getOutcomeSpendableViaClob(clobClient, tokenId);
   const adjustedSellAmount = resolveSellAmountFromSpendable(tokensToSell, spendableTokensFromClob, 0.00001);
   if (adjustedSellAmount != null) tokensToSell = adjustedSellAmount;
-  
   if (!(Number.isFinite(tokensToSell) && tokensToSell > 0)) {
-    stopLossNextAttemptByCondition.set(conditionId, nowMs + 30000);
-    return false;
-  }
-
-  return await executeClobExit(clobClient, pos, tokensToSell, bestBid, drawdownPct, triggerReason, endMs);
-}
-
-/** Boucle principale de monitoring (v7.13.1 Multi-Asset) */
-async function tryDynamicExitForOpenPosition(clobClient) {
-  if (!IS_SIMULATION && (!walletConfigured || !wallet)) return;
-  const active = readActivePositions();
-  if (!active || active.length === 0) return;
-
-  for (const pos of active) {
-    try {
-      console.log(`[Monitor] \ud83d\udc41\ufe0f Analyse de position active : ${pos.underlying}`);
-      await processSinglePositionExit(pos, clobClient);
-    } catch (err) {
-      logJson('error', 'Echec monitoring position', { underlying: pos.underlying, err: err.message });
-    }
-  }
-}
-
-async function executeClobExit(clobClient, pos, tokensToSell, bestBid, drawdownPct, triggerReason, endMs) {
-  const conditionId = pos.conditionId;
-  const tokenId = pos.tokenId;
-  const takeSide = pos.takeSide;
-  const entryPriceP = Number(pos.averageFillPriceP || 0.5);
-
-  const minRawAmount = 1;
-  const rawMaker = tokensToSell * 1e6;
-  if (!(rawMaker >= minRawAmount)) return false;
-
-  const minWorstPriceForValidTakerP = minRawAmount / (tokensToSell * 1e6);
-  let bestBidLive = bestBid;
-  let drawdownPctLive = drawdownPct;
-  let worstPricePUsed = 0;
-  let exitFilledOk = false;
-  let totalFilledTokens = 0;
-  let totalFilledUsdc = 0;
-
-  for (let immediateAttempt = 0; immediateAttempt <= STOP_LOSS_IMMEDIATE_RETRY_MAX; immediateAttempt++) {
-    if (immediateAttempt > 0) {
-      await sleep(STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS);
-      const freshBid = await getBestBid(tokenId);
-      if (!(freshBid > 0 && freshBid < 1)) break;
-      bestBidLive = freshBid;
-      drawdownPctLive = ((bestBidLive - entryPriceP) / entryPriceP) * 100;
-    }
-
-    worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
-    worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
-    if (bestBidLive > 0) worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
-    worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
-
-    try {
-      // v9.3.17 : Nuclear Signer Guard
-      if (!IS_SIMULATION && (!clobClient || !wallet)) {
-         console.warn('[executeClobExit] Emergency Stop: clobClient or wallet is NULL.');
-         return false;
-      }
-
-      if (IS_SIMULATION) {
-        // --- SIMULATED FILL (v14.53) ---
-        totalFilledTokens = tokensToSell;
-        totalFilledUsdc = tokensToSell * bestBidLive;
-        exitFilledOk = true;
-        console.log(`[PAPER] \u2705 Stop-loss Exit Simulated for ${pos.underlying} at ${bestBidLive}`);
-        break; 
-      }
-
-      const result = await placeLimitOrder(clobClient, {
-        price: worstPricePUsed,
-        size: tokensToSell - totalFilledTokens,
-        side: Side.SELL,
-        tokenId,
+    // Cas fréquent après échecs SL: la position a finalement été fermée (manuel ou autre flux),
+    // donc on envoie un message de rattrapage pour éviter l'ambiguïté.
+    if (stopLossTelegramExitFailedNotified.has(conditionId) || stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+      void notifyTelegramStopLossRecoveredLater({
+        conditionId,
+        takeSide,
+        detail: 'plus de tokens vendables détectés au CLOB',
       });
-      const fill = await waitForOrderFill(clobClient, result?.orderID);
-      if (fill?.clobSuccess) {
-        totalFilledTokens += Number(fill.filledOutcomeTokens || 0);
-        totalFilledUsdc += Number(fill.filledUsdc || 0);
-        if (totalFilledTokens >= tokensToSell * 0.99) { exitFilledOk = true; break; }
-      }
-    } catch (e) {
-      logJson('warn', 'Fail retry SL immediate', { err: e.message });
     }
+    stopLossTelegramExitFailedNotified.delete(conditionId);
+    stopLossTelegramEscalatedNotified.delete(conditionId);
+    stopLossFirstTriggeredAtByCondition.delete(conditionId);
+    stopLossNextAttemptByCondition.delete(conditionId);
+    return;
   }
 
-  const exitOrder = {
-    at: new Date().toISOString(),
-    conditionId,
-    tokenId,
-    underlying: pos.underlying,
-    takeSide,
-    event: 'stop_loss_exit',
-    stopLossExit: exitFilledOk,
-    triggerReason,
-    triggerPriceP: entryPriceP,
-    averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
-    totalFilledUsdc,
-    totalFilledTokens,
-  };
+  const filledUsdForDust = Number(last.filledUsdc);
+  if (Number.isFinite(filledUsdForDust) && filledUsdForDust >= 0 && filledUsdForDust < 0.05) {
+    logJson('warn', 'Stop-loss: ignoré — exécution d’entrée négligeable (pas de position vendable au CLOB)', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      takeSide,
+      filledUsdc: filledUsdForDust,
+      amountUsd: last.amountUsd,
+    });
+    return;
+  }
 
-  if (exitFilledOk) {
-    pos.resolved = true;
-    pos.stopLossExit = true;
-    updateActivePosition(pos);
+  try {
+    // Polymarket CLOB exige que maker & taker (fixed-point 6 décimales côté CLOB) soient > 0.
+    // Avec des positions très petites, un `STOP_LOSS_WORST_PRICE_P` trop bas peut rendre le taker amount
+    // ~0 après arrondi -> erreur 400: "maker and taker amount must be higher than 0".
+    const minRawAmount = 1; // seuil minimal en unités fixed-point (1e-6)
+    // Marge : ~1 unité brute peut être arrondie à 0 côté API → rejets 400 en rafale (dust + SL).
+    const minRawSafe = 2;
+    const rawMaker = tokensToSell * 1e6; // maker = tokens outcome côté SELL
+    if (!(rawMaker >= minRawAmount)) {
+      logJson('warn', 'Stop-loss: tokensToSell trop petits pour CLOB (maker < 1 raw)', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        tokensToSell,
+        rawMaker: Math.round(rawMaker * 1000) / 1000,
+      });
+      return;
+    }
+
+    const minWorstPriceForValidTakerP = minRawAmount / (tokensToSell * 1e6); // makerRaw * priceRaw >= 1
+
+    let bestBidLive = bestBid;
+    let drawdownPctLive = drawdownPct;
+    let worstPricePUsed = 0;
+    let exitFilledOk = false;
+    let result;
+    let fill;
+    let clobResponse;
+    let totalFilledTokens = 0;
+    let totalFilledUsdc = 0;
+    let remainingTokens = 0;
+    let lastResult;
+    let lastClobResponse;
+    let stopLossPartialFillRetries = 0;
+    /** Début de la vague de tentatives SL (logs / métriques « filled »). */
+    let stopLossTriggeredAtMs = Date.now();
+
+    for (let immediateAttempt = 0; immediateAttempt <= STOP_LOSS_IMMEDIATE_RETRY_MAX; immediateAttempt++) {
+      if (immediateAttempt > 0) {
+        if (STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS > 0) {
+          await sleep(STOP_LOSS_IMMEDIATE_RETRY_DELAY_MS);
+        }
+        const freshBid = await getBestBid(tokenId);
+        if (!(freshBid > 0 && freshBid < 1)) {
+          logJson('warn', 'Stop-loss: retry immédiat — bestBid indisponible', {
+            conditionId: conditionId.slice(0, 18) + '…',
+            attempt: immediateAttempt + 1,
+          });
+          break;
+        }
+        bestBidLive = freshBid;
+        drawdownPctLive = ((bestBidLive - entryPriceP) / entryPriceP) * 100;
+      }
+
+      worstPricePUsed = Math.max(stopLossWorstPriceP, minWorstPriceForValidTakerP);
+      worstPricePUsed = Math.min(worstPricePUsed, stopLossTriggerPriceP);
+      if (Number.isFinite(bestBidLive) && bestBidLive > 0 && bestBidLive < 1) {
+        const beforeFollow = worstPricePUsed;
+        worstPricePUsed = Math.min(worstPricePUsed, bestBidLive);
+        if (beforeFollow > bestBidLive + 1e-9) {
+          logJson('info', 'Stop-loss: worst price aligné sur bestBid (évite FAK sans match)', {
+            conditionId: conditionId.slice(0, 18) + '…',
+            attempt: immediateAttempt + 1,
+            worstBefore: Math.round(beforeFollow * 1e6) / 1e6,
+            bestBid: Math.round(bestBidLive * 1e6) / 1e6,
+            worstAfter: Math.round(worstPricePUsed * 1e6) / 1e6,
+          });
+        }
+      }
+      worstPricePUsed = Math.min(0.99, Math.max(0.001, worstPricePUsed));
+      const rawTakerLoop = tokensToSell * worstPricePUsed * 1e6;
+      if (!(rawTakerLoop >= minRawAmount)) {
+        logJson('warn', 'Stop-loss: impossible d’obtenir un taker > 0 raw', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          takeSide,
+          tokensToSell,
+          worstPricePUsed,
+          attempt: immediateAttempt + 1,
+        });
+        stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+        return;
+      }
+      if (rawMaker < minRawSafe || rawTakerLoop < minRawSafe) {
+        logJson('warn', 'Stop-loss: montants raw trop faibles pour le CLOB (éviter 400 invalid amounts)', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          takeSide,
+          attempt: immediateAttempt + 1,
+        });
+        stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+        return;
+      }
+
+      if (immediateAttempt === 0) {
+        if (!stopLossFirstTriggeredAtByCondition.has(conditionId)) {
+          stopLossFirstTriggeredAtByCondition.set(conditionId, stopLossTriggeredAtMs);
+          recordStopLossMetric('triggered', { conditionId, takeSide });
+        }
+        void notifyTelegramStopLossTriggered({
+          conditionId,
+          takeSide,
+          triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+          entryPriceP,
+          bestBidP: bestBidLive,
+          drawdownPct: drawdownPctLive,
+          stopLossTriggerPriceP,
+          stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? Math.abs(stopLossMaxDrawdownPct) : null,
+          stopLossWorstPricePUsed: worstPricePUsed,
+        });
+      }
+
+      const userMarketOrder = {
+        tokenID: tokenId,
+        amount: tokensToSell,
+        side: Side.SELL,
+        price: worstPricePUsed,
+      };
+
+      const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
+      result = await clobClient.postOrder(signedOrder, marketOrderType);
+      fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+      clobResponse = serializeClobPostOrderResponseForLog(result);
+      const firstFilledTokens = Number(fill?.filledOutcomeTokens);
+      const firstFilledUsdc = Number(fill?.filledUsdc);
+      exitFilledOk =
+        Number.isFinite(firstFilledTokens) &&
+        firstFilledTokens > 0 &&
+        Number.isFinite(firstFilledUsdc) &&
+        firstFilledUsdc > 0;
+
+      totalFilledTokens = exitFilledOk ? firstFilledTokens : 0;
+      totalFilledUsdc = exitFilledOk ? firstFilledUsdc : 0;
+      remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
+      lastResult = result;
+      lastClobResponse = clobResponse;
+
+      if (!exitFilledOk && isInsufficientBalanceOrAllowanceError(fill?.clobErrorMsg || clobResponse?.error || clobResponse?.status)) {
+        const refreshedSpendable = await getOutcomeSpendableViaClob(clobClient, tokenId);
+        const retryAmount = resolveSellAmountFromSpendable(tokensToSell, refreshedSpendable, 0.00001);
+        if (Number.isFinite(retryAmount) && retryAmount > 0 && retryAmount < tokensToSell) {
+          try {
+            const retrySignedOrder = await createSignedMarketOrder(clobClient, {
+              tokenID: tokenId,
+              amount: retryAmount,
+              side: Side.SELL,
+              price: worstPricePUsed,
+            });
+            result = await clobClient.postOrder(retrySignedOrder, marketOrderType);
+            fill = parsePolymarketPostOrderFill(result, { orderSide: Side.SELL, requestedUsd: null });
+            clobResponse = serializeClobPostOrderResponseForLog(result);
+            lastResult = result;
+            lastClobResponse = clobResponse;
+            const retryFilledTokens = Number(fill?.filledOutcomeTokens);
+            const retryFilledUsdc = Number(fill?.filledUsdc);
+            exitFilledOk =
+              Number.isFinite(retryFilledTokens) &&
+              retryFilledTokens > 0 &&
+              Number.isFinite(retryFilledUsdc) &&
+              retryFilledUsdc > 0;
+            if (exitFilledOk) {
+              totalFilledTokens = retryFilledTokens;
+              totalFilledUsdc = retryFilledUsdc;
+              remainingTokens = Math.max(0, retryAmount - totalFilledTokens);
+              tokensToSell = retryAmount;
+            }
+          } catch (_) {
+            // on laisse le flux normal logger l'échec
+          }
+        }
+      }
+
+      if (exitFilledOk) {
+        break;
+      }
+
+      const errHint = fill?.clobErrorMsg ?? fill?.clobStatus ?? clobResponse?.error ?? '';
+      const errStr = String(errHint || '').toLowerCase();
+      const looksLikeNoMatch = /no orders found to match|no match found/i.test(errStr);
+      if (immediateAttempt < STOP_LOSS_IMMEDIATE_RETRY_MAX && looksLikeNoMatch) {
+        logJson('info', 'Stop-loss: retry immédiat (même passe) après FAK sans match', {
+          conditionId: conditionId.slice(0, 18) + '…',
+          attempt: immediateAttempt + 1,
+          nextAttempt: immediateAttempt + 2,
+          errorHint: String(errHint).slice(0, 120),
+          bestBidLive: Math.round(bestBidLive * 1e6) / 1e6,
+        });
+        continue;
+      }
+      break;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (exitFilledOk && stopLossPartialRetryEnabled && remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS) {
+      const retryStartedAt = Date.now();
+      while (
+        stopLossPartialFillRetries < STOP_LOSS_PARTIAL_RETRY_MAX_EXTRA &&
+        Date.now() - retryStartedAt < STOP_LOSS_PARTIAL_RETRY_MAX_WINDOW_MS &&
+        remainingTokens > STOP_LOSS_PARTIAL_RETRY_MIN_REMAINING_TOKENS
+      ) {
+        if (STOP_LOSS_PARTIAL_RETRY_DELAY_MS > 0) await sleep(STOP_LOSS_PARTIAL_RETRY_DELAY_MS);
+        stopLossPartialFillRetries += 1;
+        try {
+          const retrySignedOrder = await createSignedMarketOrder(clobClient, {
+            tokenID: tokenId,
+            amount: remainingTokens,
+            side: Side.SELL,
+            price: worstPricePUsed,
+          });
+          const retryResult = await clobClient.postOrder(retrySignedOrder, marketOrderType);
+          const retryFill = parsePolymarketPostOrderFill(retryResult, { orderSide: Side.SELL, requestedUsd: null });
+          const retryFilledTokens = Number(retryFill?.filledOutcomeTokens);
+          const retryFilledUsdc = Number(retryFill?.filledUsdc);
+          lastResult = retryResult;
+          lastClobResponse = serializeClobPostOrderResponseForLog(retryResult);
+          if (
+            Number.isFinite(retryFilledTokens) &&
+            retryFilledTokens > 0 &&
+            Number.isFinite(retryFilledUsdc) &&
+            retryFilledUsdc > 0
+          ) {
+            totalFilledTokens += retryFilledTokens;
+            totalFilledUsdc += retryFilledUsdc;
+            remainingTokens = Math.max(0, tokensToSell - totalFilledTokens);
+          } else {
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+    }
+
+    const baseExitOrder = {
+      at: nowIso,
+      conditionId,
+      tokenId,
+      takeSide,
+      orderID: lastResult?.orderID ?? lastResult?.id,
+      stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+      stopLossMaxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
+      stopLossTriggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+      stopLossObservedDrawdownPct: Math.round(drawdownPctLive * 100) / 100,
+      stopLossEntryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
+      stopLossBestBidP: Math.round(bestBidLive * 1e6) / 1e6,
+      stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+      marketEndMs: endMs,
+      clobSignerAddress: wallet?.address ?? null,
+      clobSignatureType: CLOB_SIGNATURE_TYPE,
+      clobFunderAddress: clobFunderAddress ?? null,
+      stopLossPartialFillRetries,
+      stopLossRemainingOutcomeTokens: Math.round(Math.max(0, remainingTokens) * 1e6) / 1e6,
+      ...pickFillFieldsForLog({
+        clobResponse: lastClobResponse,
+        clobStatus: lastResult?.status,
+        clobSuccess: lastResult?.success,
+        filledOutcomeTokens: totalFilledTokens,
+        filledUsdc: totalFilledUsdc,
+        fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+        averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+      }),
+    };
+
+    // Si l’ordre n’est pas rempli (ou rejeté sans throw), on ne doit PAS écraser last-order.json avec
+    // `stopLossExit=true` : sinon le bot ne retry plus (ce qui laisse la position ouverte).
+    if (!exitFilledOk) {
+      const errorHint = fill?.clobErrorMsg ?? fill?.clobStatus ?? lastClobResponse?.error ?? null;
+      appendOrderLog({
+        ...baseExitOrder,
+        stopLossExit: false,
+        stopLossExitAttemptFailed: true,
+      });
+      stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+      recordStopLossMetric('failed', { conditionId, errorHint });
+      const firstTriggeredAtMs = stopLossFirstTriggeredAtByCondition.get(conditionId) || stopLossTriggeredAtMs;
+      if (Date.now() - firstTriggeredAtMs >= STOP_LOSS_ESCALATION_MS) {
+        void notifyTelegramStopLossEscalation({
+          conditionId,
+          takeSide,
+          openSinceMs: Date.now() - firstTriggeredAtMs,
+          lastErrorHint: errorHint,
+        });
+      }
+      void notifyTelegramStopLossExitFailed({
+        conditionId,
+        takeSide,
+        errorHint,
+        tokensToSell,
+        spendableTokens: spendableTokensFromClob,
+        orderID: lastResult?.orderID ?? lastResult?.id,
+      });
+      logJson('warn', 'Stop-loss: tentative d’exit rejetée / non remplie — retry planifié', {
+        conditionId: conditionId.slice(0, 18) + '…',
+        takeSide,
+        exitFilledOk,
+        stopLossTriggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+        stopLossWorstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+        orderID: lastResult?.orderID ?? lastResult?.id,
+        triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+        errorHint,
+        spendableTokensFromClob,
+      });
+      return;
+    }
+
+    const exitOrder = {
+      ...baseExitOrder,
+      stopLossExit: true,
+    };
+
+    recordStopLossMetric('filled', {
+      conditionId,
+      fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+      retries: stopLossPartialFillRetries,
+      remainingTokens,
+      triggeredAtMs: stopLossTriggeredAtMs,
+      triggerPriceP: stopLossTriggerPriceP,
+      averageFillPriceP: totalFilledTokens > 0 ? totalFilledUsdc / totalFilledTokens : null,
+    });
+
     writeLastOrder(exitOrder);
     appendOrderLog(exitOrder);
-    notifyTelegramStopLossExit(exitOrder);
-    return true;
-  }
-  return false;
-}
+    stopLossTelegramExitFailedNotified.delete(conditionId);
+    stopLossTelegramEscalatedNotified.delete(conditionId);
+    stopLossTelegramRecoveredNotified.delete(conditionId);
+    stopLossFirstTriggeredAtByCondition.delete(conditionId);
+    stopLossNextAttemptByCondition.delete(conditionId);
+    executionCooldownByCondition.set(conditionId, endMs + 60_000);
 
+    // Notification dédiée : uniquement quand la vente stop-loss est réellement remplie.
+    // Ne pas bloquer la boucle bot (Telegram peut être lent).
+    void notifyTelegramStopLossFilled({
+      conditionId,
+      takeSide,
+      filledUsdc: totalFilledUsdc || null,
+      filledOutcomeTokens: totalFilledTokens || null,
+      fillRatio: tokensToSell > 0 ? Math.min(1, totalFilledTokens / tokensToSell) : null,
+      orderID: lastResult?.orderID ?? lastResult?.id,
+    });
 
-/**
- * Surveille les signaux vus en mode "Watch" (sans ordre) pour tracker s'ils auraient touché un SL virtuel.
- */
-async function tryStopLossForVirtualWatchEntries() {
-  if (!stopLossEnabled || virtualWatchEntries.size === 0) return;
-  const now = Date.now();
-  for (const [cid, entry] of virtualWatchEntries.entries()) {
-    // Purge auto si le créneau est fini ou si le signal est trop vieux (> 4h par sécurité)
-    if ((entry.endMs && now >= entry.endMs) || now - entry.at > 4 * 60 * 60 * 1000) {
-      virtualWatchEntries.delete(cid);
-      continue;
+    logJson('warn', 'Stop-loss déclenché: sortie avant résolution', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      takeSide,
+      drawdownPct: Math.round(drawdownPctLive * 100) / 100,
+      triggerPriceP: Math.round(stopLossTriggerPriceP * 1e6) / 1e6,
+      maxDrawdownPct: stopLossDrawdownEnabled ? -Math.abs(stopLossMaxDrawdownPct) : null,
+      triggerReason: triggerByPrice ? 'price_below_threshold' : 'drawdown_limit',
+      entryPriceP: Math.round(entryPriceP * 1e6) / 1e6,
+      bestBidP: Math.round(bestBidLive * 1e6) / 1e6,
+      orderID: lastResult?.orderID ?? lastResult?.id,
+      worstPricePUsed: Math.round(worstPricePUsed * 1e6) / 1e6,
+      stopLossPartialFillRetries,
+      stopLossRemainingOutcomeTokens: Math.round(Math.max(0, remainingTokens) * 1e6) / 1e6,
+    });
+    console.warn(
+      `[${nowIso}] [STOP-LOSS] Sortie ${takeSide} avant résolution — ${
+        triggerByPrice
+          ? `bid ${(bestBidLive * 100).toFixed(2)}¢ < seuil ${(stopLossTriggerPriceP * 100).toFixed(2)}¢`
+          : `drawdown ${drawdownPctLive.toFixed(2)}% <= -${Math.abs(stopLossMaxDrawdownPct)}%`
+      }`
+    );
+  } catch (err) {
+    stopLossNextAttemptByCondition.set(conditionId, Date.now() + STOP_LOSS_RETRY_BACKOFF_MS);
+    notePolymarketIncidentError('stop_loss_exit', err);
+    recordStopLossMetric('failed', {
+      conditionId,
+      errorHint: String(err?.message || err).slice(0, 180),
+    });
+    const firstTriggeredAtMs = stopLossFirstTriggeredAtByCondition.get(conditionId) || Date.now();
+    if (Date.now() - firstTriggeredAtMs >= STOP_LOSS_ESCALATION_MS) {
+      void notifyTelegramStopLossEscalation({
+        conditionId,
+        takeSide,
+        openSinceMs: Date.now() - firstTriggeredAtMs,
+        lastErrorHint: String(err?.message || err).slice(0, 180),
+      });
     }
-    // Ne pas vérifier trop souvent (Throttle interne 15s pour le watch SL)
-    const lastCheck = entry.lastCheckAt || 0;
-    if (now - lastCheck < 15_000) continue;
-    entry.lastCheckAt = now;
-
-    try {
-      const bestBid = await getBestBid(entry.tokenId);
-      if (!(bestBid > 0 && bestBid < 1)) continue;
-
-      const drawdownPct = ((bestBid - entry.entryPriceP) / entry.entryPriceP) * 100;
-      const triggerByPrice = bestBid < stopLossTriggerPriceP;
-      const triggerByDrawdown = stopLossDrawdownEnabled && drawdownPct <= -Math.abs(stopLossMaxDrawdownPct);
-
-      if (triggerByPrice || triggerByDrawdown) {
-        logStopLossTouchedWatch({
-          conditionId: cid,
-          tokenId: entry.tokenId,
-          takeSide: entry.takeSide,
-          bestBid,
-          entryPriceP: entry.entryPriceP,
-          drawdownPct,
-          triggerByPrice,
-          triggerByDrawdown,
-        });
-        // Une fois touché, on peut choisir soit de le garder (re-log périodique) soit de le supprimer.
-        // On le garde pour que le dashboard live continue de l'afficher si le prix reste bas.
-        // On augmente le throttle pour cet entry précis.
-        entry.lastCheckAt = now + 45_000; 
-      }
-    } catch (_) {}
+    void notifyTelegramStopLossExitFailed({
+      conditionId,
+      takeSide,
+      errorHint: String(err?.message || err).slice(0, 180),
+    });
+    logJson('warn', 'Stop-loss: échec sortie', {
+      conditionId: conditionId.slice(0, 18) + '…',
+      error: String(err?.message || err).slice(0, 220),
+    });
   }
 }
 
 /** Exécute une passe stop-loss avec verrou anti-chevauchement. Retourne un client CLOB réutilisable pour le cycle. */
 async function runStopLossPass() {
-  if (!IS_SIMULATION && (!walletConfigured || !wallet || !stopLossEnabled)) return null;
+  if (!walletConfigured || !wallet || !stopLossEnabled) return null;
   if (stopLossPassBusy) return null;
   stopLossPassBusy = true;
   try {
-    console.log(`[Monitor] \u23f3 Tentative de surveillance Stop-Loss (Boucle ${STOP_LOSS_FAST_INTERVAL_MS}ms)...`);
+    let clobClient = null;
     try {
-      if (!clobClient) {
-         clobClient = await buildClobClientCachedCreds();
-      }
+      clobClient = await buildClobClientCachedCreds();
     } catch (err) {
       try {
         const lo = readLastOrder();
@@ -3533,12 +2796,11 @@ async function runStopLossPass() {
         } else {
           throw err;
         }
-      } catch (innerErr) {
+      } catch {
         throw err;
       }
     }
-    await tryDynamicExitForOpenPosition(clobClient);
-    await tryStopLossForVirtualWatchEntries();
+    await tryStopLossForOpenPosition(clobClient);
     return clobClient;
   } catch (err) {
     notePolymarketIncidentError('stop_loss_pass', err);
@@ -3616,26 +2878,17 @@ async function trySimulationPaperRedeem() {
         continue;
       }
     }
-    // v2026 : Résolution Forcée Paper (30 min)
-    const isExpired = marketEndByCid && marketEndByCid.has(String(cid).trim()) && 
-                    (nowMs > marketEndByCid.get(String(cid).trim()) + (30 * 60 * 1000));
-
-    let market = null;
-    let isClosed = false;
+    let market;
     try {
       market = await simulationTrade.fetchGammaMarketForCondition(cid);
-      isClosed = simulationTrade.isGammaMarketClosed(market);
     } catch (e) {
-      if (!isExpired) {
-        logJson('warn', 'PAPER redeem: Gamma indisponible', {
-          cid: cid.slice(0, 14),
-          err: String(e?.message || e).slice(0, 120),
-        });
-        continue;
-      }
+      logJson('warn', 'PAPER redeem: Gamma indisponible', {
+        cid: cid.slice(0, 14),
+        err: String(e?.message || e).slice(0, 120),
+      });
+      continue;
     }
-    
-    if (!isClosed && !isExpired) continue;
+    if (!simulationTrade.isGammaMarketClosed(market)) continue;
     const winner = simulationTrade.winnerFromGammaMarket(market);
     const takeSide = lastEv.takeSide === 'Up' || lastEv.takeSide === 'Down' ? lastEv.takeSide : null;
     const tokens = Number(lastEv.filledOutcomeTokens);
@@ -3674,100 +2927,6 @@ async function trySimulationPaperRedeem() {
       takeSide,
     });
     logJson('info', 'PAPER redeem résolution', { conditionId: cid.slice(0, 18), payoutUsd, winner });
-  }
-}
-
-/**
- * 3.0 : Parcourt les positions actives, vérifie si elles sont résolues sur Gamma,
- * calcule le PnL réel et met à jour les stats journalières.
- */
-async function resolveActivePositionsAnalytics() {
-  const active = readActivePositions();
-  if (active.length === 0) return;
-
-  const nowMs = Date.now();
-  let changed = false;
-  const stats = readDailyStats();
-
-  for (const pos of active) {
-    if (pos.resolved) continue;
-
-    // On attend au moins 1 minute après la fin théorique du marché pour éviter les race conditions
-    const marketEndMs = pos.marketEndMs ?? pos.endDate;
-    const isSimulation = pos.simulationTrade === true;
-    
-    // v2026 : Sécurité de Résolution Forcée (30 min)
-    const isExpired = marketEndMs && (nowMs > marketEndMs + (30 * 60 * 1000));
-
-    if (marketEndMs && nowMs < marketEndMs + 60000) continue;
-
-    try {
-      let market = null;
-      let isClosed = false;
-
-      try {
-        market = await simulationTrade.fetchGammaMarketForCondition(pos.conditionId);
-        isClosed = simulationTrade.isGammaMarketClosed(market);
-      } catch (gammaErr) {
-        // Ignorer l'erreur Gamma si on est en Expired
-      }
-
-      // Si le marché n'est pas clos et qu'on n'est pas en timeout forcé, on attend.
-      if (!isClosed && !isExpired) continue;
-
-      let winner = simulationTrade.winnerFromGammaMarket(market);
-      
-      // Fallback si Gamma ne répond plus pour un vieux marché (Force Resolve)
-      if (!winner && isExpired) {
-          console.warn(`[Analytics] ⚠️ Marché ${pos.eventSlug} introuvable ou non clos après 30m. Résolution forcée par Timeout.`);
-          // On marque comme perdu ou on essaie de deviner ? 
-          // Par sécurité et pour ne pas gonfler artificiellement le PnL, on marque comme 0 (ou perte).
-          winner = 'EXPIRED_UNKNOWN';
-      }
-
-      if (!winner && !isExpired) continue;
-
-      const isWin = pos.takeSide === winner;
-      // PnL Simplifié : Si Win => Mise * (1/Prix - 1). Si Loss => -Mise.
-      const entryPrice = pos.avgFillPrice || pos.pricePrompt || 0.5;
-      const pnl = isWin ? (pos.amountUsd * (1/entryPrice - 1)) : -pos.amountUsd;
-
-      pos.resolved = true;
-      pos.payout = Math.round(pnl * 100) / 100;
-      pos.winner = winner;
-      pos.forceResolved = isExpired && winner === 'EXPIRED_UNKNOWN';
-      changed = true;
-
-      // Mise à jour des Stats Journalières pour le Circuit Breaker
-      stats.dailyPnl += pos.payout;
-      if (isWin) {
-        stats.consecutiveLosses = 0;
-      } else {
-        stats.consecutiveLosses += 1;
-      }
-
-      // Log Analytics pour feedback futur
-      fs.appendFileSync(ANALYTICS_LOG_FILE, JSON.stringify({
-        at: new Date().toISOString(),
-        slug: pos.eventSlug,
-        side: pos.takeSide,
-        winner,
-        pnl: pos.payout,
-        netGapAtEntry: pos.netGapAtEntry,
-        spotAtEntry: pos.spotAtEntry,
-        strike: pos.strike,
-        forceResolved: pos.forceResolved
-      }) + '\n');
-
-      console.log(`[Analytics 3.0] Position résolue: ${pos.eventSlug} | Résultat: ${isWin ? 'Gagné' : 'Perdu'} | PnL: ${pos.payout} USDC${pos.forceResolved ? ' (FORCE CLOSE)' : ''}`);
-    } catch (err) {
-      // Gamma peut être lent ou 404 temporairement
-    }
-  }
-
-  if (changed) {
-    writeActivePositions(active);
-    writeDailyStats(stats);
   }
 }
 
@@ -4232,44 +3391,7 @@ async function getClobCredsCached() {
 
 async function buildClobClientCachedCreds() {
   const creds = await getClobCredsCached();
-
-  if (!wallet || !creds) {
-    const msg = !wallet ? 'Missing Wallet' : 'Missing CLOB credentials';
-    logJson('error', 'CLOB: Signer/Creds error', { error: msg });
-    throw new Error(`CLOB Client Error: ${msg}`);
-  }
-
-  // v9.8.5 : High-Stability Mock Client for Simulation (Bypass SDK crashes)
-  if (IS_SIMULATION) {
-    logJson('info', 'CLOB: Simulation Mode - Credentials verified. Using Mock Client for execution (Bypassing SDK risk).');
-    return {
-      isMock: true,
-      getMarket: async () => ({}),
-      createOrder: async () => ({}),
-      cancelOrder: async () => ({}),
-      getOrders: async () => [],
-      getOpenOrders: async () => [], // v10.1 : Stub pour diagnostic dashboard
-      getRewardPercentages: async () => [] // v10.1 : Stub pour diagnostic dashboard
-    };
-  }
-
-  try {
-    // Attempt real connection with retry logic
-    let attempts = 0;
-    while (attempts < 3) {
-      try {
-        return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE, clobFunderAddress);
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) throw e;
-        logJson('warn', `CLOB Init Attempt ${attempts} failed. Retrying...`, { error: e.message });
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-  } catch (e) {
-    logJson('error', 'CLOB: SDK Initialisation Crash (Signer failure)', { error: e.message, stack: e.stack });
-    throw e;
-  }
+  return new ClobClient(CLOB_HOST, CHAIN_ID, wallet, creds, CLOB_SIGNATURE_TYPE, clobFunderAddress);
 }
 
 /**
@@ -4440,21 +3562,6 @@ async function getMaxUsdForAvgPrice(tokenId, targetAvgP, profile = null) {
  * puis GET `/price?side=BUY` en secours (doc Polymarket : BUY = best **ask**, prix pour acheter le token).
  * (~0,55/0,45) alors que le carnet affiche les vrais niveaux (ex. 0,10 / 0,91) — aligné avec le site Polymarket.
  */
-/** Récupère le carnet d'ordres complet (Limit Order Book) pour un token. */
-async function getLOBForSignal(tokenId) {
-  if (!tokenId) return null;
-  try {
-    const { data } = await axios.get(CLOB_BOOK_URL, { params: { token_id: tokenId }, timeout: 3000 });
-    return {
-      asks: Array.isArray(data?.asks) ? data.asks : [],
-      bids: Array.isArray(data?.bids) ? data.bids : [],
-    };
-  } catch (err) {
-    notePolymarketIncidentError('clob_book_lob', err);
-    return null;
-  }
-}
-
 async function getBestAskFromBookOnly(tokenId) {
   if (!tokenId) return null;
   try {
@@ -4553,11 +3660,11 @@ async function getOutcomePricesForSignal(market) {
 }
 
 /**
- * Marché 5m : pas de trade dans les 90 dernières secondes avant expiration.
- * (Uses shouldSkipTradeTiming / grille ET.)
+ * Marché horaire : pas de trade dans les 5 dernières minutes avant `endDate` Gamma.
+ * (Le 15m utilise `shouldSkipTradeTiming` → grille ET, pas cette fonction.)
  */
 function isInLastMinute(signal) {
-  return false; // 5m mode uses ET timing grid instead
+  if (MARKET_MODE === '15m') return false;
   const raw = signal?.endDate;
   if (raw == null || raw === '') return false;
   let endMs;
@@ -4572,11 +3679,21 @@ function isInLastMinute(signal) {
   return Date.now() >= endMs - thresholdMs;
 }
 
-/** Skip placement : 5m grille ET. */
+/**
+ * Skip placement selon le mode :
+ * - 15m : **même règle que le dashboard** — pas les 6 premières / 4 dernières minutes de chaque quart d’heure **ET** (:00,:15,:30,:45).
+ * - horaire : 5 dernières minutes avant fin événement Gamma.
+ */
+function shouldSkipTradeTiming(signal) {
+  if (MARKET_MODE === '15m') {
+    return is15mSlotEntryTimeForbiddenNow(Math.floor(Date.now() / 1000));
+  }
+  return isInLastMinute(signal);
+}
 
 function getTimingForbiddenDetails() {
-  // 5m mode: use ET timing grid
-  const d = getSlotEntryTimingDetail(Math.floor(Date.now() / 1000));
+  if (MARKET_MODE !== '15m') return null;
+  const d = get15mSlotEntryTimingDetail(Math.floor(Date.now() / 1000));
   if (!d?.forbidden) return null;
   return {
     timingBlock: d.block,
@@ -4585,8 +3702,9 @@ function getTimingForbiddenDetails() {
 }
 
 function getGammaEventsCacheKey(slugMatch) {
-  const currentSlug = getCurrent5mEventSlug();
-  return `5m|${slugMatch}|${currentSlug}`;
+  // La fallback dépend du créneau courant (hourly/15m). On inclut donc le slug courant dans la clé.
+  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
+  return `${MARKET_MODE}|${slugMatch}|${currentSlug}`;
 }
 
 /**
@@ -4597,7 +3715,7 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
   const cacheKey = getGammaEventsCacheKey(slugMatch);
   const now = Date.now();
   const preferCurrentSlotOnly = options?.preferCurrentSlotOnly === true;
-  const currentSlug = getCurrent5mEventSlug();
+  const currentSlug = MARKET_MODE === '15m' ? getCurrent15mEventSlug() : getCurrentHourlyEventSlug();
   const currentSlugLower = String(currentSlug || '').toLowerCase();
   const cached = gammaEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached;
@@ -4686,13 +3804,13 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
   const hasMatchingSlug = events.some((ev) => (ev.slug ?? '').toLowerCase().includes(slugMatch));
   profile.hasMatchingSlugAfterEvents = hasMatchingSlug;
 
-  // Secours : si la liste n'a aucun event qui matche notre slug, récupérer le créneau actuel par slug.
-  if (!hasMatchingSlug) {
+  // Secours : si la liste n'a aucun event qui matche notre slug (API peut ignorer slug_contains), récupérer le créneau actuel par slug.
+  if (MARKET_MODE === '15m' && !hasMatchingSlug) {
     try {
       const tFallback0 = Date.now();
       const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UPDOWN_5M_PREFIX.toLowerCase())) {
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
         events = [ev];
         profile.fallbackSlugOk = true;
         gammaSlotEventCache.set(String(slug).toLowerCase(), {
@@ -4707,14 +3825,20 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
       profile.fallbackSlugOk = false;
       profile.fallbackSlugMs = 0;
     }
-  // Fallback removed (BTC 5m only)
+  }
+
+  if (MARKET_MODE !== '15m' && !hasMatchingSlug) {
     try {
       const tFallback0 = Date.now();
       const slug = currentSlug;
       const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 8000 });
-      if (ev && (ev.slug ?? '').toLowerCase().includes(slugMatch)) {
+      if (ev && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_SLUG)) {
         events = [ev];
         profile.fallbackSlugOk = true;
+        gammaSlotEventCache.set(String(slug).toLowerCase(), {
+          expiresAt: computeGammaSlotEventCacheExpiresAt(String(slug).toLowerCase(), now),
+          event: ev,
+        });
       } else {
         profile.fallbackSlugOk = false;
       }
@@ -4725,178 +3849,327 @@ async function fetchGammaEventsCached(slugMatch, eventsTimeoutMs = 15000, option
     }
   }
 
-  const out = { expiresAt: now + GAMMA_EVENTS_CACHE_MS, events, profile };
+  const expiresAt = now + GAMMA_EVENTS_CACHE_MS;
+  const out = { expiresAt, events, profile };
   gammaEventsCache.set(cacheKey, out);
   return out;
 }
 
-
-
-/** Vérifie si l’IP est autorisée à trader (geoblock). */
-async function checkGeoblockStatus() {
-  try {
-    const { data } = await axios.get('https://polymarket.com/api/geoblock', { timeout: 5000 });
-    if (data?.isRestricted) {
-      console.error('❌ ERREUR CRITIQUE : Cette adresse IP est restreinte par Polymarket (Geoblock).');
-      return false;
-    }
-    console.log('✅ Geoblock Check : IP Autorisée.');
-    return true;
-  } catch (err) {
-    console.warn('⚠️ Impossible de vérifier le Geoblock:', err.message);
-    return true; // On continue par défaut si le check échoue (parfois endpoint instable)
-  }
+function cloneSignalsWithProfile(signals, profileOverrides = null) {
+  if (!Array.isArray(signals)) return [];
+  const out = signals.slice();
+  const baseProfile = signals?._fetchSignalsProfile && typeof signals._fetchSignalsProfile === 'object'
+    ? { ...signals._fetchSignalsProfile }
+    : {};
+  out._fetchSignalsProfile = profileOverrides ? { ...baseProfile, ...profileOverrides } : baseProfile;
+  return out;
 }
 
-/** Vérifie si nous sommes dans la fenêtre de maintenance Polymarket (Mardi ~13h Paris / 7h ET). */
-function isMaintenanceWindow() {
-  const now = new Date();
-  // Mardi (getUTCDay 2)
-  if (now.getUTCDay() !== POLYMARKET_MAINTENANCE_DAY_UTC) return false;
-  
-  // Fenêtre 7:00 AM ET - 7:15 AM ET (soit 11:00-11:15 UTC ou 12:00-12:15 UTC selon DST).
-  // On couvre la plage 11:00-11:15 UTC pour la sécurité.
-  const hour = now.getUTCHours();
-  const min = now.getUTCMinutes();
-  if (hour === 11 && min < 15) return true;
-  if (hour === 12 && min < 15) return true; // Cas DST décalé
-  
-  return false;
-}
-
-/** Vérifie si un Cooldown 425 est actif (120 secondes). */
-function isCooldown425() {
-  if (last425ErrorAt === 0) return false;
-  const elapsed = Date.now() - last425ErrorAt;
-  return elapsed < 120000; // 2 minutes
-}
-/** Récupère les token IDs des marchés actifs (Up + Down) pour s'abonner au WebSocket CLOB. Retourne { tokenIds, tokenToSignal }. */
-async function getActiveMarketTokensForWs() {
-  const tokenIds = [];
-  const tokenToSignal = new Map();
-
-  const collectForAsset = async (asset) => {
-    const slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
-
-    const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
-    let events = gammaOut.events;
-    console.log(`[WS-Sub] 🔍 Assets=${asset} | slugMatch=${slugMatch} | Events found=${events.length}`);
-    // 5m mode: resolve events for current slot
-    const r = await resolve5mEventsForTrading(events, Date.now(), asset);
-    events = r.events;
-    console.log(`[WS-Sub] 🔍 Resolved 5m for ${asset}: Strategy=${r.resolveStrategy} | Count=${events.length} | Slug=${r.expectedSlug}`);
-
-    for (const ev of events) {
-      if (!ev?.markets?.length) continue;
-      const eventSlug = (ev.slug ?? '').toLowerCase();
-      if (!eventSlug.includes(slugMatch.toLowerCase())) continue;
-      const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
-      for (const m of ev.markets) {
-        const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
-        const merged = mergeGammaEventMarketForUpDown(ev, m);
-        const { tokenIdUp, tokenIdDown } = getAlignedUpDownTokenIds(merged);
-        if (tokenIdUp) {
-          tokenIds.push(tokenIdUp);
-          tokenToSignal.set(tokenIdUp, {
-            market: merged,
-            asset,
-            tokenIdUp,
-            tokenIdDown,
-            eventSlug: ev.slug ?? eventSlug,
-            takeSide: 'Up',
-            endDate,
-            tokenIdToBuy: tokenIdUp,
-            priceUp: MIN_P,
-            priceDown: 1 - MIN_P,
-          });
-        }
-        if (tokenIdDown) {
-          tokenIds.push(tokenIdDown);
-          tokenToSignal.set(tokenIdDown, {
-            market: merged,
-            asset,
-            tokenIdUp,
-            tokenIdDown,
-            eventSlug: ev.slug ?? eventSlug,
-            takeSide: 'Down',
-            endDate,
-            tokenIdToBuy: tokenIdDown,
-            priceUp: 1 - MIN_P,
-            priceDown: MIN_P,
-          });
-        }
-      }
-    }
+/** Récupère les signaux (fenêtre MIN_P–MAX_P) : marchés via Gamma, prix via Gamma ou best ask CLOB selon signalPriceSource. */
+async function fetchSignalsFresh() {
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  let events = [];
+  const tFetchStartMs = Date.now();
+  const profile = {
+    totalMs: null,
+    strategy: null,
+    // Gamma
+    directSlugOk: null,
+    directSlugMs: null,
+    usedEvents: false,
+    eventsMsTotal: null,
+    eventsRetryUsed: false,
+    hasMatchingSlugAfterEvents: null,
+    fallbackSlugOk: null,
+    fallbackSlugMs: null,
+    // Sous-profiler fetchSignals (pour cibler précisément le goulot).
+    eventsFetchMs: null,
+    resolve15mMs: null,
+    eventCountRaw: 0,
+    eventCountAfterResolve: 0,
+    marketCountVisited: 0,
+    priceLookups: 0,
+    priceLookupMsTotal: 0,
+    priceLookupMsAvg: null,
+    loopMs: null,
   };
 
-  for (const asset of SUPPORTED_ASSETS) {
-    await collectForAsset(asset);
+  // Même logique pour 15m et horaire : d'abord GET /events (liste), puis secours par slug si la liste ne contient pas le créneau actuel.
+  // On appelle un helper mutualisé + cache pour réduire la latence (évite un 2e appel Gamma dans fetchActiveWindows()).
+  const eventsTimeoutMs = 15000;
+  const tEventsFetch0 = Date.now();
+  const gammaOut = await fetchGammaEventsCached(slugMatch, eventsTimeoutMs, { preferCurrentSlotOnly: true });
+  profile.eventsFetchMs = Date.now() - tEventsFetch0;
+  events = gammaOut.events;
+  profile.eventCountRaw = Array.isArray(events) ? events.length : 0;
+  profile.usedEvents = gammaOut.profile.usedEvents;
+  profile.eventsMsTotal = gammaOut.profile.eventsMsTotal;
+  profile.eventsRetryUsed = gammaOut.profile.eventsRetryUsed;
+  profile.hasMatchingSlugAfterEvents = gammaOut.profile.hasMatchingSlugAfterEvents;
+  profile.fallbackSlugOk = gammaOut.profile.fallbackSlugOk;
+  profile.fallbackSlugMs = gammaOut.profile.fallbackSlugMs;
+
+  if (MARKET_MODE === '15m') {
+    const tResolve0 = Date.now();
+    const r = await resolve15mEventsForTrading(events, Date.now());
+    profile.resolve15mMs = Date.now() - tResolve0;
+    events = r.events;
+    profile.fifteenMResolveStrategy = r.resolveStrategy;
+    profile.fifteenMSlugMismatch = r.slugMismatch;
+    profile.expected15mSlug = r.expectedSlug;
   }
-  console.log(`[WS-Sub] ✅ Total Subscription Map size: ${tokenToSignal.size} tokens.`);
+  profile.eventCountAfterResolve = Array.isArray(events) ? events.length : 0;
+
+  const results = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const visibilitySnapshots = [];
+  const tLoop0 = Date.now();
+  for (const ev of events) {
+    if (!ev?.markets?.length) continue;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+    if (!eventSlug.includes(slugMatch)) continue;
+    const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+    for (const m of ev.markets) {
+      profile.marketCountVisited += 1;
+      const merged = mergeGammaEventMarketForUpDown(ev, m);
+      const tPrice0 = Date.now();
+      const prices = await getOutcomePricesForSignal(merged);
+      profile.priceLookups += 1;
+      profile.priceLookupMsTotal += Date.now() - tPrice0;
+      if (!prices) continue;
+      const [priceUp, priceDown] = prices;
+      const upInRange = priceUp >= MIN_P && priceUp <= MAX_P;
+      const downInRange = priceDown >= MIN_P && priceDown <= MAX_P;
+      const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+      if (signalVisibilityLog) {
+        const gammaPair = getAlignedUpDownGammaPrices(merged);
+        const timingSignal = { endDate: marketEndDate };
+        visibilitySnapshots.push({
+          slug: (ev.slug ?? eventSlug).slice(0, 80),
+          priceSource: signalPriceSource,
+          priceUp: Math.round(priceUp * 1e6) / 1e6,
+          priceDown: Math.round(priceDown * 1e6) / 1e6,
+          gammaUp: gammaPair?.[0] != null ? Math.round(gammaPair[0] * 1e6) / 1e6 : null,
+          gammaDown: gammaPair?.[1] != null ? Math.round(gammaPair[1] * 1e6) / 1e6 : null,
+          strategyWindow: { minP: MIN_P, maxP: MAX_P },
+          upInStrategyWindow: upInRange,
+          downInStrategyWindow: downInRange,
+          /** Même règle que l’émission du signal (Up prioritaire si les deux). */
+          wouldEmitSide: upInRange ? 'Up' : downInRange ? 'Down' : null,
+          timingForbiddenNow: shouldSkipTradeTiming(timingSignal),
+          ...(MARKET_MODE === '15m'
+            ? {
+                expected15mSlug: profile.expected15mSlug ?? null,
+                fifteenMResolveStrategy: profile.fifteenMResolveStrategy ?? null,
+                fifteenMSlugMismatch: profile.fifteenMSlugMismatch ?? false,
+              }
+            : {}),
+        });
+      }
+      if (upInRange) {
+        results.push({
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Up',
+          priceUp,
+          priceDown,
+          tokenIdToBuy: getTokenIdToBuy(merged, 'Up'),
+          endDate: marketEndDate,
+        });
+      } else if (downInRange) {
+        results.push({
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Down',
+          priceUp,
+          priceDown,
+          tokenIdToBuy: getTokenIdToBuy(merged, 'Down'),
+          endDate: marketEndDate,
+        });
+      }
+    }
+  }
+  profile.loopMs = Date.now() - tLoop0;
+  profile.priceLookupMsAvg =
+    profile.priceLookups > 0 ? Math.round((profile.priceLookupMsTotal / profile.priceLookups) * 100) / 100 : null;
+
+  if (signalVisibilityLog && visibilitySnapshots.length > 0) {
+    const nowVis = Date.now();
+    if (nowVis - signalVisibilityLogLastAt >= SIGNAL_VISIBILITY_LOG_MS) {
+      signalVisibilityLogLastAt = nowVis;
+      const payload = {
+        mode: MARKET_MODE,
+        pollEmittedSignals: results.length,
+        snapshots: visibilitySnapshots.slice(0, 5),
+      };
+      logJson('info', 'signal_visibility_poll', payload);
+      const s0 = visibilitySnapshots[0];
+      console.log(
+        `[signal_visibility] ${MARKET_MODE} src=${signalPriceSource} | Up=${s0.priceUp} Down=${s0.priceDown} | fenêtre stratégie Up/Down=${s0.upInStrategyWindow}/${s0.downInStrategyWindow} | émettrait=${s0.wouldEmitSide ?? '∅'} | timing_interdit=${s0.timingForbiddenNow} | signaux_poll=${results.length}`,
+      );
+    }
+  }
+
+  // Synthèse de stratégie (15m et horaire : même logique liste puis secours slug).
+  profile.totalMs = Date.now() - tFetchStartMs;
+  if (profile.usedEvents && profile.hasMatchingSlugAfterEvents === true) profile.strategy = 'events_ok';
+  else if (profile.usedEvents && profile.fallbackSlugOk != null) profile.strategy = 'events_no_match_then_slug';
+  else profile.strategy = 'events_empty_or_invalid';
+  if (profile.fastPath) profile.strategy = `${profile.strategy}|fast:${profile.fastPath}`;
+  if (MARKET_MODE === '15m' && profile.fifteenMResolveStrategy) {
+    const mis = profile.fifteenMSlugMismatch ? '|mismatch' : '';
+    profile.strategy = `${profile.strategy}|15m:${profile.fifteenMResolveStrategy}${mis}`;
+  }
+  results._fetchSignalsProfile = profile;
+  pushFetchSignalsPerf(profile.totalMs);
+  maybeLogFetchSignalsPerf();
+  maybeLogFetchSignalsBreakdown(profile);
+  return results;
+}
+
+/** Wrapper cache + déduplication in-flight pour limiter la latence moyenne des cycles. */
+async function fetchSignals() {
+  const now = Date.now();
+  if (FETCH_SIGNALS_CACHE_MS > 0 && fetchSignalsCacheEntry && now < fetchSignalsCacheEntry.expiresAt) {
+    fetchSignalsCacheHitCount += 1;
+    return cloneSignalsWithProfile(fetchSignalsCacheEntry.signals, {
+      cache: 'hit',
+      cacheAgeMs: Math.max(0, now - fetchSignalsCacheEntry.createdAt),
+      cacheTtlMs: FETCH_SIGNALS_CACHE_MS,
+    });
+  }
+  fetchSignalsCacheMissCount += 1;
+  if (fetchSignalsInFlight) {
+    const shared = await fetchSignalsInFlight;
+    return cloneSignalsWithProfile(shared, { cache: 'shared_inflight', cacheTtlMs: FETCH_SIGNALS_CACHE_MS });
+  }
+  fetchSignalsInFlight = (async () => {
+    const fresh = await fetchSignalsFresh();
+    fetchSignalsCacheEntry =
+      FETCH_SIGNALS_CACHE_MS > 0
+        ? {
+            createdAt: Date.now(),
+            expiresAt: Date.now() + FETCH_SIGNALS_CACHE_MS,
+            signals: cloneSignalsWithProfile(fresh),
+          }
+        : null;
+    return fresh;
+  })();
+  try {
+    const out = await fetchSignalsInFlight;
+    return cloneSignalsWithProfile(out, { cache: 'miss', cacheTtlMs: FETCH_SIGNALS_CACHE_MS });
+  } finally {
+    fetchSignalsInFlight = null;
+  }
+}
+
+/** Vérifie si l’IP est autorisée à trader (geoblock). */
+/** Récupère les token IDs des marchés actifs (Up + Down) pour s'abonner au WebSocket CLOB. Retourne { tokenIds, tokenToSignal }. */
+async function getActiveMarketTokensForWs() {
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  const gammaOut = await fetchGammaEventsCached(slugMatch, 15000);
+  let events = gammaOut.events;
+
+  if (MARKET_MODE === '15m') {
+    const r = await resolve15mEventsForTrading(events, Date.now());
+    events = r.events;
+    if (r.slugMismatch) {
+      console.log(
+        `[WS] 15m: résolution créneau — stratégie=${r.resolveStrategy} attendu=${r.expectedSlug} (mismatch vs liste Gamma)`,
+      );
+    }
+  }
+
+  const tokenIds = [];
+  const tokenToSignal = new Map();
+  for (const ev of events) {
+    if (!ev?.markets?.length) continue;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+    if (!eventSlug.includes(slugMatch)) continue;
+    const marketEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+    for (const m of ev.markets) {
+      const endDate = m.endDate ?? m.end_date_iso ?? marketEndDate;
+      const merged = mergeGammaEventMarketForUpDown(ev, m);
+      const { tokenIdUp, tokenIdDown } = getAlignedUpDownTokenIds(merged);
+      if (tokenIdUp) {
+        tokenIds.push(tokenIdUp);
+        tokenToSignal.set(tokenIdUp, {
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Up',
+          endDate,
+          tokenIdToBuy: tokenIdUp,
+          priceUp: MIN_P,
+          priceDown: 1 - MIN_P,
+        });
+      }
+      if (tokenIdDown) {
+        tokenIds.push(tokenIdDown);
+        tokenToSignal.set(tokenIdDown, {
+          market: merged,
+          eventSlug: ev.slug ?? eventSlug,
+          takeSide: 'Down',
+          endDate,
+          tokenIdToBuy: tokenIdDown,
+          priceUp: 1 - MIN_P,
+          priceDown: MIN_P,
+        });
+      }
+    }
+  }
   return { tokenIds: [...new Set(tokenIds)], tokenToSignal };
 }
 
-
-
-
-/** Slug du créneau 5m ouvert : `{prefix}-{eventStartSec}` (Polymarket UpDown 5m). */
-function getCurrent5mEventSlug(asset = 'BTC') {
+/** Slug du créneau 15m ouvert : `btc-updown-15m-{eventStartSec}` (Gamma), start = floor(epoch/900)*900. */
+function getCurrent15mEventSlug() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const slotStart = Math.floor(nowSec / 300) * 300;
-  return `${BITCOIN_UPDOWN_5M_PREFIX}-${slotStart}`.toLowerCase();
-}
-
-/** Fenêtre temporelle avant la clôture du slot (en secondes). */
-function getRemainingSeconds(intervalSeconds = 300) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const nextSlot = (Math.floor(nowSec / intervalSeconds) + 1) * intervalSeconds;
-  return nextSlot - nowSec;
+  const slotStart = Math.floor(nowSec / 900) * 900;
+  return `${BITCOIN_UP_DOWN_15M_SLUG}-${slotStart}`;
 }
 
 /**
- * Repli : marchés 5m encore ouverts, triés par fin de créneau (plus proche d’abord).
- * Aligné sur le dashboard (`pickCurrent5mEvent`).
+ * Repli : marchés 15m encore ouverts, triés par fin de créneau (plus proche d’abord).
+ * Aligné sur le dashboard (`pickCurrent15mEvent`).
  */
-function pick5mFallbackEventFromList(events, nowMs) {
+function pick15mFallbackEventFromList(events, nowMs) {
   if (!Array.isArray(events) || events.length === 0) return null;
-  const preferred = getCurrent5mEventSlug().toLowerCase();
+  const preferred = getCurrent15mEventSlug().toLowerCase();
   const exact = events.find((e) => (e.slug ?? '').toLowerCase() === preferred);
   if (exact) return exact;
   const stillOpen = events.filter((e) => {
-    const end = slotEndMsFrom5mSlug(e.slug ?? '');
+    const end = slotEndMsFrom15mSlug(e.slug ?? '');
     return end != null && Number.isFinite(end) && nowMs < end;
   });
   stillOpen.sort((a, b) => {
-    const ea = slotEndMsFrom5mSlug(a.slug ?? '') ?? 0;
-    const eb = slotEndMsFrom5mSlug(b.slug ?? '') ?? 0;
+    const ea = slotEndMsFrom15mSlug(a.slug ?? '') ?? 0;
+    const eb = slotEndMsFrom15mSlug(b.slug ?? '') ?? 0;
     return ea - eb;
   });
   return stillOpen[0] ?? events[0];
 }
 
 /**
- * Un seul event 5m pour trading / WS : slug UTC courant exact, sinon GET /events/slug, sinon repli trié.
- * (La liste Gamma peut contenir plusieurs `btc-updown-5m-*` — ne pas prendre le premier au hasard.)
+ * Un seul event 15m pour trading / WS : slug UTC courant exact, sinon GET /events/slug, sinon repli trié.
+ * (La liste Gamma peut contenir plusieurs `btc-updown-15m-*` — ne pas prendre le premier au hasard.)
  */
-async function resolve5mEventsForTrading(events, nowMs = Date.now(), asset = 'BTC') {
-  const expectedSlug = getCurrent5mEventSlug(asset).toLowerCase();
-  const searchPrefix = (asset === 'ETH') ? 'eth-updown-5m' : (asset === 'SOL') ? 'sol-updown-5m' : BITCOIN_UPDOWN_5M_PREFIX;
-  
-  const relevantEvents = events.filter((e) => (e.slug ?? '').toLowerCase().includes(searchPrefix));
-  
-  if (relevantEvents.length > 0) {
-    return { events: relevantEvents, resolveStrategy: 'filter_active_5m', slugMismatch: false, expectedSlug };
+async function resolve15mEventsForTrading(events, nowMs = Date.now()) {
+  const expectedSlug = getCurrent15mEventSlug().toLowerCase();
+  const exact = events.find((e) => (e.slug ?? '').toLowerCase() === expectedSlug);
+  if (exact?.markets?.length) {
+    return { events: [exact], resolveStrategy: 'list_exact_slug', slugMismatch: false, expectedSlug };
   }
-
-  // Fallback si la liste est vide : essai direct par slug (API GET /event/slug)
   try {
-    const url = `${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(expectedSlug)}`;
-    const { data: ev } = await axios.get(url, { timeout: 8000 });
-    if (ev?.markets?.length) {
-      return { events: [ev], resolveStrategy: 'direct_slug', slugMismatch: false, expectedSlug };
+    const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(expectedSlug)}`, {
+      timeout: 8000,
+    });
+    if (ev?.markets?.length && (ev.slug ?? '').toLowerCase().includes(BITCOIN_UP_DOWN_15M_SLUG)) {
+      const sl = (ev.slug ?? '').toLowerCase();
+      return { events: [ev], resolveStrategy: 'direct_slug', slugMismatch: sl !== expectedSlug, expectedSlug };
     }
-  } catch (_) {}
-  const fb = pick5mFallbackEventFromList(events, nowMs);
+  } catch (_) {
+    /* 404 ou réseau */
+  }
+  const fb = pick15mFallbackEventFromList(events, nowMs);
   if (fb?.markets?.length) {
     const sl = (fb.slug ?? '').toLowerCase();
     return {
@@ -4909,35 +4182,39 @@ async function resolve5mEventsForTrading(events, nowMs = Date.now(), asset = 'BT
   return { events: [], resolveStrategy: 'empty', slugMismatch: false, expectedSlug };
 }
 
-/** Récupère tous les créneaux actifs (5m BTC) sans filtre de prix pour tous les assets. */
+/** Slug du créneau horaire actuel (heure ET). Format: bitcoin-up-or-down-march-15-2026-4pm-et. */
+function getCurrentHourlyEventSlug() {
+  const tz = 'America/New_York';
+  const d = new Date();
+  const month = d.toLocaleString('en-US', { timeZone: tz, month: 'long' }).toLowerCase();
+  const day = parseInt(d.toLocaleString('en-US', { timeZone: tz, day: 'numeric' }), 10);
+  const year = parseInt(d.toLocaleString('en-US', { timeZone: tz, year: 'numeric' }), 10);
+  let hour = parseInt(d.toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false }), 10);
+  const ampm = hour >= 12 ? 'pm' : 'am';
+  hour = hour % 12 || 12;
+  return `${BITCOIN_UP_DOWN_SLUG}-${month}-${day}-${year}-${hour}${ampm}-et`;
+}
+
+/** Récupère tous les créneaux actifs (15m ou 1h) sans filtre de prix — pour enregistrer la mise max par fenêtre même quand le prix n'est pas dans la fenêtre 97–97,5 %. */
 async function fetchActiveWindows() {
+  const slugMatch = MARKET_MODE === '15m' ? BITCOIN_UP_DOWN_15M_SLUG : BITCOIN_UP_DOWN_SLUG;
+  const { events } = await fetchGammaEventsCached(slugMatch, 15000);
   const results = [];
   const seenKeys = new Set();
-  
-  for (const asset of SUPPORTED_ASSETS) {
-    const slugMatch = BITCOIN_UPDOWN_5M_PREFIX;
-
-    const { events } = await fetchGammaEventsCached(slugMatch, 15000);
-    for (const ev of events) {
-      if (!ev?.markets?.length) continue;
-      const eventSlug = (ev.slug ?? '').toLowerCase();
-      if (!eventSlug.includes(slugMatch.toLowerCase())) continue;
-      const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
-      for (const m of ev.markets) {
-        const key = m.conditionId ?? m.condition_id ?? '';
-        if (!key || seenKeys.has(key)) continue;
-        seenKeys.add(key);
-        const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
-        results.push({ market: m, ev, endDate: marketEndDate, key, asset });
-      }
+  for (const ev of events) {
+    if (!ev?.markets?.length) continue;
+    const eventSlug = (ev.slug ?? '').toLowerCase();
+    if (!eventSlug.includes(slugMatch)) continue;
+    const eventEndDate = ev.endDate ?? ev.end_date_iso ?? ev.closedTime ?? '';
+    for (const m of ev.markets) {
+      const key = m.conditionId ?? m.condition_id ?? '';
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      const marketEndDate = m.endDate ?? m.end_date_iso ?? eventEndDate;
+      results.push({ market: m, ev, endDate: marketEndDate, key });
     }
   }
   return results;
-}
-
-/** Legacy slug stub — redirects to getCurrent5mEventSlug. */
-function getCurrentHourlyEventSlug(asset = 'BTC') {
-  return getCurrent5mEventSlug(asset);
 }
 
 /** Vérifie si l'IP est autorisée à trader (geoblock). */
@@ -4969,7 +4246,7 @@ async function getTickSizeForToken(client, tokenId) {
 }
 
 /** Seuil en dessous duquel on ne place jamais (évite les ordres dust). */
-const ABSOLUTE_MIN_USD = 1.0;
+const ABSOLUTE_MIN_USD = 0.5;
 
 /**
  * Garde : mise `stakeUsd` au prix moyen `p` (0<p<1) → parts ≈ stake/p → si victoire encaissement ≈ stake/p USDC.
@@ -5022,7 +4299,6 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
   if (!options.allowBelowMin && size < orderSizeMinUsd) {
     return { ok: false, error: `Solde insuffisant (${size.toFixed(2)} < ${orderSizeMinUsd} USDC min).` };
   }
-  if (isClobPaused()) return { ok: false, error: 'clob_circuit_breaker_active' };
   const { tokenIdToBuy, takeSide, priceUp, priceDown } = signal;
   const price = takeSide === 'Down' ? priceDown : priceUp;
 
@@ -5040,12 +4316,7 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 
   let lastError;
   const maxAttempts = Math.max(1, Math.min(ORDER_RETRY_ATTEMPTS, Number(options?.maxAttempts) || ORDER_RETRY_ATTEMPTS));
-  
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Blindage 2026 : Proactive Throttling avant chaque tentative
-    const throttleMs = checkRateLimitProactive();
-    if (throttleMs > 0) await sleep(throttleMs);
-
     try {
       let client = clientOrNull;
       if (!client) {
@@ -5072,14 +4343,8 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
 
       if (useMarketOrder) {
         // Pré-signature : create + sign puis POST (réduit la latence perçue au moment du trade).
-        const worstPrice = options.worstPrice || marketWorstPriceP;
-        const userMarketOrder = { 
-          tokenID: tokenIdToBuy, 
-          amount: size, 
-          side: options?.side || Side.BUY, 
-          price: worstPrice,
-          feeRateBps: DEFAULT_FEE_RATE_BPS // v2026: Explicit Taker Fee
-        };
+        const worstPrice = marketWorstPriceP;
+        const userMarketOrder = { tokenID: tokenIdToBuy, amount: size, side: Side.BUY, price: worstPrice };
         const cacheKey = getPreSignCacheKey(signal, size);
         purgeExpiredPreSignCache();
         let signedOrder = null;
@@ -5094,12 +4359,6 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
           signedOrder = await createSignedMarketOrder(client, userMarketOrder);
           preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
         }
-        // v13.1 : Audit de Signature Critique (Verification Proof)
-        if (signedOrder?.signature && wallet?.address) {
-           console.log(`[Security] 🛡️ Certifying order signature for ${wallet.address}...`);
-           // Note: Polymarket utilise EIP-712 (TypedData), le SDK gère la signature.
-           // On valide ici la présence et la cohérence de l'objet signé.
-        }
         const result = await client.postOrder(signedOrder, marketOrderType);
         const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
         const clobResponse = serializeClobPostOrderResponseForLog(result);
@@ -5113,19 +4372,11 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
           ...fill,
         };
       }
-      const userOrder = { 
-        tokenID: tokenIdToBuy, 
-        price: roundedPrice, 
-        size, 
-        side: options?.side || Side.BUY,
-        feeRateBps: DEFAULT_FEE_RATE_BPS // v2026: Standard for Sniper Taker attempts
-      };
+      const userOrder = { tokenID: tokenIdToBuy, price: roundedPrice, size, side: Side.BUY };
+      // Ordre limite : create + sign puis POST (même pattern que marché).
       const signedOrderLimit = await client.createOrder(userOrder, options);
-      if (signedOrderLimit?.signature && wallet?.address) {
-          console.log(`[Security] 🛡️ Certifying limit order signature for ${wallet.address}...`);
-      }
       const result = await client.postOrder(signedOrderLimit, OrderType.GTC);
-      const fill = parsePolymarketPostOrderFill(result, { orderSide: options?.side || Side.BUY, requestedUsd: size });
+      const fill = parsePolymarketPostOrderFill(result, { orderSide: Side.BUY, requestedUsd: size });
       const clobResponse = serializeClobPostOrderResponseForLog(result);
       consecutiveOrderErrors = 0;
       return {
@@ -5137,7 +4388,6 @@ async function placeOrder(signal, amountUsd, clientOrNull = null, options = {}) 
         ...fill,
       };
     } catch (err) {
-      recordClobError();
       const apiErrorDetail =
         err?.response?.data?.error ||
         err?.response?.data?.errorMsg ||
@@ -5223,36 +4473,6 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
       await new Promise((r) => setTimeout(r, PARTIAL_FILL_RETRY_DELAY_MS));
     }
 
-    // --- Kill-Switch Instantané v5.3.0 (Adverse Selection) ---
-    // Si après le 1er passage, le prix a bougé de plus de 0.1c (ou seuil configuré), on abandonne.
-    const lastFillPrice = lastOk?.averageFillPriceP;
-    if (lastFillPrice != null) {
-      const currentBestAsk = latestPrices.get(signal.tokenIdToBuy)?.bestAsk;
-      const killSwitchSlippage = Number(process.env.KILL_SWITCH_SLIPPAGE_THRESHOLD) || 0.001; // 0.1c
-      
-      if (currentBestAsk != null && Math.abs(currentBestAsk - lastFillPrice) > killSwitchSlippage) {
-        logJson('warn', 'Kill-Switch Adverse Selection: Slippage excessif détecté sur reliquat.', {
-          lastFillPrice,
-          currentBestAsk,
-          slippage: Math.abs(currentBestAsk - lastFillPrice),
-          threshold: killSwitchSlippage
-        });
-        break; 
-      }
-    }
-    // --- Fin Kill-Switch ---
-
-    // --- GRADIENT DE PRIX v5.0.0 (Dégradation 0.1% par tentative) ---
-    const side = options?.side || Side.BUY;
-    let worstPrice = options.worstPrice || marketWorstPriceP;
-    const degradation = 0.001 * (extra + 1); // 0.1% cumulé
-    
-    if (side === Side.BUY) {
-      worstPrice = Math.min(0.999, worstPrice * (1 + degradation));
-    } else {
-      worstPrice = Math.max(0.001, worstPrice * (1 - degradation));
-    }
-
     if (partialFillRetryRevalidatePrice && signal?.tokenIdToBuy) {
       try {
         const ask = await getBestAsk(signal.tokenIdToBuy);
@@ -5260,32 +4480,6 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
           logJson('info', 'Complément FAK: best ask hors fenêtre signal, arrêt', { ask, extra });
           break;
         }
-
-        // v5.2.2 : Revalidation OFI au sein du retry (Audit Compliance)
-        const currentOfi = ofiState.get(signal.tokenIdToBuy)?.ofi || 0;
-        if (side === Side.BUY && currentOfi < -0.1) { // Pression adverse détectée
-          logJson('info', 'Complément FAK: OFI Adverse détecté, abandon', { ofi: currentOfi, extra });
-          break;
-        }
-
-        // v5.2.2 : Revalidation Persistance du GAP (Audit Compliance)
-        // On utilise le pythSpotPrice global pour un check rapide
-        if (pythSpotPrice > 0 && signal.strikePrice) {
-          const nowTs = Math.floor(Date.now() / 1000);
-          const marketEndTs = Math.floor(signal.endDate / 1000);
-          const secondsLeft = Math.max(0, marketEndTs - nowTs);
-          const currentProbFair = calculateFairProbability(pythSpotPrice, signal.strikePrice, secondsLeft, null);
-          
-          const currentGap = side === Side.BUY ? (currentProbFair - ask) : (ask - currentProbFair);
-          if (currentGap < SIGNAL_GAP_THRESHOLD * 0.3) { // Seuil de survie du GAP à 30% (Audit v5.2.2)
-            logJson('info', 'Complément FAK: GAP évaporé sur retry, abandon', { currentGap, extra });
-            break;
-          }
-        }
-
-        // En mode dégradé, on prend le freshAsk et on lui applique la dégradation
-        if (side === Side.BUY) worstPrice = Math.min(0.999, ask * (1 + degradation));
-        else worstPrice = Math.max(0.001, ask * (1 - degradation));
       } catch (e) {
         logJson('warn', 'Complément FAK: revalidation prix échouée', { error: e?.message, extra });
       }
@@ -5313,7 +4507,7 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
     if (requestUsd < ABSOLUTE_MIN_USD) break;
 
     const allowBelowMin = !!options.allowBelowMin || requestUsd < orderSizeMinUsd;
-    const next = await placeOrder(signal, requestUsd, clientOrNull, { ...options, allowBelowMin, worstPrice });
+    const next = await placeOrder(signal, requestUsd, clientOrNull, { ...options, allowBelowMin });
     lastOk = next;
     anyPreSignHit = anyPreSignHit || !!next.preSignCacheHit;
 
@@ -5360,468 +4554,367 @@ async function placeMarketOrderWithPartialFillRetries(signal, amountUsd, clientO
 /** Utiliser uniquement le prix reçu par WS (pas de re-validation REST) → économise ~50–150 ms au moment du trade. Défaut true. */
 const USE_WS_PRICE_ONLY = process.env.USE_WS_PRICE_ONLY !== 'false';
 
-/**
- * Calcule la mise Sniper avec rÃ©investissement des gains (Compounding).
- * Mise = StartStake + (BalanceActuelle - BalanceSessionInitiale)
- * CapÃ© entre MIN (1$) et MAX (100$).
- */
-async function getCompoundedSniperStake(currentBalance) {
-  try {
-    let state = await safeReadJson(SNIPER_COMPOUNDING_FILE);
-    if (!state || !state.sessionStartBalance) {
-      state = { sessionStartBalance: currentBalance, cumulativeProfit: 0, lastUpdatedAt: new Date().toISOString() };
-      await atomicWriteJson(SNIPER_COMPOUNDING_FILE, state);
-      console.log(`[Sniper] \ud83d\udd30 Initialisation du Compounding. Solde de rÃ©fÃ©rence : ${currentBalance.toFixed(2)} USDC`);
-    }
-    
-    const profit = currentBalance - state.sessionStartBalance;
-    let stake = SNIPER_STAKE_START + profit;
-    
-    // Verrouillage Strict (Cahier des charges : 1$ min, 100$ max)
-    const finalStake = Math.max(SNIPER_STAKE_MIN, Math.min(SNIPER_STAKE_MAX, stake));
-    
-    if (profit !== state.cumulativeProfit) {
-        state.cumulativeProfit = profit;
-        state.lastUpdatedAt = new Date().toISOString();
-        await atomicWriteJson(SNIPER_COMPOUNDING_FILE, state);
-    }
-
-    return Math.round(finalStake * 100) / 100;
-  } catch (err) {
-    console.error(`[Sniper] \u26a0\ufe0f Erreur calcul Compounding : ${err.message}. Fallback mise Start.`);
-    return SNIPER_STAKE_START;
+/** Tente de placer un ordre pour un signal (appelé par le WebSocket quand best_ask entre dans la fenêtre). Prix = valeur WS (ou re-validation REST si USE_WS_PRICE_ONLY=false). */
+async function tryPlaceOrderForSignal(signal) {
+  if (!signal?.tokenIdToBuy) return;
+  const key = getSignalKey(signal);
+  /** Avant wallet / autotrade : sinon le dashboard voyait `auto_place_disabled` au lieu de « fenêtre interdite » 15m. */
+  if (shouldSkipTradeTiming(signal)) {
+    const timingDetails = getTimingForbiddenDetails();
+    recordSkipReason('timing_forbidden', 'ws', {
+      conditionId: key,
+      tokenId: signal.tokenIdToBuy,
+      takeSide: signal.takeSide,
+      bestAskP: pickSignalBestAskP(signal),
+      ...timingDetails,
+    });
+    logSignalInRangeButNoOrder('ws', 'timing_forbidden', signal, { ...timingDetails });
+    return;
   }
-}
-
-async function tryPlaceOrderForSignal(signal, source = 'ws') {
-  // v14.1 : Phase 14 Latency Guard (Alpha Calibration)
-  if (source === 'poll') {
-      const now = Date.now();
-      const cycleStart = typeof currentCycleStartMs !== 'undefined' ? currentCycleStartMs : now;
-      const currentLag = now - cycleStart;
-      if (currentLag > MAX_ALLOWED_LAG_MS) {
-          console.warn(`[Latency] 🐌 Cycle trop lent (${currentLag}ms > ${MAX_ALLOWED_LAG_MS}ms). Signal abandonnÃ©.`);
-          recordSkipReason('latency_exceeded', source, { currentLag, max: MAX_ALLOWED_LAG_MS });
-          recordSignalAudit(signal, 'SKIPPED_LATENCY', { currentLag });
-          return;
+  if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
+    const r = !walletConfigured
+      ? 'wallet_not_configured'
+      : !autoPlaceEnabled
+        ? 'auto_place_disabled'
+        : killSwitchActive
+          ? 'kill_switch'
+          : 'unknown';
+    logSignalInRangeButNoOrder('ws', r, signal, {});
+    return;
+  }
+  const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
+  if (cooldownRemainingMs > 0) {
+    recordSkipReason('cooldown_active', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+    logSignalInRangeButNoOrder('ws', 'cooldown_active', signal, { remainingMs: Math.round(cooldownRemainingMs) });
+    return;
+  }
+  if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+    recordSkipReason('degraded_mode', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'degraded_mode_pause', signal, {});
+    return;
+  }
+  const t0 = Date.now();
+  const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
+  if (placedKeys.has(key)) {
+    recordSkipReason('already_placed_for_slot', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'already_placed_for_slot', signal, {});
+    return;
+  }
+  let signalWithPrice = signal;
+  let bestAskLive = null; // best ask (USD de probabilité) au moment du trigger WS
+  const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
+  if (USE_WS_PRICE_ONLY) {
+    // Prix déjà sur le signal (reçu par WS, filtré [MIN_P, MAX_P]). Pas d'appel REST → ~50–150 ms de gagné.
+    const tBestAsk0 = Date.now();
+    const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
+    if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) {
+      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+      logJson('info', 'WS: prix hors fenêtre (stale?), skip', { tokenId: signal.tokenIdToBuy, bestAsk: wsBestAsk });
+      return;
+    }
+    bestAskLive = wsBestAsk;
+    timingsMs.bestAsk = Math.max(1, Date.now() - tBestAsk0);
+    const wsAgeMs = wsEventAtMs > 0 ? Math.max(0, Date.now() - wsEventAtMs) : (wsLastBidAskAtMs > 0 ? Math.max(0, Date.now() - wsLastBidAskAtMs) : null);
+    if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
+      const restAsk = await getBestAsk(signal.tokenIdToBuy);
+      if (restAsk == null || restAsk < MIN_P || restAsk > MAX_P) {
+        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_invalid', signal, {
+          bestAskP: wsBestAsk,
+          wsAgeMs: Math.round(wsAgeMs),
+          restAsk: restAsk != null ? Math.round(restAsk * 1e6) / 1e6 : null,
+        });
+        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
+        setPolymarketDegraded('stale_ws_data', incidentDurationMs);
+        logJson('warn', 'WS stale: revalidation REST indisponible/hors fenêtre, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk });
+        return;
       }
-  }
-
-  try {
-    if (!signal?.tokenIdToBuy) return;
-    
-    // v7.16.32 : Robust asset and timestamp extraction
-    const slug = signal.slug || signal.eventSlug || '';
-    let asset = signal.asset;
-    if (!asset) {
-        if (slug.includes('btc')) asset = 'BTC';
-        else if (slug.includes('eth')) asset = 'ETH';
-        else if (slug.includes('sol')) asset = 'SOL';
-        else asset = 'BTC';
+      const mismatch = Math.abs(restAsk - wsBestAsk);
+      if (mismatch > wsPriceMismatchMaxP) {
+        recordSkipReason('ws_stale', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('ws', 'ws_stale_rest_mismatch', signal, {
+          bestAskP: wsBestAsk,
+          wsAgeMs: Math.round(wsAgeMs),
+          restAsk: Math.round(restAsk * 1e6) / 1e6,
+          mismatch: Math.round(mismatch * 1e6) / 1e6,
+          mismatchMaxP: wsPriceMismatchMaxP,
+        });
+        writeHealth({ staleWsData: true, staleWsDataAt: new Date().toISOString() });
+        setPolymarketDegraded('ws_rest_price_mismatch', incidentDurationMs);
+        logJson('warn', 'WS stale: mismatch WS/REST, skip', { tokenId: signal.tokenIdToBuy, wsAgeMs, wsBestAsk, restAsk, mismatch });
+        return;
+      }
+      writeHealth({ staleWsData: false });
+      bestAskLive = restAsk;
+      signalWithPrice = {
+        ...signal,
+        priceUp: signal.takeSide === 'Up' ? restAsk : 1 - restAsk,
+        priceDown: signal.takeSide === 'Down' ? restAsk : 1 - restAsk,
+      };
     }
-
-    // Initialisation Audit pour le Dashboard
-    lastSniperDecision = {
-        at: new Date().toISOString(),
-        asset,
-        status: 'evaluating',
-        reason: 'Checks en cours',
-        momentumDelta: 0,
-        isDuplicate: false,
-        isStrong: false,
-        isSignMatch: false
+  } else {
+    const tBestAsk0 = Date.now();
+    const currentBestAsk = await getBestAsk(signal.tokenIdToBuy);
+    timingsMs.bestAsk = Date.now() - tBestAsk0;
+    if (currentBestAsk == null || currentBestAsk < MIN_P || currentBestAsk > MAX_P) {
+      recordSkipReason('ws_price_out_of_window', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+      logJson('info', 'WS: prix hors fenêtre au moment du placement, skip', { tokenId: signal.tokenIdToBuy, bestAsk: currentBestAsk });
+      return;
+    }
+    bestAskLive = currentBestAsk;
+    signalWithPrice = {
+      ...signal,
+      priceUp: signal.takeSide === 'Up' ? currentBestAsk : 1 - currentBestAsk,
+      priceDown: signal.takeSide === 'Down' ? currentBestAsk : 1 - currentBestAsk,
     };
-
-    if (signal.strike == null) {
-        const start = signal.m?.startDate || signal.startDate || (signal.slug && signal.slug.includes('-') ? signal.slug.split('-').pop() * 1000 : null);
-        signal.strike = getStrike(asset, start);
-        
-        // v2026 : Late Catch Fallback (Si restart en milieu de créneau)
-        if (signal.strike == null) {
-            const { getChainlinkPrice } = await import('./chainlink-price.js');
-            const { resolveStrikeLate } = await import('./src/core/strike-manager.js');
-            signal.strike = await resolveStrikeLate(asset, start, getChainlinkPrice);
-        }
+  }
+  // Carnet : seulement si relevé historique ou plafonds legacy (sinon inutile avec FAK + worst price).
+  let liquidity = null;
+  let maxUsdAvg = null;
+  if (needLiquidityBook) {
+    const tBook0 = Date.now();
+    liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
+    timingsMs.book = Math.max(1, Date.now() - tBook0);
+    if (useAvgPriceSizing && bestAskLive != null && liquidity != null && liquidity > 0) {
+      maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
     }
-    const activePositions = readActivePositions();
-    const strikePrice = Number(signal.strike);
-    const key = getSignalKey(signal);
-
-    // v2026 : Dé-doublonnage par créneau (Une seule position par conditionId, strictement)
-    if (activePositions.some(p => p.conditionId === key)) {
-      lastSniperDecision.status = 'skipped';
-      lastSniperDecision.reason = 'Déjà tradé (Ce slot)';
-      lastSniperDecision.isDuplicate = true;
-      if (shouldAuditSlot(key, 'SKIPPED_DEDUPLICATION')) {
-        console.log(`[Deduplication] 🛡️ Créneau ${key} déjà traité (Un seul trade par slot). Signal ignoré.`);
-        recordSkipReason('already_in_position', source, { conditionId: key });
-        recordSignalAudit(signal, 'SKIPPED_DEDUPLICATION', { conditionId: key });
-      }
-      return;
+    const miseMaxUsdForRecord = maxUsdAvg != null && maxUsdAvg > 0 ? maxUsdAvg : liquidity;
+    if (recordLiquidityHistory && miseMaxUsdForRecord != null && miseMaxUsdForRecord > 0 && !recordedLiquidityWindows.has(key)) {
+      appendLiquidityHistory({ liquidityUsd: miseMaxUsdForRecord, takeSide: signal.takeSide, source: 'ws', signalPriceP: bestAskLive });
+      const endMs = signal.endDate ? (typeof signal.endDate === 'number' ? (signal.endDate > 1e12 ? signal.endDate : signal.endDate * 1000) : new Date(signal.endDate).getTime()) : Date.now();
+      recordedLiquidityWindows.set(key, endMs);
     }
+  } else {
+    timingsMs.book = 1;
+  }
 
-    // --- OFI DYNAMIC THRESHOLD (v5.7.1) ---
-    const ofiMultiplier = getOfiThresholdMultiplier(asset, signal.ofiScore || 0, signal.takeSide);
-    const adjustedThreshold = SIGNAL_GAP_THRESHOLD * ofiMultiplier;
+  let clobClient = null;
+  try {
+    const tCreds0 = Date.now();
+    clobClient = await buildClobClientCachedCreds();
+    timingsMs.creds = Math.max(1, Date.now() - tCreds0);
+  } catch (err) {
+    notePolymarketIncidentError('clob_creds', err);
+    logSignalInRangeButNoOrder('ws', 'clob_creds', signal, {
+      bestAskP: bestAskLive,
+      error: String(err?.message || err).slice(0, 240),
+    });
+    console.warn('WebSocket tryPlace: CLOB client:', err.message);
+    return;
+  }
+  const tBal0 = Date.now();
+  let balance;
+  if (simulationTradeEnabled) {
+    simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+    balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+  } else {
+    const spendableBalance = await getUsdcSpendableViaClob(clobClient);
+    const rpcBalance = spendableBalance == null ? await getUsdcBalanceRpc() : null;
+    balance = spendableBalance ?? rpcBalance;
+  }
+  timingsMs.balance = Math.max(1, Date.now() - tBal0);
+  const balanceForSizing =
+    useBalanceAsSize && budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
+  let amountUsd = useBalanceAsSize ? (balanceForSizing ?? orderSizeUsd) : orderSizeUsd;
+  const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+  if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+    amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+  }
 
-    // --- v14.17 : Momentum Transparency Layer (Calcul avant verrouillage) ---
-    const endDateMs = new Date(signal.m?.endDate || signal.endDate || 0).getTime();
-    const nowFixed = Date.now() + (UTC_OFFSET_SEC * 1000);
-    let secondsLeft = Math.max(0, (endDateMs - nowFixed) / 1000);
+  let allowBelowMin = false;
+  let cappedBy = false;
+  if (liquidity != null && liquidity > 0 && useLiquidityCap && amountUsd > liquidity) {
+    amountUsd = liquidity;
+    cappedBy = true;
+  }
+  if (useAvgPriceSizing && maxUsdAvg != null && maxUsdAvg > 0 && amountUsd > maxUsdAvg) {
+    amountUsd = maxUsdAvg;
+    cappedBy = true;
+  }
+  amountUsd = applyMaxStakeUsd(amountUsd);
+  const degradedNow = inPolymarketDegradedMode();
+  if (degradedNow && incidentBehavior === 'reduced') {
+    amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
+    allowBelowMin = true;
+  }
+  if (cappedBy) allowBelowMin = amountUsd < orderSizeMinUsd;
+  if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
 
-    let spotPrice = calculateConsensusPrice(asset || signal.asset || 'BTC', perpState);
-    const state = getAssetState(asset || signal.asset || 'BTC');
-    
-    if (state && spotPrice > 0 && strikePrice > 0) {
-      if (!state.pythRefPrice) {
-        const cur = perpState.get(asset || signal.asset || 'BTC')?.pyth;
-        if (cur) {
-          state.pythRefPrice = cur;
-          state.pythRefAtMs = Date.now();
-          console.log(`[${asset}] ⚓ Late Anchor (Bypass): Base 0 forced to current Spot $${cur.toFixed(2)}`);
-        }
-      }
-
-      // v2026: Delta must be calculated against the STRIKE, not the START price for Fair Value.
-      const deltaPct = (spotPrice / strikePrice) - 1; 
-
-      // 1. Magnitude Check (0.1% Minimum)
-      if (Math.abs(deltaPct) < ENTRY_WINDOW.minDeltaPct) {
-        lastSniperDecision.status = 'skipped';
-        lastSniperDecision.reason = `Momentum < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%`;
-        lastSniperDecision.momentumDelta = deltaPct;
-        if (shouldAuditSlot(key, 'SKIPPED_MOMENTUM')) {
-            console.log(`[${asset}] 🚫 Momentum Delta insuffisant : ${(deltaPct * 100).toFixed(3)}% < ${(ENTRY_WINDOW.minDeltaPct * 100).toFixed(1)}%. Signal ignoré.`);
-            recordSkipReason('momentum_insufficient', source, { deltaPct, min: ENTRY_WINDOW.minDeltaPct, strike: strikePrice, spot: spotPrice });
-            recordSignalAudit(signal, 'SKIPPED_MOMENTUM', { deltaPct, strike: strikePrice, spot: spotPrice });
-        }
-        return;
-      }
-
-      // 2. Directional Check (Sign Match)
-      const isUp = signal.takeSide === 'Up';
-      const isDown = signal.takeSide === 'Down';
-      const isDirectionalMatch = (isUp && deltaPct > 0) || (isDown && deltaPct < 0);
-
-      if (!isDirectionalMatch) {
-        lastSniperDecision.status = 'skipped';
-        lastSniperDecision.reason = 'Côté Opposé au Strike';
-        lastSniperDecision.momentumDelta = deltaPct;
-        lastSniperDecision.isSignMatch = false;
-        if (shouldAuditSlot(key, 'SKIPPED_DIRECTION_MISMATCH')) {
-            console.log(`[${asset}] 🚫 Momentum INVERSE : Signal=${signal.takeSide} mais Delta=${(deltaPct * 100).toFixed(3)}%. Signal ignoré.`);
-            recordSkipReason('direction_mismatch', source, { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
-            recordSignalAudit(signal, 'SKIPPED_DIRECTION_MISMATCH', { side: signal.takeSide, deltaPct, strike: strikePrice, spot: spotPrice });
-        }
-        return;
-      }
-
-      // v2026 : Momentum Validé (> 0.1% + Direction OK) -> Calcul Fair et Traçabilité
-      const probFairLive = calculateFairProbability(spotPrice, strikePrice, secondsLeft, null, asset);
-      
-      // MEMORY SIGNALS (v14.53) - Fix Scope Crashes
-      signal.probFairAtEntry = probFairLive;
-      signal.spotAtDetection = spotPrice;
-      signal.deltaPctAtDetection = deltaPct; // v2026: Store for Audit
-      signal.thresholdAtDetection = adjustedThreshold;
-
-      lastSniperDecision.status = 'executing';
-      lastSniperDecision.reason = 'CRITÈRES OK';
-      lastSniperDecision.momentumDelta = deltaPct;
-      lastSniperDecision.isStrong = true;
-      lastSniperDecision.isSignMatch = true;
-
-      console.log(`[${asset}] 🚀 Momentum Confirmé (Strike=$${strikePrice.toFixed(2)}) : Delta=${(deltaPct * 100).toFixed(3)}% | Fair=${(probFairLive * 100).toFixed(1)}%`);
-    }
-
-    if (shouldSkipTradeTiming(signal)) {
-      const timingDetails = getTimingForbiddenDetails();
-      recordSkipReason('timing_forbidden', source, {
+  // Tentative d'évaluation: on a déjà mesuré bestAsk/book/creds/balance, mais pas de placement d'ordre.
+  // Permet d'avoir un breakdown même sans trade réel.
+  if (amountUsd < orderSizeMinUsd && !allowBelowMin) {
+    recordSkipReason('amount_below_min', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'amount_below_min', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      orderSizeMinUsd,
+      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
+    });
+    if (shouldLogTradeLatencyAttempt(key)) {
+      logJson('info', 'Trade latency attempt (WS, no order)', {
         conditionId: key,
-        tokenId: signal.tokenIdToBuy,
-        takeSide: signal.takeSide,
-        bestAskP: pickSignalBestAskP(signal),
-        ...timingDetails,
+        timingsMs,
       });
-      logSignalInRangeButNoOrder(source, 'timing_forbidden', signal, { ...timingDetails });
-      recordSignalAudit(signal, 'SKIPPED_TIMING', { timingDetails });
-      return;
-    }
-    if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) {
-      const r = !walletConfigured ? 'wallet_not_configured' : !autoPlaceEnabled ? 'auto_place_disabled' : 'kill_switch';
-      logSignalInRangeButNoOrder(source, r, signal, {});
-      return;
-    }
-
-    const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
-    if (cooldownRemainingMs > 0 && !(signal.edge > 0.35)) {
-      recordSkipReason('cooldown_active', source, { conditionId: key, remainingMs: cooldownRemainingMs });
-      return;
-    }
-
-    if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
-      recordSkipReason('degraded_mode_pause', source, { conditionId: key });
-      return;
-    }
-
-    const t0 = Date.now();
-    const timingsMs = { bestAsk: null, creds: null, balance: null, book: null, placeOrder: null };
-    let bestAskLive = null;
-    const wsEventAtMs = Number(signal?._wsReceivedAtMs) || 0;
-
-    // 1. PHASE PRIX (WS ou REST)
-    if (USE_WS_PRICE_ONLY) {
-      const wsBestAsk = signal.takeSide === 'Up' ? signal.priceUp : signal.priceDown;
-      if (wsBestAsk == null || wsBestAsk < MIN_P || wsBestAsk > MAX_P) return;
-      bestAskLive = wsBestAsk;
-      timingsMs.bestAsk = 1;
-      const wsAgeMs = wsEventAtMs > 0 ? Date.now() - wsEventAtMs : null;
-      if (wsAgeMs != null && wsAgeMs > wsFreshnessMaxMs) {
-        const restAsk = await getBestAsk(signal.tokenIdToBuy);
-        if (!restAsk || Math.abs(restAsk - wsBestAsk) > wsPriceMismatchMaxP) return;
-        bestAskLive = restAsk;
-      }
-    } else {
-      bestAskLive = await getBestAsk(signal.tokenIdToBuy);
-      if (!bestAskLive) return;
-    }
-
-    // 2. PHASE CONNECTION (CLOB)
-    clobClient = null;
-    try {
-      const tCreds0 = Date.now();
-      clobClient = await buildClobClientCachedCreds();
-      timingsMs.creds = Math.max(1, Date.now() - tCreds0);
-    } catch (err) {
-      console.warn('WebSocket tryPlace: CLOB client:', err.message);
-      return;
-    }
-
-    // 3. PHASE MESURE (Balance & Book)
-    const tBal0 = Date.now();
-    let balance;
-    if (simulationTradeEnabled) {
-      balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
-    } else {
-      balance = (await getUsdcSpendableViaClob(clobClient)) ?? (await getUsdcBalanceRpc());
-    }
-    timingsMs.balance = Math.max(1, Date.now() - tBal0);
-
-    let liquidity = null;
-    let maxUsdAvg = null;
-    if (needLiquidityBook) {
-      const tBook0 = Date.now();
-      liquidity = await getLiquidityAtTargetUsd(signal.tokenIdToBuy);
-      timingsMs.book = Math.max(1, Date.now() - tBook0);
-      if (useAvgPriceSizing && bestAskLive != null) {
-        maxUsdAvg = await getMaxUsdForAvgPrice(signal.tokenIdToBuy, bestAskLive + avgPriceTolP);
-      }
-    }
-
-    // 4. PHASE SIZING (Kelly, SOL, Sniper, Caps)
-    const balanceForSizing = budgetModeReserveExcessFromStart ? (balance != null ? getEffectiveBalanceForSizing(balance) : balance) : balance;
-    let amountUsd = orderSizeUsd;
-
-    // --- LOGIQUE SNIPER 5M BTC (v2026 : Compounding Active) ---
-    if (ENABLE_SNIPER_STRATEGY && (signal.asset === 'BTC' || slug.includes('btc-updown-5m'))) {
-        if (bestAskLive < SNIPER_PRICE_MIN || bestAskLive > SNIPER_PRICE_MAX) {
-            console.log(`[Sniper] ⛔ Hors fenêtre de prix : ${bestAskLive.toFixed(2)} (Attendu: ${SNIPER_PRICE_MIN}-${SNIPER_PRICE_MAX})`);
-            recordSignalAudit(signal, 'SKIPPED_SNIPER_PRICE', { price: bestAskLive, min: SNIPER_PRICE_MIN, max: SNIPER_PRICE_MAX });
-            return;
-        }
-        
-        // Calcul de la mise dynamique basÃ©e sur la balance actuelle
-        amountUsd = await getCompoundedSniperStake(balance || 0);
-        console.log(`[Sniper] 🎯 Cible Verrouillée : Prix=${bestAskLive.toFixed(2)} | Mise Dynamique=${amountUsd} USDC`);
-    } else if (USE_KELLY_SIZING && balanceForSizing != null && signal.netGap != null) {
-        const lockedCapital = activePositions.filter(p => !p.resolved).reduce((sum, p) => sum + (p.filledUsdc || p.amountUsd || 0), 0);
-        amountUsd = calculateKellyStake(signal.netGap, bestAskLive, Math.max(0, balanceForSizing - lockedCapital), signal.ofiScore || 0, signal.takeSide);
-    } else {
-        amountUsd = Number(orderSizeUsd) || 1.0;
-    }
-
-    console.log(`[Trace] 00 Starting phase validation for BTC (Amount: ${amountUsd})...`);
-    if (liquidity != null && useLiquidityCap && amountUsd > liquidity) amountUsd = liquidity;
-    if (maxUsdAvg != null && useAvgPriceSizing && amountUsd > maxUsdAvg) amountUsd = maxUsdAvg;
-    amountUsd = applyMaxStakeUsd(amountUsd);
-
-    // 5. PHASE VALIDATION (Safety, Exposure, VWAP)
-    console.log(`[Trace] 01 Safety Check starting for ${signal.asset}...`);
-    const safety = isTradeAllowedBySafety(signal.asset || 'BTC', signal.strike, calculateConsensusPrice(signal.asset || 'BTC', perpState));
-    console.log(`[Trace] 02 Safety Result: ${safety.ok} (Reason: ${safety.reason || 'none'})`);
-    if (!safety.ok) return;
-
-    // v2026 : Verrouillage par cr\u00e9neau (One trade per slot)
-    const alreadyTradedSlot = activePositions.some(p => (p.eventSlug === (signal.slug || signal.eventSlug)) || p.conditionId === key);
-    if (alreadyTradedSlot) {
-      console.log(`[Sniper] ⚠️ Créneau déjà traité (${signal.slug || signal.eventSlug}). Rejet de la ré-entrée.`);
-      recordSignalAudit(signal, 'SKIPPED_ALREADY_TRADED_SLOT', { slug: signal.slug || signal.eventSlug });
-      return;
-    }
-
-    const assetLimit = MAX_POSITIONS_PER_ASSET[signal.asset] || 10;
-    const currentCount = activePositions.filter(p => !p.resolved && (p.underlying === signal.asset)).length;
-    console.log(`[Trace] 03 Exposure Check: ${currentCount}/${assetLimit} positions active for ${signal.asset}`);
-    if (currentCount >= assetLimit) return;
-
-    if (amountUsd < orderSizeMinUsd) {
-      console.log(`[Trace] 04 Amount Below Min: ${amountUsd.toFixed(2)} < ${orderSizeMinUsd}`);
-      logSignalInRangeButNoOrder('ws', 'amount_below_min', signal, { amountUsd, balance });
-      recordSignalAudit(signal, 'SKIPPED_AMOUNT_MIN', { amountUsd, orderSizeMinUsd });
-      return;
-    }
-
-    console.log(`[Trace] 05 VWAP Calc starting...`);
-    let vwapPrice = await calculateVWAPPrice(signal.tokenIdToBuy, amountUsd, clobClient);
-    
-    // FIX FALLBACK SIMULATION (v14.53) - Bypass 429 Rate Limit
-    if (vwapPrice == null && IS_SIMULATION) {
-      vwapPrice = bestAskLive || 0.50; // Fallback sur le meilleur prix vu
-      console.log(`[PAPER] ⚠️ VWAP failed (429?), using Signal Price as Fallback: ${vwapPrice}`);
-    }
-
-    console.log(`[Trace] 06 VWAP Result: ${vwapPrice}`);
-    if (vwapPrice == null) return;
-
-    console.log(`[Trace] 07 Data: spot=${signal.spotAtDetection} strike=${strikePrice}`);
-
-    if (!Number.isFinite(strikePrice) || strikePrice <= 0) {
-      recordSkipReason('missing_strike_data', source, { asset, strike: signal.strike });
-      recordSignalAudit(signal, 'SKIPPED_STRIKE_MISSING', { asset, strike: signal.strike });
-      return;
-    }
-    
-    const fairValue = signal.takeSide === 'Up' ? signal.probFairAtEntry : (1 - signal.probFairAtEntry);
-    // v12.1 : Alignement sur le True Edge (PnL Net = Gross - Fees - Slippage)
-    const takerFee = POLYMARKET_TAKER_FEE * 1.0; 
-    const netEdge = (fairValue - vwapPrice) - takerFee - EXPECTED_SLIPPAGE;
-
-    // v7.14.5 : Hard Price Protection (Slippage/Book Guard)
-    if (vwapPrice > 0.98) {
-      recordSkipReason('price_protection_triggered', 'ws', { vwapPrice, asset });
-      recordSignalAudit(signal, 'SKIPPED_PRICE_PROTECTION', { vwapPrice });
-      return;
-    }
-
-    // v9.3.2 : SÃ©curitÃ© ProfitabilitÃ© Maker (v14.1 : 0.2% net minimum)
-    if (netEdge < 0.002) {
-      recordSkipReason('insufficient_signal_edge', source, { netEdge, min: 0.002 });
-      recordSignalAudit(signal, 'SKIPPED_EDGE_MIN', { netEdge });
-      return;
-    }
-
-    if (netEdge < signal.thresholdAtDetection) {
-      // --- LOG DECISION MATRIX (v7.14.7 : Moved after calculation) ---
-      logDecision({
-          at: new Date().toISOString(),
-          source,
-          asset,
-          slug: signal.slug || signal.eventSlug,
-          side: signal.takeSide,
-          prob: signal.probFairAtEntry,
-          ask: vwapPrice,
-          edge: (netEdge != null ? Number(netEdge.toFixed(4)) : 0),
-          strike: signal.strike,
-          ofi: signal.ofiScore || 0,
-          adjThreshold: (adjustedThreshold != null ? Number(adjustedThreshold.toFixed(4)) : 0)
-      });
-      recordSkipReason('insufficient_net_edge', source, { netEdge, threshold: adjustedThreshold });
-      recordSignalAudit(signal, 'SKIPPED_EDGE_THRESHOLD', { netEdge, threshold: adjustedThreshold });
-      return;
-    }
-
-    // 6. PHASE EXECUTION
-    placedKeys.add(key);
-    const tPlace0 = Date.now();
-    let result;
-    if (simulationTradeEnabled) {
-      result = simulationTrade.buildSimulatedBuyFill({ amountUsd, bestAskP: vwapPrice, conditionId: key });
-      if (result.ok) simulationTrade.adjustPaperBalance(BOT_DIR, -result.filledUsdc);
-    } else {
-      result = await placeMarketOrderWithPartialFillRetries(signal, amountUsd, clobClient, { forceSingleAttempt: inPolymarketDegradedMode() });
-    }
-    timingsMs.placeOrder = Date.now() - tPlace0;
-
-    if (result.ok) {
-      const time = new Date().toISOString();
-      const orderData = {
-        at: time,
-        asset: signal.asset || 'BTC',
-        underlying: signal.asset || 'BTC',
-        eventSlug: signal.slug || signal.eventSlug,
-        takeSide: signal.takeSide,
+      appendTradeLatencyHistory({
+        source: 'ws',
+        latencyMs: 0,
+        timingsMs,
+        takeSide: signalWithPrice.takeSide,
         amountUsd,
         conditionId: key,
-        strike: signal.strike,
-        tokenId: signal.tokenIdToBuy,
-        orderID: result.orderID,
-        latencyMs: Date.now() - t0,
-        timingsMs,
-        ...pickFillFieldsForLog(result),
-        edge: netEdge,
-        simulationTrade: !!result.simulationTrade
-      };
-
-      activePositions.push({ ...orderData, resolved: false, entryTime: time });
-      writeActivePositions(activePositions.slice(-50));
-      writeLastOrder(orderData);
-      appendOrderLog(orderData);
-      void notifyTelegramTradeSuccess(source, orderData, simulationTradeEnabled ? null : clobClient);
-      
-      const retryInfo = (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
-      const fillConsole = formatFillConsoleSuffix(result);
-      const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
-
-      console.log(
-        `[${time}] [${source.toUpperCase()}] Ordre placé ${brandEmoji(signal.asset)} ${signal.asset} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(orderData.latencyMs)} ms)${cacheHitInfo}`
-      );
-    } else {
-      const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
-      if (!isInsufficient) placedKeys.delete(key);
-      if (isRetryableExecutionError(result?.error) || isInsufficient) {
-        setExecutionCooldown(key, result.error);
-        notePolymarketIncidentError('ws_order_failure', result.error);
-      }
-      logSignalInRangeButNoOrder(source, 'place_order_failed', signal, {
+        tokenId: signalWithPrice.tokenIdToBuy,
+      });
+    }
+    placedKeys.delete(key); // sécurité: ne pas bloquer un éventuel trade si le wallet change
+    return;
+  }
+  if (!(amountUsd > 0)) {
+    recordSkipReason('amount_zero_after_clamp', 'ws', { conditionId: key, tokenId: signal?.tokenIdToBuy });
+    logSignalInRangeButNoOrder('ws', 'amount_zero_after_clamp', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round((amountUsd || 0) * 100) / 100,
+      balanceUsd: balance != null ? Math.round(balance * 100) / 100 : null,
+    });
+    return;
+  }
+  // Pré-signature : créer + signer l'ordre maintenant pour que placeOrder ne fasse que le POST (réduit latence au moment du trade).
+  if (useMarketOrder && clobClient && !simulationTradeEnabled) {
+    try {
+      const worstPrice = marketWorstPriceP;
+      const userMarketOrder = { tokenID: signalWithPrice.tokenIdToBuy, amount: amountUsd, side: Side.BUY, price: worstPrice };
+      const signedOrder = await createSignedMarketOrder(clobClient, userMarketOrder);
+      const cacheKey = getPreSignCacheKey(signalWithPrice, amountUsd);
+      preSignCache.set(cacheKey, { signedOrder, expiresAt: Date.now() + PRE_SIGN_CACHE_TTL_MS });
+    } catch (e) {
+      logJson('info', 'WS: pré-signature ordre (non bloquant)', { error: e?.message });
+    }
+  }
+  placedKeys.add(key);
+  const tPlace0 = Date.now();
+  let result;
+  if (simulationTradeEnabled) {
+    const simFill = simulationTrade.buildSimulatedBuyFill({
+      amountUsd,
+      bestAskP: bestAskLive,
+      conditionId: key,
+    });
+    if (!simFill.ok) {
+      placedKeys.delete(key);
+      timingsMs.placeOrder = Date.now() - tPlace0;
+      logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
         bestAskP: bestAskLive,
         amountUsd: Math.round(amountUsd * 100) / 100,
-        error: String(result?.error || '').slice(0, 240),
+        error: String(simFill.error || '').slice(0, 240),
       });
-      recordSignalAudit(signal, 'FAILED_ORDER', { error: String(result?.error || '').slice(0, 240) });
-      logJson('error', `Erreur ordre ${source.toUpperCase()}`, { takeSide: signal.takeSide, error: result.error });
-      console.error(`[${time}] [${source.toUpperCase()}] Erreur ${signal.takeSide}: ${result.error}`);
+      return;
     }
-  } catch (err) {
-    console.error(`[Fatal] ❌ Crash in tryPlaceOrderForSignal: ${err.message}`);
-    logJson('error', 'Fatal crash in tryPlaceOrderForSignal', { error: err.message, stack: err.stack });
+    simulationTrade.adjustPaperBalance(BOT_DIR, -simFill.filledUsdc);
+    result = simFill;
+  } else {
+    result = await placeMarketOrderWithPartialFillRetries(signalWithPrice, amountUsd, clobClient, {
+      allowBelowMin,
+      forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+      maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+    });
+  }
+  timingsMs.placeOrder = Date.now() - tPlace0;
+  const time = new Date().toISOString();
+  if (result.ok) {
+    const latencyMs = Date.now() - t0;
+    if (latencyMs >= executionDelayAlertMs) {
+      writeHealth({ executionDelayed: true, executionDelayedAt: time });
+      setPolymarketDegraded('execution_delayed', incidentDurationMs);
+    } else {
+      writeHealth({ executionDelayed: false });
+    }
+    writeHealth({ lastOrderAt: time, lastOrderSource: 'ws' });
+    const fillLog = pickFillFieldsForLog(result);
+    const marketEndMs = parseMarketEndDateToMs(signalWithPrice?.endDate);
+    const orderData = {
+      at: time,
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      conditionId: key,
+      tokenId: signalWithPrice.tokenIdToBuy ?? null,
+      orderID: result.orderID,
+      preSignCacheHit: result.preSignCacheHit,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      clobSignerAddress: wallet?.address ?? null,
+      clobSignatureType: CLOB_SIGNATURE_TYPE,
+      clobFunderAddress: clobFunderAddress ?? null,
+      ...(signalWithPrice?.eventSlug ? { eventSlug: String(signalWithPrice.eventSlug).slice(0, 120) } : {}),
+      ...(marketEndMs != null ? { marketEndMs } : {}),
+      latencyMs,
+      timingsMs,
+      ...fillLog,
+      ...(result.simulationTrade ? { simulationTrade: true } : {}),
+    };
+    writeLastOrder(orderData);
+    appendOrderLog(orderData);
+    void notifyTelegramTradeSuccess('ws', orderData, simulationTradeEnabled ? null : clobClient);
+    void notifyTelegramLatencyAbnormal({
+      source: 'ws',
+      conditionId: key,
+      orderID: result.orderID,
+      latencyMs,
+      timingsMs,
+    });
+    logJson('info', 'Ordre placé (WS)', {
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      orderID: result.orderID,
+      latencyMs,
+      timingsMs,
+      preSignCacheHit: result.preSignCacheHit,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      ...fillLog,
+    });
+    appendTradeLatencyHistory({
+      source: 'ws',
+      latencyMs,
+      timingsMs,
+      takeSide: signalWithPrice.takeSide,
+      amountUsd,
+      conditionId: key,
+      tokenId: signalWithPrice.tokenIdToBuy,
+      orderID: result.orderID,
+      preSignCacheHit: result.preSignCacheHit ?? false,
+      partialFillRetries: result.partialFillRetries ?? 0,
+      orderIDs: result.orderIDs,
+      ...fillLog,
+    });
+    const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+    const fillConsole = formatFillConsoleSuffix(result);
+    const retryInfo =
+      (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+    console.log(
+      `[${time}] [WS] Ordre placé ${signalWithPrice.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfo} — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
+    );
+  } else {
+    const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
+    if (!isInsufficient) placedKeys.delete(key);
+    if (isRetryableExecutionError(result?.error) || isInsufficient) {
+      setExecutionCooldown(key, result.error);
+      notePolymarketIncidentError('ws_order_failure', result.error);
+    }
+    logSignalInRangeButNoOrder('ws', 'place_order_failed', signalWithPrice, {
+      bestAskP: bestAskLive,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      error: String(result?.error || '').slice(0, 240),
+    });
+    logJson('error', 'Erreur ordre WS', { takeSide: signalWithPrice.takeSide, error: result.error });
+    console.error(`[${time}] [WS] Erreur ${signalWithPrice.takeSide}: ${result.error}`);
   }
 }
 
 // ——— Boucle principale ———
 const placedKeys = new Set();
-/** Signaux "Watch" (sans ordre) pour lesquels on simule un Stop-Loss dans le dashboard. key -> { entryPrice, tokenId, takeSide, endMs } */
-const virtualWatchEntries = new Map();
 /** Fenêtres pour lesquelles on a déjà enregistré un relevé de liquidité (une fois par créneau = montant max par fenêtre pour le dashboard). */
 const recordedLiquidityWindows = new Map(); // key (getSignalKey) -> endDateMs (pour purger les anciennes)
 /** Dernier enregistrement de liquidité (lors d'un trade) pour aligner le throttle. */
 let lastLiquidityRecordTime = 0;
-/** (lastBoundaryMinute moved to top v7.16.14) */
-
-/** v2026 : Mémoire des logs pour éviter le spam (Deduplication / Momentum skips) */
-const lastAuditBySlot = new Map(); // key -> { timestamp, auditType }
-
-function shouldAuditSlot(key, type) {
-    const now = Date.now();
-    const entry = lastAuditBySlot.get(key);
-    if (entry && entry.auditType === type && (now - entry.timestamp < 60000)) return false; // Max once per minute per slot
-    lastAuditBySlot.set(key, { timestamp: now, auditType: type });
-    // Cleanup old keys
-    if (lastAuditBySlot.size > 200) {
-        const oldest = [...lastAuditBySlot.keys()].slice(0, 100);
-        oldest.forEach(k => lastAuditBySlot.delete(k));
-    }
-    return true;
-}
 
 // ——— WebSocket CLOB (temps réel) ———
 const wsState = { tokenToSignal: new Map(), tokenIds: [] };
@@ -5835,24 +4928,11 @@ let wsLastBidAskHealthWriteMs = 0;
 function sendWsSubscribe(ws, tokenIds) {
   if (!tokenIds?.length || ws.readyState !== WebSocket.OPEN) return;
   try {
-    // Abonnement aux meilleurs Bid/Ask (existant)
     ws.send(JSON.stringify({
       type: 'market',
       assets_ids: tokenIds,
       custom_feature_enabled: true,
     }));
-    // Abonnement au carnet d'ordres L2 (nouveau - pour l'OFI)
-    ws.send(JSON.stringify({
-      type: 'book',
-      assets_ids: tokenIds,
-    }));
-    // v7.10.0: Abonnement aux Fills en temps réel
-    if (walletConfigured && wallet) {
-      ws.send(JSON.stringify({
-        type: 'orders',
-        user: wallet.address.toLowerCase()
-      }));
-    }
   } catch (err) {
     console.warn('WS send subscribe:', err.message);
   }
@@ -5871,7 +4951,6 @@ async function refreshWsSubscriptions(ws) {
 
 function startClobWs() {
   if (!useWebSocket || !walletConfigured) return;
-  
   try {
     clobWs = new WebSocket(CLOB_WS_URL);
   } catch (err) {
@@ -5895,69 +4974,9 @@ function startClobWs() {
     wsRefreshTimer = setInterval(() => refreshWsSubscriptions(clobWs), WS_REFRESH_SUBSCRIPTIONS_MS);
     wsPingTimer = setInterval(() => { if (clobWs?.readyState === WebSocket.OPEN) clobWs.ping(); }, WS_PING_INTERVAL_MS);
   });
-  clobWs.on('message', async (raw) => {
+  clobWs.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString());
-      
-      // --- Traitement du canal 'book' pour l'OFI ---
-      if (data?.event_type === 'book') {
-        const assetId = String(data.asset_id ?? '');
-        if (!assetId) return;
-        
-        const bids = data.bids || [];
-        const asks = data.asks || [];
-        if (!bids.length || !asks.length) return;
-
-        const bestBid = bids[0];
-        const bestAsk = asks[0];
-        const bidPrice = parseFloat(bestBid.price);
-        const bidSize = parseFloat(bestBid.size);
-        const askPrice = parseFloat(bestAsk.price);
-        const askSize = parseFloat(bestAsk.size);
-
-        let state = ofiState.get(assetId) || { 
-            prevBidPrice: bidPrice, prevBidSize: bidSize, 
-            prevAskPrice: askPrice, prevAskSize: askSize, 
-            ofi: 0 
-        };
-
-        // Calcul de l'Imbalance (OFI simple)
-        let bidComponent = 0;
-        if (bidPrice > state.prevBidPrice) bidComponent = bidSize;
-        else if (bidPrice < state.prevBidPrice) bidComponent = -state.prevBidSize;
-        else bidComponent = bidSize - state.prevBidSize;
-
-        let askComponent = 0;
-        if (askPrice < state.prevAskPrice) askComponent = askSize;
-        else if (askPrice > state.prevAskPrice) askComponent = -state.prevAskSize;
-        else askComponent = askSize - state.prevAskSize;
-
-        // OFI = Delta Bid - Delta Ask
-        const currentOfi = bidComponent - askComponent;
-        
-        // Accumulateur pondéré (lissage court terme)
-        state.ofi = (state.ofi * 0.7) + (currentOfi * 0.3);
-        
-        state.prevBidPrice = bidPrice;
-        state.prevBidSize = bidSize;
-        state.prevAskPrice = askPrice;
-        state.prevAskSize = askSize;
-        ofiState.set(assetId, state);
-        return;
-      }
-
-      // --- Traitement des Fills en temps réel (v7.10.0) ---
-      if (data?.event_type === 'fill' || data?.event_type === 'order_fill') {
-         const fill = data.fill || data;
-         const assetId = String(fill.asset_id || '');
-         const sig = wsState.tokenToSignal.get(assetId);
-         await updateActivePositionsFromFill({
-            ...fill,
-            asset: sig?.asset || 'BTC'
-         });
-         return;
-      }
-
       if (data?.event_type !== 'best_bid_ask') {
         if (clobWs._wsNonBookLogged == null) clobWs._wsNonBookLogged = 0;
         if (clobWs._wsNonBookLogged < 8) {
@@ -5968,37 +4987,25 @@ function startClobWs() {
         return;
       }
       wsLastBidAskAtMs = Date.now();
+      if (wsLastBidAskAtMs - wsLastBidAskHealthWriteMs >= 2000) {
+        wsLastBidAskHealthWriteMs = wsLastBidAskAtMs;
+        writeHealth({ wsLastBidAskAt: new Date(wsLastBidAskAtMs).toISOString() });
+      }
       const assetId = String(data.asset_id ?? '');
       const bestAsk = parseFloat(data.best_ask);
-      const bestBid = parseFloat(data.best_bid);
-
+      if (!assetId || !Number.isFinite(bestAsk) || bestAsk < MIN_P || bestAsk > MAX_P) return;
       const sig = wsState.tokenToSignal.get(assetId);
-      if (!sig) {
-          // console.trace(`[WS] No signal mapped for assetId=${assetId}`); // Don't spam
-          return;
-      }
-
-      console.log(`[WS] 📩 Received msg for ${sig.asset} | tokenId=${assetId} | Price=${bestAsk}`);
-
-      // Injection de l'OFI dans le signal
-      const assetOfi = ofiState.get(assetId)?.ofi || 0;
-
+      if (!sig) return;
       const signal = {
         ...sig,
         priceUp: sig.takeSide === 'Up' ? bestAsk : 1 - bestAsk,
         priceDown: sig.takeSide === 'Down' ? bestAsk : 1 - bestAsk,
-        ofiScore: assetOfi,
       };
       let entry = wsDebounceTimers.get(assetId);
       if (entry) clearTimeout(entry.timeoutId);
-      const timeoutId = setTimeout(async () => {
+      const timeoutId = setTimeout(() => {
         wsDebounceTimers.delete(assetId);
-        try {
-          await tryPlaceOrderForSignal({ ...signal, _wsReceivedAtMs: wsLastBidAskAtMs });
-        } catch (err) {
-          console.error(`[WS] ❌ Silent failure in tryPlaceOrderForSignal: ${err.message}`);
-          logJson('error', 'Silent failure in WS handler', { error: err.message, stack: err.stack });
-        }
+        tryPlaceOrderForSignal({ ...signal, _wsReceivedAtMs: wsLastBidAskAtMs });
       }, WS_DEBOUNCE_MS);
       wsDebounceTimers.set(assetId, { timeoutId, signal });
     } catch (_) {}
@@ -6047,579 +5054,615 @@ function createCycleProfiler() {
 
 const CYCLE_PROFILER = process.env.CYCLE_PROFILER === '1' || process.env.CYCLE_PROFILER === 'true';
 
-
 async function run() {
-  // Sécurité 2.1.2 : Maintenance Polymarket (Option B : Blindage 2026)
-  if (isMaintenanceWindow() || isCooldown425()) {
-    const reason = isMaintenanceWindow() ? 'Fenêtre hebdo' : 'Cooldown Post-425';
-    console.log(`[Maintenance] ${reason} détectée. Suspension temporaire.`);
-    return;
+  const cycleStartMs = Date.now();
+  const profiler = createCycleProfiler();
+  let signalsCount = 0;
+  let fetchProfile = null;
+  let clobClient = null;
+  const cycleBookStats = {
+    bookCacheHits: 0,
+    bookCacheMisses: 0,
+    bookMsTotal: 0,
+    liquidityCalcMsTotal: 0,
+  };
+
+  function bumpCycleBookStats(profile) {
+    if (!profile || typeof profile !== 'object') return;
+    if (profile.bookCacheHit === true) cycleBookStats.bookCacheHits += 1;
+    if (profile.bookCacheHit === false) cycleBookStats.bookCacheMisses += 1;
+    if (Number.isFinite(profile.bookMs)) cycleBookStats.bookMsTotal += profile.bookMs;
+    if (Number.isFinite(profile.liquidityCalcMs)) cycleBookStats.liquidityCalcMsTotal += profile.liquidityCalcMs;
   }
 
-  // (Capture removed from run() v7.16.9)
-
-  const cycleStartMs = Date.now();
-  currentCycleStartMs = cycleStartMs; // v14.1 : Global tracking for latency guard
-  const profiler = createCycleProfiler();
   try {
-    // v9.6.3: Block-height Diagnostic to confirm RPC health from within the server
-    let currentBlock = 0;
-    try {
-      if (wallet?.provider) {
-        currentBlock = await wallet.provider.getBlockNumber();
-        //logJson('debug', 'RPC: Diagnostic Check', { currentBlock });
-      }
-    } catch (e) {
-      logJson('error', 'RPC: Connection Failure', { error: e.message });
+    // Fast-path sécurité: évaluer le SL avant le gros bloc fetchSignals.
+    clobClient = await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
+    const signals = await profiler.measure('fetchSignals', () => fetchSignals());
+    fetchProfile = signals?._fetchSignalsProfile ?? null;
+    signalsCount = Array.isArray(signals) ? signals.length : 0;
+    if (signalsCount === 0) {
+      appendSignalDecisionLatencyHistory({
+        source: 'poll',
+        decisionMs: Date.now() - cycleStartMs,
+        reason: 'no_signal',
+        mode: MARKET_MODE,
+        fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+        fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+        fetchSignalsDirectSlugOk: fetchProfile?.directSlugOk ?? null,
+        fetchSignalsDirectSlugMs: fetchProfile?.directSlugMs ?? null,
+        fetchSignalsUsedEvents: fetchProfile?.usedEvents ?? null,
+        fetchSignalsEventsMsTotal: fetchProfile?.eventsMsTotal ?? null,
+        fetchSignalsEventsRetryUsed: fetchProfile?.eventsRetryUsed ?? null,
+        fetchSignalsHasMatchingSlugAfterEvents: fetchProfile?.hasMatchingSlugAfterEvents ?? null,
+        fetchSignalsFallbackSlugOk: fetchProfile?.fallbackSlugOk ?? null,
+        fetchSignalsFallbackSlugMs: fetchProfile?.fallbackSlugMs ?? null,
+      });
     }
+    const shouldPrioritizeEntryNow =
+      entryFastPathEnabled &&
+      signalsCount > 0 &&
+      walletConfigured &&
+      autoPlaceEnabled &&
+      !killSwitchActive;
 
-    // v9.3.12: S'assurer que le clobClient est initialisé AVANT d'entrer dans les sous-fonctions
-    if (!clobClient) {
-      clobClient = await buildClobClientCachedCreds();
+    // Relevé du montant max (liquidité à 97 %) pour chaque fenêtre, même sans trade — une fois par créneau pour avoir la moyenne "mise max par fenêtre".
+    const liquidityCutoff = Date.now() - LIQUIDITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    for (const [key, endMs] of recordedLiquidityWindows) {
+      if (endMs < liquidityCutoff) recordedLiquidityWindows.delete(key);
     }
-    
-    await profiler.measure('stop_loss_fastpath', () => runStopLossPass());
-    
-    // v2026 : Actualisation de l'Indice BTC (Pyth) au dÃ©but du cycle
-    const pythPrice = await fetchPythPrice('BTC');
-    if (pythPrice) {
-        perpState.get('BTC').pyth = pythPrice;
-        perpState.get('BTC').pythTs = Date.now();
-        pythSpotPrice = pythPrice; // v2026 : Bridge Pyth -> Legacy Prob Sizing
-        updateAssetPriceHistory('BTC', pythPrice);
-        process.stdout.write(`[Native] BTC Polymarket Index: $${pythPrice.toFixed(2)} \r`);
-    }
-
-    const balance = simulationTradeEnabled 
-       ? (await simulationTrade.getPaperBalanceUsd(BOT_DIR) || 0) 
-       : await getBalance();
-    let totalUsd = balance;
-    try { totalUsd = await calculateTotalValue(clobClient); } catch(_) {}
-    if (totalUsd === 0) totalUsd = balance;
-
-    let gasBalance = null;
-    try { gasBalance = await checkNativeGasBalance(clobClient); } catch(_) {}
-
-    const lastRedeem = currentHealthState?.lastRedeemAt ? new Date(currentHealthState.lastRedeemAt).getTime() : 0;
-    if (Date.now() - lastRedeem > 43200000) {
-        writeHealth({ lastRedeemAt: new Date().toISOString() });
-    }
-
-    writeHealth({
-      balance: (balance != null ? balance.toFixed(2) : '0.00'),
-      totalUsd: (totalUsd != null ? totalUsd.toFixed(2) : '0.00'),
-      gasBalance: gasBalance != null ? gasBalance.toFixed(4) : '—',
-      activeConditions: OPEN_LIMIT_ORDERS.size,
-      currentBlock,
-      simulation: IS_SIMULATION,
-      secondsLeftInSlot: getRemainingSeconds(300), // Fenêtre 5m
-      timestamp: Date.now()
-    }, { totalUsd });
-
-    let totalSignalsCount = 0;
-    for (const asset of SUPPORTED_ASSETS) {
-      const res = await profiler.measure(`fetchSignals_${asset}`, () => 
-        fetchSignals(asset, { MARKET_MODE, getCurrent5mEventSlug, getCurrentHourlyEventSlug: getCurrent5mEventSlug, FETCH_SIGNALS_CACHE_MS })
-      );
-      
-      const signals = res.signals || [];
-      totalSignalsCount += signals.length;
-      const slug = res.slug;
-      const hasEvent = res.hasEvent;
-
-      if (hasEvent && slug) {
-        const state = getAssetState(asset);
-        
-        // v10.7 : Référence Pyth pour le momentum
-        if (!state.currentSlotStrike || state.currentSlotStrike.slotSlug !== slug) {
-           const curPyth = perpState.get('BTC').pyth;
-           state.pythRefPrice = curPyth;
-           state.pythRefAtMs = Date.now();
-           console.log(`[${asset}] 📊 Slot tracking updated for ${slug}. Momentum anchor set.`);
-        }
-        
-        // v10.5 : Robustesse - Si l'ancrage initial a échoué (curPyth null), on réessaie ou on fetch l'historique
-        if (!state.pythRefPrice) {
-           const interval = '5m';
-           const curPyth = perpState.get('BTC').pyth;
-           
-           console.log(`[${asset}] 🔍 Anchor Diagnostics: spot=${curPyth}, slot=${slug}`);
-           
-           if (curPyth && Number.isFinite(curPyth)) {
-              state.pythRefPrice = curPyth;
-              state.pythRefAtMs = Date.now();
-              console.log(`[${asset}] ⚓ Late Anchor: Recovered Base 0 from Spot: ${curPyth}.`);
-           } else {
-              console.log(`[${asset}] ⚠️ Momentum Recovery failed: Pyth spot price unavailable. Will retry next cycle.`);
-           }
-        }
-      }
-      
-      if (signals.length === 0) continue;
-
-      // --- VERROU SNIPER TEMP_REL (t-40s à t-20s) ---
-      if (ENABLE_SNIPER_STRATEGY && (asset === 'BTC' || slug.includes('btc-updown-5m'))) {
-          const remaining = getRemainingSeconds(300); // Fenêtre 5m
-          if (remaining < SNIPER_WINDOW_END_S || remaining > SNIPER_WINDOW_START_S) {
-              // On ne loggue que si on est proche (t-60s) pour ne pas polluer.
-              if (remaining < 60) {
-                  process.stdout.write(`[Sniper] ⏳ En attente de la fenêtre (t-${remaining}s)... \r`);
+    // Option legacy: relever la mise max périodiquement (uniquement si RECORD_LIQUIDITY_HISTORY=true).
+    if (!recordMiseMaxOnSignalOnly && recordLiquidityHistory && !shouldPrioritizeEntryNow) {
+      await profiler.measure('fetchActiveWindows_and_liquidity', async () => {
+        try {
+          const activeWindows = await fetchActiveWindows();
+          logFetchActiveWindowsIfDue(activeWindows.length);
+          for (const { market: m, ev, endDate, key } of activeWindows) {
+            if (recordedLiquidityWindows.has(key)) continue;
+            const endMs = endDate ? (typeof endDate === 'number' ? (endDate > 1e12 ? endDate : endDate * 1000) : new Date(endDate).getTime()) : Date.now();
+            const merged = mergeGammaEventMarketForUpDown(ev, m);
+            const tokenUp = getTokenIdToBuy(merged, 'Up');
+            const tokenDown = getTokenIdToBuy(merged, 'Down');
+            const liqProfileUp = {};
+            const liqProfileDown = {};
+            const [bookUp, bookDown] = await Promise.all([
+              tokenUp ? getFilteredAskLevels(tokenUp, liqProfileUp) : Promise.resolve({ levels: [], totalUsd: null }),
+              tokenDown ? getFilteredAskLevels(tokenDown, liqProfileDown) : Promise.resolve({ levels: [], totalUsd: null }),
+            ]);
+            const liqUp = bookUp?.totalUsd ?? null;
+            const liqDown = bookDown?.totalUsd ?? null;
+            const bestAskUp = Array.isArray(bookUp?.levels) && bookUp.levels.length > 0 ? Number(bookUp.levels[0].p) : null;
+            const bestAskDown = Array.isArray(bookDown?.levels) && bookDown.levels.length > 0 ? Number(bookDown.levels[0].p) : null;
+            bumpCycleBookStats(tokenUp ? liqProfileUp : null);
+            bumpCycleBookStats(tokenDown ? liqProfileDown : null);
+            let recUp = liqUp;
+            let recDown = liqDown;
+            if (useAvgPriceSizing) {
+              if (tokenUp && Number.isFinite(bestAskUp) && liqUp != null && liqUp > 0) {
+                const maxUp = getMaxUsdForAvgPriceFromLevels(bookUp.levels, bestAskUp + avgPriceTolP, liqUp);
+                if (maxUp != null && maxUp > 0) recUp = maxUp;
               }
-              continue;
+              if (tokenDown && Number.isFinite(bestAskDown) && liqDown != null && liqDown > 0) {
+                const maxDown = getMaxUsdForAvgPriceFromLevels(bookDown.levels, bestAskDown + avgPriceTolP, liqDown);
+                if (maxDown != null && maxDown > 0) recDown = maxDown;
+              }
+            }
+            const liquidity = Math.max(recUp ?? 0, recDown ?? 0);
+            const liqLog = liquidity > 0 ? liquidity.toFixed(0) : (liquidity === 0 ? '0' : 'null');
+            logJson('info', 'Mise max créneau', {
+              key: key?.slice(0, 18) + '…',
+              liquidityUsd: liquidity > 0 ? liquidity : null,
+              rawLiquidityUpUsd: liqUp,
+              rawLiquidityDownUsd: liqDown,
+              recordedUpUsd: recUp,
+              recordedDownUsd: recDown,
+              mode: useAvgPriceSizing ? 'avg_constrained' : 'raw_liquidity',
+            });
+            console.log(`[Mise max] Créneau ${key?.slice(0, 20)}… → mise max: ${liqLog} USD${useAvgPriceSizing ? ' (avg constrained)' : ''}`);
+            if (liquidity > 0) {
+              if (recUp != null && recUp > 0) appendLiquidityHistory({ liquidityUsd: recUp, takeSide: 'Up', source: 'active_window', signalPriceP: bestAskUp });
+              if (recDown != null && recDown > 0) appendLiquidityHistory({ liquidityUsd: recDown, takeSide: 'Down', source: 'active_window', signalPriceP: bestAskDown });
+              recordedLiquidityWindows.set(key, endMs);
+            }
+            await new Promise((r) => setTimeout(r, 150));
           }
-          console.log(`\n[Sniper] ⚔️ Fenêtre Active (t-${remaining}s) ! Analyse des signaux...`);
+        } catch (err) {
+          console.warn('Relevé mise max (créneaux actifs):', err?.message ?? err);
+        }
+      });
+    }
+    // B) "signal -> décision" + relevé liquidité (uniquement si RECORD_LIQUIDITY_HISTORY=true)
+    let decisionLogged = 0;
+    if (recordLiquidityHistory && !shouldPrioritizeEntryNow) {
+    await profiler.measure('signal_decision_liquidity', async () => {
+    for (const s of signals) {
+      if (!s.tokenIdToBuy) continue;
+      const key = getSignalKey(s);
+      if (recordedLiquidityWindows.has(key)) continue;
+      let endMs = Date.now();
+      if (s.endDate) {
+        const raw = s.endDate;
+        endMs = typeof raw === 'number' ? (raw > 1e12 ? raw : raw * 1000) : new Date(raw).getTime();
       }
+      try {
+        const liquidityProfile = {};
+        const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy, liquidityProfile);
+        bumpCycleBookStats(liquidityProfile);
+        if (liquidity != null && liquidity > 0) {
+          appendLiquidityHistory({
+            liquidityUsd: liquidity,
+            takeSide: s.takeSide,
+            source: 'signal_decision',
+            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+          });
+          recordedLiquidityWindows.set(key, endMs);
+        } else {
+          console.warn(
+            `Mise max non enregistrée: pas de profondeur au prix du marché (${(MIN_P * 100).toFixed(0)}–${(MAX_P * 100).toFixed(0)}¢) pour ce créneau (ou erreur API CLOB).`,
+          );
+        }
+        if (decisionLogged < 3) {
+          appendSignalDecisionLatencyHistory({
+            source: 'poll',
+            decisionMs: Date.now() - cycleStartMs,
+            reason: liquidity != null && liquidity > 0 ? 'liquidity_ok' : 'liquidity_null',
+            tokenId: s.tokenIdToBuy,
+            conditionId: key,
+            takeSide: s.takeSide,
+            mode: MARKET_MODE,
+            // Profil Gamma: quel chemin a été choisi pour trouver l'event.
+            fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+            fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+            fetchSignalsDirectSlugOk: fetchProfile?.directSlugOk ?? null,
+            fetchSignalsDirectSlugMs: fetchProfile?.directSlugMs ?? null,
+            fetchSignalsUsedEvents: fetchProfile?.usedEvents ?? null,
+            fetchSignalsEventsMsTotal: fetchProfile?.eventsMsTotal ?? null,
+            fetchSignalsEventsRetryUsed: fetchProfile?.eventsRetryUsed ?? null,
+            fetchSignalsHasMatchingSlugAfterEvents: fetchProfile?.hasMatchingSlugAfterEvents ?? null,
+            fetchSignalsFallbackSlugOk: fetchProfile?.fallbackSlugOk ?? null,
+            fetchSignalsFallbackSlugMs: fetchProfile?.fallbackSlugMs ?? null,
+            // Profil CLOB /book + calcul liquidité
+            bookCacheHit: liquidityProfile.bookCacheHit ?? null,
+            bookCacheAgeMs: liquidityProfile.bookCacheAgeMs ?? null,
+            bookMs: liquidityProfile.bookMs ?? null,
+            liquidityCalcMs: liquidityProfile.liquidityCalcMs ?? null,
+            asksCount: liquidityProfile.asksCount ?? null,
+            levelsAfterFilter: liquidityProfile.levelsAfterFilter ?? null,
+          });
+          decisionLogged += 1;
+        }
+      } catch (err) {
+        console.warn('Erreur relevé liquidité par fenêtre (ignorée pour le cycle):', err?.message ?? err);
+      }
+      await new Promise((r) => setTimeout(r, 150)); // éviter de surcharger l'API CLOB
+    }
+    });
+    }
+    if (shouldPrioritizeEntryNow && recordLiquidityHistory) {
+      logJson('info', 'entry_fastpath: relevés liquidité reportés', {
+        mode: MARKET_MODE,
+        signalsCount,
+      });
+    }
 
-      await profiler.measure(`redeem_${asset}`, () => trySimulationPaperRedeem(asset));
+    // Observabilité : `place_orders` (timing_forbidden, etc.) n’est pas exécuté si autotrade off / sans wallet —
+    // le dashboard restait vide alors qu’un signal poll était bien dans [MIN_P, MAX_P] et la grille ET interdisait l’entrée.
+    if (
+      MARKET_MODE === '15m' &&
+      Array.isArray(signals) &&
+      signals.length > 0 &&
+      is15mSlotEntryTimeForbiddenNow(Math.floor(Date.now() / 1000))
+    ) {
+      const s0 = signals.find((x) => x?.tokenIdToBuy);
+      if (s0) {
+        const k = getSignalKey(s0);
+        const timingDetails = getTimingForbiddenDetails();
+        recordSkipReason('timing_forbidden', 'poll', {
+          conditionId: k,
+          tokenId: s0.tokenIdToBuy,
+          takeSide: s0.takeSide,
+          bestAskP: pickSignalBestAskP(s0),
+          ...timingDetails,
+        });
+        logSignalInRangeButNoOrder('poll', 'timing_forbidden', s0, { ...timingDetails });
+      }
+    }
 
-      if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) continue;
+    // Redeem avant le garde-fou place_orders : doit tourner même si AUTO_PLACE_ENABLED=false ou kill switch
+    // (récupération USDC), tant que wallet + REDEEM_ENABLED. tryRedeemResolvedPositions() no-op sinon.
+    await profiler.measure('redeem_paper', () => trySimulationPaperRedeem());
+    await profiler.measure('redeem', () => tryRedeemResolvedPositions());
 
-      await profiler.measure(`place_orders_${asset}`, async () => {
-        for (const s of signals) {
-          await tryPlaceOrderForSignal(s, 'poll');
+    // Stop-loss déjà évalué en fast-path en début de cycle.
+
+    if (!walletConfigured || !autoPlaceEnabled || killSwitchActive) return;
+    if (inPolymarketDegradedMode() && incidentBehavior === 'pause') {
+      recordSkipReason('degraded_mode', 'poll');
+      return;
+    }
+
+    // Réutilise le client CLOB du bloc stop-loss ; sinon reconstruction (ex. premier build raté).
+    if (!clobClient) {
+      await profiler.measure('clob_creds_reuse', async () => {
+        try {
+          clobClient = await buildClobClientCachedCreds();
+        } catch (err) {
+          notePolymarketIncidentError('clob_creds', err);
+          warnClobClientIfThrottled(err);
         }
       });
     }
 
-    await profiler.measure('redeem_global', () => tryRedeemResolvedPositions());
-    await profiler.measure('stale_orders_v7', () => checkAndCancelStaleOrders(clobClient));
-
-    // v7.1.0 : Rewards Monitor (tous les 5 mins)
-    if (Date.now() - lastRewardsFetch > 300000) {
-       await profiler.measure('fetch_rewards', async () => {
-         const data = await fetchRewardsUserPercentages(clobClient);
-         if (data) {
-           cachedRewardsData = data;
-           lastRewardsFetch = Date.now();
-         }
-       });
+    async function getBalance() {
+      const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
+      if (viaClob != null) return viaClob;
+      return getUsdcBalanceRpc();
     }
 
-    await profiler.measure('analytics_3_0', () => resolveActivePositionsAnalytics());
+    let amountUsd = orderSizeUsd;
+    let balanceForDigest = null;
+    await profiler.measure('balance', async () => {
+      if (simulationTradeEnabled) {
+        simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
+        const balance = simulationTrade.getPaperBalanceUsd(BOT_DIR);
+        const balanceForSizing =
+          budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+        amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
+        const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+        if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+          amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+        }
+        console.log(`Solde PAPER: ${balance.toFixed(2)} USDC (SIMULATION_TRADE_ENABLED)`);
+        writeBalance(balance);
+        balanceForDigest = balance;
+        if (amountUsd < orderSizeMinUsd) return;
+      } else if (useBalanceAsSize) {
+        const viaClob = clobClient ? await getUsdcSpendableViaClob(clobClient) : null;
+        const balance = viaClob != null ? viaClob : await getUsdcBalanceRpc();
+        const balanceForSizing =
+          budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+        amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
+        const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+        if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+          amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+        }
+        if (viaClob != null) console.log(`Solde USDC: ${balance.toFixed(2)} (API CLOB)`);
+        else if (balance != null) console.log(`Solde USDC: ${balance.toFixed(2)} (RPC secours)`);
+        else console.warn('Solde USDC: CLOB + RPC indisponibles — utilisation de ORDER_SIZE_USD en secours.');
+        writeBalance(balance);
+        balanceForDigest = balance;
+        if (amountUsd < orderSizeMinUsd) return;
+      } else {
+        const balanceForStatus = await getBalance();
+        writeBalance(balanceForStatus);
+        balanceForDigest = balanceForStatus;
+      }
+    });
+    noteSessionBaselineIfNeeded(balanceForDigest);
+    void maybeTelegramBalanceDigest(balanceForDigest);
+    // Même si le wallet est < min et qu'aucun ordre ne sera placé, on continue pour pouvoir logger
+    // des timings d'évaluation (bestAsk/creds/balance/book) dans trade-latency-history.json.
 
-    // getBalance removed from nested scope (v7.12.0 Fix)
+    await profiler.measure('place_orders', async () => {
+    for (const s of signals) {
+    if (!s.tokenIdToBuy) continue;
+    const key = getSignalKey(s);
+    const cooldownRemainingMs = getExecutionCooldownRemainingMs(key);
+    if (cooldownRemainingMs > 0) {
+      recordSkipReason('cooldown_active', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy, remainingMs: cooldownRemainingMs });
+      logSignalInRangeButNoOrder('poll', 'cooldown_active', s, { remainingMs: Math.round(cooldownRemainingMs) });
+      continue;
+    }
+    if (placedKeys.has(key)) {
+      recordSkipReason('already_placed_for_slot', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      logSignalInRangeButNoOrder('poll', 'already_placed_for_slot', s, {});
+      continue;
+    }
+    const t0 = Date.now();
+    // En poll, le "bestAsk" provient des prix déjà inclus dans le signal (pas d'appel REST dédié),
+    // donc on loggue au minimum 1ms pour que le breakdown ait une granularité exploitable.
+    const timingsMs = {
+      bestAsk: 1,
+      creds: clobClient ? 1 : null,
+      balance: null,
+      book: null,
+      placeOrder: null,
+    };
 
+    // Même si on ne place pas d'ordre (last minute), on loggue un breakdown attempt.
+    // Sinon, trade-latency-history.json reste vide quand le bot est en "skip last-minute".
+    if (shouldSkipTradeTiming(s)) {
+      const timingDetails = getTimingForbiddenDetails();
+      recordSkipReason('timing_forbidden', 'poll', {
+        conditionId: key,
+        tokenId: s?.tokenIdToBuy,
+        takeSide: s?.takeSide,
+        bestAskP: pickSignalBestAskP(s),
+        ...timingDetails,
+      });
+      logSignalInRangeButNoOrder('poll', 'timing_forbidden', s, { ...timingDetails });
+      let attemptAmountUsd = amountUsd;
+      if (useBalanceAsSize || simulationTradeEnabled) {
+        const tBal0 = Date.now();
+        const balance = simulationTradeEnabled
+          ? simulationTrade.getPaperBalanceUsd(BOT_DIR)
+          : await getBalance();
+        timingsMs.balance = Math.max(1, Date.now() - tBal0);
+        attemptAmountUsd = balance != null ? balance : orderSizeUsd;
+      }
+      if (needLiquidityBook) {
+        const tBook0 = Date.now();
+        await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+        timingsMs.book = Math.max(1, Date.now() - tBook0);
+      } else {
+        timingsMs.book = 1;
+      }
+
+      if (shouldLogTradeLatencyAttempt(key)) {
+        logJson('info', 'Trade latency attempt (poll, last-minute no order)', {
+          conditionId: key,
+          timingsMs,
+        });
+        appendTradeLatencyHistory({
+          source: 'poll',
+          latencyMs: 0,
+          timingsMs,
+          takeSide: s.takeSide,
+          amountUsd: attemptAmountUsd,
+          conditionId: key,
+          tokenId: s.tokenIdToBuy,
+        });
+      }
+      continue;
+    }
+
+    if (useBalanceAsSize || simulationTradeEnabled) {
+      const tBal0 = Date.now();
+      const balance = simulationTradeEnabled
+        ? simulationTrade.getPaperBalanceUsd(BOT_DIR)
+        : await getBalance();
+      timingsMs.balance = Math.max(1, Date.now() - tBal0);
+      const balanceForSizing =
+        budgetModeReserveExcessFromStart && balance != null ? getEffectiveBalanceForSizing(balance) : balance;
+      amountUsd = balanceForSizing != null ? balanceForSizing : orderSizeUsd;
+      const spendableBufferUsd = Math.max(0.05, amountUsd * 0.003);
+      if (balanceForSizing != null && Number.isFinite(balanceForSizing) && balanceForSizing > 0) {
+        amountUsd = Math.min(amountUsd, Math.max(0, balanceForSizing - spendableBufferUsd));
+      }
+      if (amountUsd < orderSizeMinUsd) {
+        recordSkipReason('amount_below_min', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+        logSignalInRangeButNoOrder('poll', 'amount_below_min', s, {
+          amountUsd: Math.round(amountUsd * 100) / 100,
+          orderSizeMinUsd,
+        });
+        if (recordLiquidityHistory) {
+          const tBook0 = Date.now();
+          const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+          timingsMs.book = Math.max(1, Date.now() - tBook0);
+          if (liquidity != null && liquidity > 0 && !recordedLiquidityWindows.has(key)) {
+            appendLiquidityHistory({
+              liquidityUsd: liquidity,
+              takeSide: s.takeSide,
+              source: 'poll',
+              signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+            });
+            const endMs = s.endDate
+              ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime())
+              : Date.now();
+            recordedLiquidityWindows.set(key, endMs);
+          }
+        } else {
+          timingsMs.book = 1;
+        }
+
+        if (shouldLogTradeLatencyAttempt(key)) {
+          logJson('info', 'Trade latency attempt (poll, no order)', {
+            conditionId: key,
+            timingsMs,
+          });
+          appendTradeLatencyHistory({
+            source: 'poll',
+            latencyMs: 0,
+            timingsMs,
+            takeSide: s.takeSide,
+            amountUsd,
+            conditionId: key,
+            tokenId: s.tokenIdToBuy,
+          });
+        }
+        break;
+      }
+    }
+
+    let allowBelowMin = false;
+    if (needLiquidityBook) {
+      const tBook0 = Date.now();
+      const liquidity = await getLiquidityAtTargetUsd(s.tokenIdToBuy);
+      timingsMs.book = Math.max(1, Date.now() - tBook0);
+      if (liquidity != null && liquidity > 0) {
+        if (recordLiquidityHistory && !recordedLiquidityWindows.has(key)) {
+          appendLiquidityHistory({
+            liquidityUsd: liquidity,
+            takeSide: s.takeSide,
+            source: 'poll',
+            signalPriceP: s.takeSide === 'Up' ? s.priceUp : s.priceDown,
+          });
+          const endMs = s.endDate ? (typeof s.endDate === 'number' ? (s.endDate > 1e12 ? s.endDate : s.endDate * 1000) : new Date(s.endDate).getTime()) : Date.now();
+          recordedLiquidityWindows.set(key, endMs);
+        }
+        lastLiquidityRecordTime = Date.now();
+        if (useLiquidityCap && amountUsd > liquidity) {
+          amountUsd = liquidity;
+          allowBelowMin = amountUsd < orderSizeMinUsd;
+          console.log(`Mise plafonnée à ${amountUsd.toFixed(2)} $ (USE_LIQUIDITY_CAP, liquidité carnet)${allowBelowMin ? ' (sous min, ordre quand même)' : ''}`);
+        }
+      } else if (useLiquidityCap && (liquidity === null || liquidity === 0)) {
+        console.warn(
+          `USE_LIQUIDITY_CAP: liquidité ${(MIN_P * 100).toFixed(0)}–${(MAX_P * 100).toFixed(0)}¢ indisponible pour ce créneau (book CLOB ou erreur API)`,
+        );
+      }
+    } else {
+      timingsMs.book = 1;
+    }
+
+    amountUsd = applyMaxStakeUsd(amountUsd);
+    const degradedNow = inPolymarketDegradedMode();
+    if (degradedNow && incidentBehavior === 'reduced') {
+      amountUsd = Math.max(ABSOLUTE_MIN_USD, amountUsd * degradedSizeFactor);
+      allowBelowMin = true;
+    }
+    if (hasMaxStakeUsd && amountUsd < orderSizeMinUsd) allowBelowMin = true;
+    if (!(amountUsd > 0)) {
+      recordSkipReason('amount_zero_after_clamp', 'poll', { conditionId: key, tokenId: s?.tokenIdToBuy });
+      logSignalInRangeButNoOrder('poll', 'amount_zero_after_clamp', s, {
+        bestAskP: pickSignalBestAskP(s),
+        amountUsd: Math.round((amountUsd || 0) * 100) / 100,
+      });
+      continue;
+    }
+
+    placedKeys.add(key);
+    const tPlace0 = Date.now();
+    const bestAskPoll = pickSignalBestAskP(s);
+    let result;
+    if (simulationTradeEnabled) {
+      const simFill = simulationTrade.buildSimulatedBuyFill({
+        amountUsd,
+        bestAskP: bestAskPoll,
+        conditionId: key,
+      });
+      if (!simFill.ok) {
+        placedKeys.delete(key);
+        timingsMs.placeOrder = Date.now() - tPlace0;
+        logSignalInRangeButNoOrder('poll', 'place_order_failed', s, {
+          bestAskP: bestAskPoll,
+          amountUsd: Math.round(amountUsd * 100) / 100,
+          error: String(simFill.error || '').slice(0, 240),
+        });
+        continue;
+      }
+      simulationTrade.adjustPaperBalance(BOT_DIR, -simFill.filledUsdc);
+      result = simFill;
+    } else {
+      result = await placeMarketOrderWithPartialFillRetries(s, amountUsd, clobClient, {
+        allowBelowMin,
+        forceSingleAttempt: degradedNow && incidentBehavior === 'reduced',
+        maxAttempts: degradedNow && incidentBehavior === 'reduced' ? 1 : undefined,
+      });
+    }
+    timingsMs.placeOrder = Date.now() - tPlace0;
+    const time = new Date().toISOString();
+    if (result.ok) {
+      const latencyMs = Date.now() - t0;
+      if (latencyMs >= executionDelayAlertMs) {
+        writeHealth({ executionDelayed: true, executionDelayedAt: time });
+        setPolymarketDegraded('execution_delayed', incidentDurationMs);
+      } else {
+        writeHealth({ executionDelayed: false });
+      }
+      writeHealth({ lastOrderAt: time, lastOrderSource: 'poll' });
+      const fillLog = pickFillFieldsForLog(result);
+      const marketEndMs = parseMarketEndDateToMs(s?.endDate);
+      const orderData = {
+        at: time,
+        takeSide: s.takeSide,
+        amountUsd,
+        conditionId: key,
+        tokenId: s.tokenIdToBuy ?? null,
+        orderID: result.orderID,
+        preSignCacheHit: result.preSignCacheHit,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        clobSignerAddress: wallet?.address ?? null,
+        clobSignatureType: CLOB_SIGNATURE_TYPE,
+        clobFunderAddress: clobFunderAddress ?? null,
+        ...(s?.eventSlug ? { eventSlug: String(s.eventSlug).slice(0, 120) } : {}),
+        ...(marketEndMs != null ? { marketEndMs } : {}),
+        latencyMs,
+        timingsMs,
+        ...fillLog,
+        ...(result.simulationTrade ? { simulationTrade: true } : {}),
+      };
+      writeLastOrder(orderData);
+      appendOrderLog(orderData);
+      void notifyTelegramTradeSuccess('poll', orderData, simulationTradeEnabled ? null : clobClient);
+      void notifyTelegramLatencyAbnormal({
+        source: 'poll',
+        conditionId: key,
+        orderID: result.orderID,
+        latencyMs,
+        timingsMs,
+      });
+      logJson('info', 'Ordre placé', {
+        takeSide: s.takeSide,
+        amountUsd,
+        orderID: result.orderID,
+        latencyMs,
+        timingsMs,
+        preSignCacheHit: result.preSignCacheHit ?? false,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        ...fillLog,
+      });
+      appendTradeLatencyHistory({
+        source: 'poll',
+        latencyMs,
+        timingsMs,
+        takeSide: s.takeSide,
+        amountUsd,
+        conditionId: key,
+        tokenId: s.tokenIdToBuy,
+        orderID: result.orderID,
+        preSignCacheHit: result.preSignCacheHit ?? false,
+        partialFillRetries: result.partialFillRetries ?? 0,
+        orderIDs: result.orderIDs,
+        ...fillLog,
+      });
+      const cacheHitInfo = result.preSignCacheHit ? ' [cache pré-sign hit]' : '';
+      const fillConsole = formatFillConsoleSuffix(result);
+      const retryInfoPoll =
+        (result.partialFillRetries ?? 0) > 0 ? ` — ${result.partialFillRetries} complément(s) FAK sur reliquat` : '';
+      console.log(
+        `[${time}] Ordre placé ${s.takeSide} — ${amountUsd.toFixed(2)} USDC demandés${fillConsole}${retryInfoPoll} — ${key?.slice(0, 10)}… — orderID: ${result.orderID} (latence ~${Math.round(latencyMs)} ms)${cacheHitInfo}`
+      );
+    } else {
+      const isInsufficient = isInsufficientBalanceOrAllowanceError(result?.error);
+      if (!isInsufficient) placedKeys.delete(key);
+      if (isRetryableExecutionError(result?.error) || isInsufficient) {
+        setExecutionCooldown(key, result.error);
+        notePolymarketIncidentError('poll_order_failure', result.error);
+      }
+      logSignalInRangeButNoOrder('poll', 'place_order_failed', s, {
+        bestAskP: pickSignalBestAskP(s),
+        amountUsd: Math.round(amountUsd * 100) / 100,
+        error: String(result?.error || '').slice(0, 240),
+      });
+      logJson('error', 'Erreur ordre', { takeSide: s.takeSide, error: result.error });
+      console.error(`[${time}] Erreur ${s.takeSide}: ${result.error}`);
+    }
+    await new Promise((r) => setTimeout(r, 350));
+    }
+    });
   } finally {
     if (CYCLE_PROFILER) profiler.log();
-    const cycleDuration = Date.now() - cycleStartMs;
-    // v6.2.0 : Historisation de la latence de boucle (Poll)
-    addLatencyHistorySample('poll', cycleDuration);
-
     appendCycleLatencyHistory({
-      cycleMs: cycleDuration,
+      cycleMs: Date.now() - cycleStartMs,
       ok: true,
       mode: MARKET_MODE,
-      signalsCount: typeof signalsCount !== 'undefined' ? signalsCount : 0,
+      signalsCount,
+      fetchSignalsTotalMs: fetchProfile?.totalMs ?? null,
+      fetchSignalsStrategy: fetchProfile?.strategy ?? null,
+      bookCacheHits: cycleBookStats.bookCacheHits,
+      bookCacheMisses: cycleBookStats.bookCacheMisses,
+      bookMsTotal: cycleBookStats.bookMsTotal,
+      liquidityCalcMsTotal: cycleBookStats.liquidityCalcMsTotal,
       cycleProfileMs: profiler.getTimings(),
     });
   }
 }
 
-
-/** Flux Externes désactivés (v2026) - Stubs supprimes */
-
-/**
- * Récupère le prix d'indice officiel (Oracle Pyth) pour Polymarket.
- */
-async function fetchPythPrice(asset) {
-    const feedId = PYTH_FEED_IDS[asset];
-    if (!feedId) return null;
-    
-    try {
-        const url = `${PYTH_HERMES_URL}?ids[]=${feedId}`;
-        const { data } = await axios.get(url, { timeout: 2500 });
-        if (data?.parsed?.[0]?.price) {
-            const p = data.parsed[0].price;
-            const price = parseFloat(p.price) * Math.pow(10, p.expo);
-            return price;
-        }
-    } catch (err) {
-        console.error(`[Pyth] Error fetching ${asset}: ${err.message}`);
-    }
-    return null;
-}
-
-/** 
- * Ajoute un échantillon de prix au buffer (max 60 échantillons, un toutes les 60s env).
- */
-let lastSampleMs = 0;
-function updateAssetPriceHistory(asset, price) {
-  const now = Date.now();
-  if (now - lastSampleMs < 60_000) return; // 1 échantillon par minute
-  lastSampleMs = now;
-  const state = getAssetState(asset);
-  state.priceHistory.push(price);
-  if (state.priceHistory.length > 60) state.priceHistory.shift(); 
-  
-  if (state.priceHistory.length >= 10) {
-    state.vol = calculateAnnualizedVolatility(state.priceHistory);
-  }
-}
-
-/**
- * Calcule la volatilité annualisée à partir de l'historique des prix.
- */
-function calculateAnnualizedVolatility(prices) {
-  if (prices.length < 2) return BTC_ANNUALIZED_VOLATILITY;
-  
-  const returns = [];
-  for (let i = 1; i < prices.length; i++) {
-    returns.push(Math.log(prices[i] / prices[i - 1]));
-  }
-  
-  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (returns.length - 1);
-  const stdDev = Math.sqrt(variance);
-  
-  // Annualisation : stdDev * sqrt(nombre de minutes dans une année)
-  // car nous travaillons avec des retours minute par minute.
-  const minutesPerYear = 365 * 24 * 60;
-  return stdDev * Math.sqrt(minutesPerYear);
-}
-
-/**
- * v10.6 : Moteur CDF Log-Normal (Momentum Delta)
- * Calcule la probabilité de réussite d'un slot UP en fonction du décalage (Lead-Lag).
- */
-function calculateFairProbability(currentPrice, strikePrice, timeToExpirySec, volOverwrite, asset = 'BTC') {
-  if (timeToExpirySec <= 0) return currentPrice > strikePrice ? 1.0 : 0.0;
-
-  const state = getAssetState(asset);
-  const secondsRemaining = Math.max(1, timeToExpirySec);
-
-  // v2026 : Modèle de Juste Valeur par rapport au STRIKE (P(S_T > K))
-  if (strikePrice && Number.isFinite(strikePrice)) {
-    // 1. Calcul du Delta % par rapport au STRIKE
-    const deltaPct = (currentPrice / strikePrice) - 1;
-    
-    // 2. Récupération de la Volatilité (Annualisée)
-    let vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
-    if (!volOverwrite) {
-      const parkinson = (typeof dailyHigh24h !== 'undefined' && dailyHigh24h && dailyLow24h) ? calculateParkinsonVol(dailyHigh24h, dailyLow24h) : 0;
-      const realized = Number(state.vol) || 0;
-      vol = Math.max(parkinson, realized, BTC_ANNUALIZED_VOLATILITY);
-    }
-
-    // 3. Modèle CDF Normal : P(S_T > K)
-    const timeInYears = secondsRemaining / (365 * 24 * 3600);
-    const volRemaining = vol * Math.sqrt(timeInYears);
-    
-    // Si la vol restante est nulle (quasi-fin de slot), on renvoie 1 ou 0
-    if (volRemaining <= 1e-9) return currentPrice > strikePrice ? 1.0 : 0.0;
-
-    const d = deltaPct / volRemaining;
-    return normalCDF(d);
-  }
-
-  // Fallback classique (Log-Diff) si pythRefPrice est absent
-  const vol = volOverwrite ?? BTC_ANNUALIZED_VOLATILITY;
-  const timeInYears = timeToExpirySec / (365 * 24 * 3600);
-  const sqrtT = Math.sqrt(timeInYears);
-  const d1 = (Math.log(currentPrice / strikePrice)) / (vol * sqrtT);
-  return normalCDF(d1);
-}
-
-/**
- * Calcule la Volatilité Parkinson (24h) basée sur le High/Low de référence (Oracle/External).
- * Plus robuste qu'une simple constante car s'adapte à la peur du marché.
- */
-function calculateParkinsonVol(high, low) {
-  if (!high || !low || high <= low) return BTC_ANNUALIZED_VOLATILITY;
-  const vol = Math.sqrt((1 / (4 * Math.log(2))) * Math.pow(Math.log(high / low), 2));
-  return Math.min(2.0, Math.max(0.2, vol * Math.sqrt(365))); // Annualisée
-}
-
-/**
- * Calcule le VWAP (Pessimiste) sur le carnet d'ordres Polymarket.
- * Simule l'achat total du montant 'amountUsd' pour trouver le vrai prix d'exécution.
- */
-async function calculateVWAPPrice(tokenId, amountUsd, clobClient) {
-  try {
-    console.log(`[VWAP] Fetching book for ${tokenId}...`);
-    const book = await clobClient.getOrderBook(tokenId);
-    console.log(`[VWAP] Book received. Asks: ${book?.asks?.length || 0}`);
-    if (!book || !book.asks || book.asks.length === 0) return null;
-    
-    let remainingUsd = amountUsd;
-    let totalShares = 0;
-    let filledUsd = 0;
-    
-    for (const ask of book.asks) {
-      const price = Number(ask.price);
-      const size = Number(ask.size);
-      const availableUsd = price * size;
-      
-      const takeUsd = Math.min(remainingUsd, availableUsd);
-      totalShares += takeUsd / price;
-      filledUsd += takeUsd;
-      remainingUsd -= takeUsd;
-      
-      if (remainingUsd <= 0.01) break;
-    }
-    
-    if (filledUsd < amountUsd * 0.95) return null; // Liquidité insuffisante
-    return filledUsd / totalShares;
-  } catch (err) {
-    return null;
-  }
-}
-
-/**
- * Calcule le Skew dynamique selon le régime de volatilité (Audit v5.2.1).
- * Marché calme (<10% vol) -> Skew -1%
- * Marché normal (<25% vol) -> Skew -3%
- * Marché explosif (>=25% vol) -> Skew -6%
- */
-function getDynamicSkew(vol) {
-  if (vol < 0.10) return -0.01;
-  if (vol < 0.25) return -0.03;
-  return -0.06;
-}
-
-
-/**
- * Calcule le prix effectif moyen (VWAP) pour une mise donnée en USDC,
- * en parcourant les niveaux du carnet d'ordres (LOB).
- */
-function getEffectivePriceFromLevels(levels, stakeUsdc = DEFAULT_STAKE_USDC) {
-  if (!Array.isArray(levels) || levels.length === 0) return null;
-  let totalCost = 0;
-  let remaining = stakeUsdc;
-  
-  for (const level of levels) {
-    const price = parseFloat(level?.price ?? level?.p ?? level?.[0] ?? NaN);
-    const size = parseFloat(level?.size ?? level?.s ?? level?.[1] ?? 0);
-    if (!Number.isFinite(price) || price <= 0 || size <= 0) continue;
-    
-    const levelCapUsdc = price * size;
-    const fill = Math.min(remaining, levelCapUsdc);
-    totalCost += fill;
-    remaining -= fill;
-    
-    if (remaining <= 0) break;
-  }
-  
-  if (remaining > 0) {
-    const fillRatio = (stakeUsdc - remaining) / stakeUsdc;
-    if (fillRatio < 0.3) return null; // Liquidité critique
-    return (totalCost / (stakeUsdc - remaining)) * 1.05; // Pénalité
-  }
-  return totalCost / stakeUsdc;
-}
-
-/**
- * Calcule les frais Taker exacts selon la formule Polymarket CLOB 2026 :
- * Fee = Shares * Rate * price * (1 - price) per share.
- * Pour obtenir le pourcentage du capital investi : (Rate * (1 - price)) * SafetyBuffer.
- */
-function calculatePolymarketTakerFee(price) {
-  if (!price || price <= 0 || price >= 1) return 0;
-  // Blindage 2026 : Formule officielle 0.072 * p * (1-p)
-  // En pourcentage du stake investi (p), cela revient à 0.072 * (1 - p).
-  const basePct = POLYMARKET_FEE_RATE * (1 - price);
-  return basePct * FEE_SAFETY_BUFFER;
-}
-/**
- * v6.3.0 : Analyseur de Performance PnL
- * Scanne les 500 derniers ordres pour calculer les stats de session.
- */
-async function calculateSessionStats() {
-  try {
-    if (!fs.existsSync(ORDERS_LOG_FILE)) return null;
-    const lines = fs.readFileSync(ORDERS_LOG_FILE, 'utf8').split('\n').filter(l => l.trim() !== '');
-    const lastLines = lines.slice(-500);
-    
-    let totalVolume = 0;
-    let netProfit = 0;
-    let trades = 0;
-    let wins = 0;
-
-    for (const line of lastLines) {
-      try {
-        const o = JSON.parse(line);
-        if (!o.filledUsdc) continue;
-        
-        trades++;
-        const stake = Number(o.filledUsdc);
-        totalVolume += stake;
-        
-        // Si c'est une sortie (exit/sold), on calcule le profit
-        if (o.message?.includes('sold') || o.message?.includes('Take-profit') || o.message?.includes('Stop-loss')) {
-          const revenue = Number(o.revenue || o.filledUsdc);
-          const profit = revenue - Number(o.originalStakeUsd || stake);
-          netProfit += profit;
-          if (profit > 0) wins++;
-        }
-      } catch (err) { /* ignore malformed lines */ }
-    }
-
-    return {
-      totalVolume: Math.round(totalVolume),
-      netProfit: Number(netProfit.toFixed(2)),
-      winRatePct: trades > 0 ? Math.round((wins / trades) * 100) : 0,
-      tradeCount: trades,
-      updatedAt: new Date().toISOString()
-    };
-  } catch (err) {
-    console.error('[PnL] Error calculating stats:', err.message);
-    return null;
-  }
-}
-
-/**
- * Calcule le seuil GAP adaptatif selon la volatilité actuelle.
- */
-function getAdaptiveThreshold(vol, baseThreshold = SIGNAL_GAP_THRESHOLD) {
-  const volBaseline = 0.50;
-  const ratio = vol / volBaseline;
-  return baseThreshold * Math.min(Math.max(ratio, 1.0), 2.0);
-}
-
-/**
- * Calcule la mise optimale via le Critère de Kelly (Engine 3.0 / v5.8.0).
- * f* = (edge / odds) * fraction (dynamique via OFI)
- */
-function calculateKellyStake(netGap, tokenPrice, bankroll, ofiScore = 0, side = 'Up') {
-  if (!Number.isFinite(netGap) || netGap <= 0 || !Number.isFinite(tokenPrice) || tokenPrice <= 0 || tokenPrice >= 1) return 0;
-  if (!Number.isFinite(bankroll) || bankroll <= 0) return 0;
-
-  // v13.1 : Kelly Drawdown Protection (Anti-Crash Weighted Sizing)
-  const perf = getPerformance();
-  const dailyPnL = perf.netProfit || 0;
-  const maxLossAbs = bankroll * MAX_DAILY_DRAWDOWN_PCT;
-  
-  let ddMultiplier = 1.0;
-  if (dailyPnL < 0) {
-      const currentLossAbs = Math.abs(dailyPnL);
-      if (currentLossAbs >= maxLossAbs) {
-          console.warn(`[Risk] 🛑 MAX DAILY DRAWDOWN REACHED (${dailyPnL.toFixed(2)} USD). Sizing reduced to 0.`);
-          return 0;
-      }
-      ddMultiplier = (maxLossAbs - currentLossAbs) / maxLossAbs;
-  }
-  
-  const odds = (1 / tokenPrice) - 1;
-  if (!Number.isFinite(odds) || odds <= 0) return 0;
-  const kelly = netGap / odds;
-  
-  let dynamicFraction = KELLY_FRACTION * ddMultiplier;
-  if (isOfiSideMatch(side, ofiScore)) {
-      const absOfi = Math.abs(ofiScore);
-      if (absOfi > 20) {
-          const bonus = Math.min(0.15, (absOfi - 20) * (0.15 / 30));
-          dynamicFraction += (bonus * ddMultiplier);
-      }
-  }
-  
-  let stake = kelly * dynamicFraction * bankroll;
-  const maxBankrollStake = bankroll * KELLY_MAX_BANKROLL_PCT;
-  stake = Math.min(stake, maxBankrollStake);
-  stake = Math.min(stake, ABSOLUTE_MAX_STAKE_USD);
-  
-  return Math.max(0, Math.round(stake * 100) / 100);
-}
-
-
-
-
-/**
- * Vérifie si le trade est autorisé par les garde-fous 3.0.
- */
-function isTradeAllowedBySafety(asset, strike, currentPrice) {
-  // 1. Dérive du Strike
-  if (strike && currentPrice > 0) {
-    const drift = Math.abs(currentPrice - strike) / strike;
-    if (drift > STRIKE_DRIFT_THRESHOLD) {
-      const msg = `[Safety] 🚩 REJECTED: ${asset} Strike Drift excessive (${(drift * 100).toFixed(2)}% > ${STRIKE_DRIFT_THRESHOLD * 100}%) | Spot: ${currentPrice.toFixed(2)} | Strike: ${Number(strike).toFixed(2)}`;
-      console.warn(msg);
-      logJson('warn', `[${asset}] Trade rejeté (Drift Strike excessif)`, { strike, currentPrice, drift });
-      return { ok: false, reason: msg };
-    }
-  }
-
-  // 2. Circuit Breaker Journalier
-  const stats = readDailyStats();
-  if (stats.dailyPnl <= -MAX_DAILY_LOSS_USDC) {
-     return { ok: false, reason: `Daily Loss Limit reached (${stats.dailyPnl} USDC) triggered by ${asset}` };
-  }
-  
-  return { ok: true };
-}
-
-function logDecision(obj) {
-  try {
-    const line = JSON.stringify(obj) + '\n';
-    fs.appendFileSync(DECISION_LOG_FILE, line, 'utf8');
-    console.log(`[Decision] Logged to ${path.basename(DECISION_LOG_FILE)}: ${obj.asset} edge=${obj.edge}`);
-  } catch (e) {
-    console.error(`[Decision] ❌ Erreur écriture log: ${e.message}`);
-  }
-}
-
-
-function normalCDF(x) {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989423 * Math.exp(-x * x / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.821256 + t * 1.330274))));
-  const res = x > 0 ? 1 - p : p;
-  return Math.min(1, Math.max(0, res));
-}
-
-function extractStrikeFromQuestion(question) {
-  if (!question) return null;
-  
-  // 1. Extraire tous les nombres avec leurs suffixes (ex: $70k, $70,500)
-  const matches = question.match(/\$?\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?k?/gi);
-  if (!matches) return null;
-  
-  const candidates = matches.map(m => {
-    let val = m.toLowerCase().replace(/[$,\s]/g, '');
-    if (val.endsWith('k')) {
-      return parseFloat(val) * 1000;
-    }
-    return parseFloat(val);
-  }).filter(v => Number.isFinite(v) && v > 1000); // Filtre pour ignorer les petits chiffres (comme la date)
-
-  if (candidates.length === 0) return null;
-  
-  // 2. Choisir le candidat le plus proche du prix actuel du BTC (Validation Heuristique via Pyth Oracle)
-  const pythBtcPrice = perpState.get('BTC')?.pyth || 0;
-  if (pythBtcPrice > 0) {
-    return candidates.reduce((prev, curr) => 
-      Math.abs(curr - pythBtcPrice) < Math.abs(prev - pythBtcPrice) ? curr : prev
-    );
-  }
-  
-  return candidates[0];
-}
-
-
-/**
- * v13.1 : RPC Sentinel - Surveillance proactive des défaillances et latences RPC.
- */
-function startRpcSentinel() {
-  setInterval(async () => {
-    const start = Date.now();
-    try {
-      if (provider) {
-        await provider.getBlockNumber();
-        const latency = Date.now() - start;
-        if (latency > 2000) {
-          console.warn(`[Sentinel] ⚠️ Haute latence RPC détectée : ${latency}ms`);
-        }
-      }
-    } catch (err) {
-      console.error(`[Sentinel] 🚨 RPC Stall détecté : ${err.message}`);
-      recordClobError(); // Alimenter le Circuit Breaker en cas de panne réseau
-    }
-  }, RPC_PING_INTERVAL_MS);
-}
-
 async function main() {
-  startStrikeWorker(); // v2026 : Start High-Precision Strike Sync (API + Chainlink)
-  loadOpenOrders(); // v7.1.0 Persistence
-  console.log('[System] Initialisation du Bot v13.1 (Market: BTC 5m)...');
-  startRpcSentinel();
+  console.log('Bot Polymarket Bitcoin Up or Down — démarrage 24/7');
   simulationTrade.initPaperBalanceIfNeeded(BOT_DIR);
   if (simulationTradeEnabled) {
     console.warn(
@@ -6627,7 +5670,11 @@ async function main() {
     );
   }
   console.log(
-    `Marché: BTC 5m (${BITCOIN_UPDOWN_5M_PREFIX}) | Timing: grille ET : ${ENTRY_FORBID_FIRST_MIN_RESOLVED} premières + ${ENTRY_FORBID_LAST_MIN_RESOLVED} dernières min du quart`
+    `Marché: ${MARKET_MODE === '15m' ? '15 min (btc-updown-15m)' : 'horaire (bitcoin-up-or-down)'} | Pas de trade: ${
+      MARKET_MODE === '15m'
+        ? `grille ET : ${ENTRY_FORBID_FIRST_MIN_RESOLVED} premières + ${ENTRY_FORBID_LAST_MIN_RESOLVED} dernières min du quart (ENTRY_FORBIDDEN_*_MIN)`
+        : '5 min avant fin'
+    }`
   );
   console.log(
     `Prix signal (poll / fetchSignals): ${signalPriceSource} — ${signalPriceSource === 'clob' ? 'best ask CLOB par token' : 'outcomePrices Gamma'} (SIGNAL_PRICE_SOURCE=gamma|clob pour forcer)`
@@ -6690,13 +5737,11 @@ async function main() {
     console.log('Autotrade désactivé — définir AUTO_PLACE_ENABLED=true pour placer des ordres.');
   }
 
-  // Audit Géographique au démarrage
-  const allowed = await checkGeoblockStatus();
+  const allowed = await checkGeoblock();
+  writeHealth({ geoblockOk: !!allowed });
   if (!allowed) {
-    console.error('❌ Bot arrêté : Votre IP est bloquée par Polymarket (Geoblock).');
     process.exit(1);
   }
-
   console.log('—');
 
   logJson('info', 'Bot démarré — boucle poll', {
@@ -6710,12 +5755,10 @@ async function main() {
     botLogPath: BOT_JSON_LOG_FILE,
   });
 
-  if (useWebSocket) {
-    startClobWs();
-  }
+  if (useWebSocket) startClobWs();
 
   const pollMs = pollIntervalSec * 1000;
-  if ((IS_SIMULATION || (walletConfigured && wallet)) && stopLossEnabled && STOP_LOSS_FAST_INTERVAL_MS > 0) {
+  if (walletConfigured && stopLossEnabled && STOP_LOSS_FAST_INTERVAL_MS > 0) {
     setInterval(() => {
       void runStopLossPass();
     }, STOP_LOSS_FAST_INTERVAL_MS);
@@ -6729,48 +5772,12 @@ async function main() {
       `Résumés Telegram performance : activés (${TELEGRAM_MIDDAY_DIGEST_TZ} — demi-journée ${String(TELEGRAM_MIDDAY_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDDAY_DIGEST_MINUTE).padStart(2, '0')} + minuit ${String(TELEGRAM_MIDNIGHT_DIGEST_HOUR).padStart(2, '0')}:${String(TELEGRAM_MIDNIGHT_DIGEST_MINUTE).padStart(2, '0')} — ALERT_TELEGRAM_MIDDAY_DIGEST=true).`
     );
   }
-
-  // --- v11 : Resilience Initialization ---
-  // A. Signal Handlers (SIGTERM pour PM2, SIGINT pour CTRL+C)
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-  // B. Backup Service (Toutes les 5 min par défaut)
-  const backupConfig = STATE_BACKUP_CONFIG || { intervalMs: 300000 };
-  backupStateFiles(); // v11.2 : Premier backup immédiat au démarrage
-  setInterval(backupStateFiles, backupConfig.intervalMs);
-  console.log(`[Resilience] 🛡️ Service de Backup activé (${backupConfig.intervalMs / 1000}s).`);
-  console.log('[Resilience] 🛡️ Handlers SIGTERM/SIGINT enregistrés.');
-
-  if (wallet) {
-    console.log('[Startup] 🔐 Vérification des identifiants Polymarket (Real Signer)...');
-    try {
-      const client = await buildClobClientCachedCreds();
-      console.log('[Startup] ✅ Identifiants Polymarket validés avec succès.');
-      
-      // Récupération du solde USDC réel (v2026 : Feedback Précision)
-      const realBalance = await getUsdcSpendableViaClob(client);
-      if (realBalance != null) {
-        console.log(`[Startup] 💰 Solde USDC Réel détecté : $${realBalance.toFixed(2)}`);
-      } else {
-        console.warn('[Startup] ⚠️ Impossible de récupérer le solde USDC (CLOB Timeout?).');
-      }
-    } catch (e) {
-      console.error('[Startup] ❌ ÉCHEC VALIDATION RÉELLE :', e.message);
-      if (!IS_SIMULATION) {
-         console.error('[Startup] Arrêt critique : Identifiants invalides en mode RÉEL.');
-         process.exit(1);
-      }
-    }
-  }
   for (;;) {
     try {
-      lastHeartbeatMs = Date.now(); // Mise à jour watchdog
       await run();
     } catch (err) {
-      logJson('error', 'Erreur critique loop run()', { error: err.message, stack: err.stack });
-      console.error(new Date().toISOString(), 'Erreur loop run():', err.message);
-      if (err.stack) console.error(err.stack);
+      logJson('error', 'Erreur boucle', { error: err.message });
+      console.error(new Date().toISOString(), 'Erreur boucle:', err.message);
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }

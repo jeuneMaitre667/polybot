@@ -16,15 +16,15 @@ const __dirname = path.dirname(__filename);
 const STRIKES_FILE = path.resolve(__dirname, 'boundary-strikes.json');
 
 /**
- * Moteur de Signaux Polymarket (v5.4.0 — BTC 5m Only)
- * Gère la récupération, le filtrage et le sizing (LOB depth) pour BTC.
+ * Moteur de Signaux Polymarket (v5.4.0 â€” BTC 5m Only)
+ * GÃ¨re la rÃ©cupÃ©ration, le filtrage et le sizing (LOB depth) pour BTC.
  */
 
 const signalCache = new Map(); // asset -> { data, ts }
 const FETCH_SIGNALS_CACHE_MS = 200;
 
 /**
- * Récupère les signaux Gamma pour BTC 5m.
+ * RÃ©cupÃ¨re les signaux Gamma pour BTC 5m.
  */
 export async function fetchSignals(asset, context = {}) {
     const now = Date.now();
@@ -79,7 +79,7 @@ export async function fetchSignals(asset, context = {}) {
                 slug,
                 conditionId: m.conditionId,
                 tokenIdToBuy: tokenIdToBuy,
-                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), slug),
+                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), slug) || extractStrikeFromQuestion(m.question || m.groupItemTitle),
                 takeSide,
                 priceUp: yesPrice,
                 priceDown: noPrice,
@@ -93,20 +93,19 @@ export async function fetchSignals(asset, context = {}) {
         const signals = signalsRaw.filter(s => {
             if (!s.tokenIdToBuy) return false;
             
-            // On vérifie les flags d'activité de Polymarket (m est l'objet market brut de Gamma)
+            // On vÃ©rifie les flags d'activitÃ© de Polymarket (m est l'objet market brut de Gamma)
             const isActive = s.m.active === true;
             const isClosed = s.m.closed === true;
             const feesEnabled = s.m.feesEnabled === true;
 
             if (!isActive || isClosed) {
-                console.warn(`[${asset}] Signal REJECTED: Market is not active or already closed. (active:${isActive}, closed:${isClosed})`);
+                // Console log for debug (will show in dashboard or bot log)
+                console.warn(`[${asset}] Signal REJECTED: Market is not active or already closed.`);
                 return false;
             }
 
-            if (!feesEnabled) {
-                console.warn(`[${asset}] Signal REJECTED: Fees are not enabled on this market.`);
-                return false;
-            }
+            // v2026 : Fees might be missing on high-frequency 5m markets.
+            if (s.m.active === false) return false;
 
             return true;
         });
@@ -127,12 +126,18 @@ export async function fetchSignals(asset, context = {}) {
 }
 
 function getSlotSlugForAsset(asset) {
-    // v2026 : Focalisation absolue sur le BTC 5m
-    return BITCOIN_UPDOWN_5M_PREFIX;
+    // v2025 : Standardizing on numeric timestamp slug for 5m markets
+    const now = Date.now();
+    const slotSec = Math.floor(now / 300000) * 300; // Round to past 5m boundary in seconds
+    const targetSlotSec = slotSec + 300;           // Target next 5m boundary
+    
+    // For BTC, use the btc-updown-5m prefix
+    const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
+    return `${prefix}-${targetSlotSec}`;
 }
 
 /**
- * Génère une clé unique pour un signal (conditionId).
+ * GÃ©nÃ¨re une clÃ© unique pour un signal (conditionId).
  */
 export function getSignalKey(s) {
     return s.conditionId;
@@ -142,7 +147,7 @@ export function getSignalKey(s) {
  * Garde-fou temporel (Double-check avec entry timing).
  */
 export function shouldSkipTradeTiming(s) {
-    // Logique simplifiée : ici on pourrait importer isSlotEntryTimeForbiddenNow
+    // Logique simplifiÃ©e : ici on pourrait importer isSlotEntryTimeForbiddenNow
     return false; 
 }
 
@@ -153,7 +158,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
     if (!book || !book.asks || book.asks.length === 0) return 0;
     
     let totalAvailableUsdc = 0;
-    const maxSlippage = targetPrice * 1.02; // Tolérance 2%
+    const maxSlippage = targetPrice * 1.02; // TolÃ©rance 2%
 
     for (const ask of book.asks) {
         const p = parseFloat(ask.price);
@@ -162,7 +167,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
         totalAvailableUsdc += (p * size);
     }
 
-    // Sécurité : on ne prend que 80% de la liquidité immédiate pour éviter de vider le carnet
+    // SÃ©curitÃ© : on ne prend que 80% de la liquiditÃ© immÃ©diate pour Ã©viter de vider le carnet
     const optimal = totalAvailableUsdc * 0.8;
     
     // Frais inclus
@@ -176,7 +181,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
 export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
     try {
         const data = fs.existsSync(STRIKES_FILE) ? JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8') || '{}') : {};
-        // Normaliser le timestamp à la borne la plus proche (passée)
+        // Normaliser le timestamp Ã  la borne la plus proche (passÃ©e)
         const date = new Date(timestamp);
         date.setSeconds(0);
         date.setMilliseconds(0);
@@ -187,7 +192,7 @@ export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
         const key = `${date.getTime()}_${asset}`;
         data[key] = price;
         
-        // Garder seulement les 48 dernières heures (3 actifs * 4 par heure * 48h = 576 entrées)
+        // Garder seulement les 48 derniÃ¨res heures (3 actifs * 4 par heure * 48h = 576 entrÃ©es)
         const keys = Object.keys(data).sort();
         if (keys.length > 800) {
             const keysToDelete = keys.slice(0, keys.length - 800);
@@ -206,7 +211,7 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     
     try {
         let startTime = null;
-        // v9.8.12 : Priorité ABSOLUE au timestamp extrait du slug pour le matching 5m
+        // v9.8.12 : PrioritÃ© ABSOLUE au timestamp extrait du slug pour le matching 5m
         if (marketSlug && marketSlug.includes('-')) {
             const parts = marketSlug.split('-');
             const lastPart = parts[parts.length - 1];
@@ -232,7 +237,7 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         if (fs.existsSync(STRIKES_FILE)) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
             const data = JSON.parse(raw);
-            // v7.16.8 : Recherche absolue (loose match pour éviter tout caractère invisible)
+            // v7.16.8 : Recherche absolue (loose match pour Ã©viter tout caractÃ¨re invisible)
             // v9.8.11 : Recherche par ID ou par Timestamp (fallback)
             const cleanKey = Object.keys(data).find(k => {
                 const k1 = k.replace(/[^0-9A-Z_]/gi, '');
@@ -241,7 +246,7 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
             });
             
             if (!cleanKey && asset.includes('BTC')) {
-                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne récente (+- 2 min)
+                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne rÃ©cente (+- 2 min)
                 const now = Date.now();
                 const nearbyKey = Object.keys(data).find(k => {
                     const ts = parseInt(k.split('_')[0]);
@@ -264,4 +269,20 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         console.error('[Strike] Error lookup:', err.message);
     }
     return null;
+}
+
+/**
+ * v2027 : Extraction robuste du Strike depuis le texte Gamma (fallback line=0).
+ */
+function extractStrikeFromQuestion(text) {
+    if (!text) return null;
+    const matches = text.match(/\$?\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?k?/gi);
+    if (!matches) return null;
+    const candidates = matches.map(m => {
+        let val = m.toLowerCase().replace(/[$,\s]/g, '');
+        if (val.endsWith('k')) return parseFloat(val) * 1000;
+        return parseFloat(val);
+    }).filter(v => Number.isFinite(v) && v > 1000);
+    if (candidates.length === 0) return null;
+    return candidates[0]; // Simplifié pour le moteur de signal (le filtre 1000 suffit pour BTC)
 }
