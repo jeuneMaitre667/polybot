@@ -245,14 +245,30 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
                 return k1 === k2 && k1.length > 0;
             });
             
-            if (!cleanKey && asset.includes('BTC')) {
+            if (!cleanKey) {
                 // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne rÃ©cente (+- 2 min)
+                const targetMs = Number(normalizedTime);
+                const targetAsset = asset.trim().toUpperCase();
+                const nearbyKey = Object.keys(data).find((k) => {
+                    const [tsStr, ...rest] = k.split('_');
+                    const ts = Number(tsStr);
+                    if (!Number.isFinite(ts)) return false;
+                    if (Math.abs(ts - targetMs) > 5 * 60 * 1000) return false;
+                    const keyAsset = rest.join('_').toUpperCase();
+                    return keyAsset.includes(targetAsset);
+                });
+                if (nearbyKey) {
+                    console.log(`[Strike] NEARBY MATCH for ${asset}: ${data[nearbyKey]} (Key: ${nearbyKey}, target ${targetKey})`);
+                    return data[nearbyKey];
+                }
+
+                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne récente (+- 2 min)
                 const now = Date.now();
-                const nearbyKey = Object.keys(data).find(k => {
+                const btcNearbyKey = Object.keys(data).find(k => {
                     const ts = parseInt(k.split('_')[0]);
                     return Math.abs(ts - now) < 120000 && k.includes(asset);
                 });
-                if (nearbyKey) return data[nearbyKey];
+                if (btcNearbyKey) return data[btcNearbyKey];
             }
             
             if (cleanKey) {
