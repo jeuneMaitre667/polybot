@@ -1,0 +1,292 @@
+/**
+ * Master Controller (v2025 MODULAR)
+ * Orchestrates market sync, strategy filtering, and trading execution.
+ */
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import { ethers } from 'ethers';
+import { ClobClient, Side } from '@polymarket/clob-client';
+import axios from 'axios';
+
+// --- CONFIG & UTILS ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
+import { SUPPORTED_ASSETS, MARKET_MODE } from './config.js';
+import { startStrikeWorker } from './strike-worker.js';
+import { fetchSignals, getSignalKey } from './signal-engine.js';
+import { isSlotEntryTimeForbiddenNow, getSlotEntryTimingDetail } from './entryTiming.js';
+import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
+import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
+
+// --- ROBUSTNESS ---
+process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
+process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
+
+// --- STRATEGY PARAMETERS (User Approved) ---
+const MIN_SIGNAL_P = Number(process.env.MIN_SIGNAL_P) || 0.90;
+const MAX_SIGNAL_P = Number(process.env.MAX_SIGNAL_P) || 0.97;
+const SNIPER_DELTA_THRESHOLD_PCT = 0.10; // Trigger à 0.10% (Clarification v5.8)
+const MAX_LOSS = Number(process.env.MAX_LOSS) || 0.10;
+const HEALTH_FILE = path.join(process.cwd(), 'health.json');
+const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
+
+// --- STATE ---
+let clobClient = null;
+let decisionFeed = [];
+const MAX_FEED_SIZE = 50;
+let userBalance = 0;
+let activePositions = [];
+let liveMarket = {
+    asset: 'BTC',
+    binanceStrike: 0,
+    binanceSpot: 0,
+    binanceDeltaPct: 0,
+    bestBid: 0,
+    bestAsk: 0,
+    targetTokenId: null,
+    status: 'waiting',
+    updatedAt: null
+};
+
+function logDecision(decision, reason, meta = {}) {
+    const entry = {
+        at: Date.now(),
+        decision,
+        reason,
+        ...meta
+    };
+    decisionFeed.unshift(entry);
+    if (decisionFeed.length > MAX_FEED_SIZE) decisionFeed.pop();
+    console.log(`[Decision] ${decision}: ${reason}`);
+    
+    // Auto-Alert for BUY/SELL/SL
+    if (decision === 'BUY' || decision === 'SELL' || decision === 'SL') {
+        import('./telegramAlerts.js').then(m => m.sendTelegramAlert(`🚨 [Sniper] ${decision}: ${reason}`));
+    }
+}
+
+function updateDashboardMarketView({ binanceStrike, binanceSpot, bestBid, bestAsk, asset = 'BTC', status = 'waiting' }) {
+    const deltaUSD = binanceSpot - binanceStrike;
+    const deltaPct = binanceStrike > 0 ? (deltaUSD / binanceStrike) * 100 : 0;
+    
+    liveMarket = {
+        asset,
+        binanceStrike,
+        binanceSpot,
+        binanceDeltaPct: deltaPct,
+        bestBid,
+        bestAsk,
+        status,
+        updatedAt: new Date().toISOString()
+    };
+
+    updateHealth({ dashboardMarketView: liveMarket });
+}
+
+// --- INITIALIZATION ---
+async function init() {
+    console.log("=== 🛡️  SNIPER BOT 2025: MODULAR ENGINE STARTING ===");
+    
+    const privateKey = process.env.PRIVATE_KEY;
+    if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
+
+    const wallet = new ethers.Wallet(privateKey);
+    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet);
+    
+    console.log(`[Init] Wallet connected: ${wallet.address}`);
+    logDecision('SYSTEM', 'Engine started and authenticated');
+
+    // WebSocket Integration
+    try {
+        const wsClient = clobClient.createClobWebsocketClient();
+        await wsClient.connect();
+        console.log("[WS] Connected to Polymarket CLOB");
+
+        // On écoutera les tokens une fois découverts par le signal-engine
+    } catch (e) { console.error("[WS] Initialization fail:", e.message); }
+
+    // Initial balance fetch
+    try {
+        const bal = await axios.get(`https://data-api.polymarket.com/balance?address=${wallet.address}`);
+        userBalance = bal.data.balance || 0;
+    } catch (e) { console.warn("Balance fetch fail at init"); }
+    
+    // Start Side Workers
+    startStrikeWorker();
+    
+    // Main Trading Loop
+    setInterval(mainLoop, 1000);
+    // ❌ CRITICAL FIX: Decoupled Reporting Loop (Always Live)
+    setInterval(reportingLoop, 1000);
+    // ❌ CRITICAL FIX: Re-introducing Stop-Loss Monitoring Loop (1s)
+    setInterval(runStopLossPass, 1000);
+    
+    console.log("[Init] Loops started (Trading + Reporting + SL)");
+}
+
+async function reportingLoop() {
+    try {
+        const now = Date.now();
+        const slotStart = Math.floor(now / 300000) * 300000;
+        
+        // 1. Get Binance Context (AWAIT required for backfill)
+        const bStrike = await getBinanceStrike('BTC', slotStart);
+        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC');
+        const bSpot = parseFloat(spotRes.data.price);
+        const bDeltaPct = bStrike ? ((bSpot - bStrike) / bStrike) * 100 : 0;
+        
+        // 2. Get Polymarket Quote
+        const signalData = await fetchSignals('BTC');
+        const mainSignal = signalData.signals?.[0];
+        const pBid = mainSignal?.priceUp || 0;
+        const pAsk = pBid ? pBid + 0.001 : 0;
+
+        // --- ENRICHED LOGGING FOR USER VERIFICATION ---
+        console.log(`[Pulse] BTC: $${bSpot.toFixed(2)} | Strike: $${bStrike?.toFixed(2) || '---'} | Delta: ${bDeltaPct.toFixed(3)}% | Poly Ask: ${pAsk.toFixed(3)}`);
+        
+        updateDashboardMarketView({ 
+            binanceStrike: bStrike || 0,
+            binanceSpot: bSpot,
+            bestBid: pBid,
+            bestAsk: pAsk,
+            status: 'Monitoring Binance Delta...'
+        });
+
+    } catch (e) {
+        console.error('[Reporting] Loop Error:', e.message);
+    }
+}
+
+async function mainLoop() {
+    try {
+        const now = Date.now();
+        const nowSec = Math.floor(now / 1000);
+        const slotStart = Math.floor(now / 300000) * 300000;
+        
+        // 1. Time Filters
+        const timing = getSlotEntryTimingDetail(nowSec);
+        if (timing.forbidden) {
+            updateHealth({ status: 'restricted', reason: `Awaiting Window (${timing.block})` });
+            return;
+        }
+
+        // 2. Data Fetch (AWAIT required)
+        const bStrike = await getBinanceStrike('BTC', slotStart);
+        if (!bStrike) {
+            updateHealth({ status: 'warning', reason: 'Waiting for Binance Strike capture...' });
+            return;
+        }
+
+        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC');
+        const bSpot = parseFloat(spotRes.data.price);
+        const bDeltaPct = ((bSpot - bStrike) / bStrike) * 100;
+
+        // 3. Threshold Check (0.10%)
+        const isTriggered = Math.abs(bDeltaPct) >= SNIPER_DELTA_THRESHOLD_PCT;
+        
+        if (!isTriggered) {
+            updateHealth({ 
+                status: 'hunting', 
+                reason: `Binance Delta: ${bDeltaPct.toFixed(3)}% (Threshold: ${SNIPER_DELTA_THRESHOLD_PCT}%)`
+            });
+            return;
+        }
+
+        // 4. Trigger Hit -> Check Polymarket
+        const targetSide = bDeltaPct > 0 ? 'Up' : 'Down';
+        const signalData = await fetchSignals('BTC');
+        if (!signalData.signals || signalData.signals.length === 0) return;
+
+        // Select correct signal market & side
+        const signal = signalData.signals[0];
+        const price = targetSide === 'Up' ? signal.priceUp : signal.priceDown;
+        const tokenId = signal.tokenIdToBuy;
+
+        // Strategy Price Range Check
+        const isSignalInRange = price >= MIN_SIGNAL_P && price <= MAX_SIGNAL_P;
+
+        if (isSignalInRange) {
+            logDecision('BUY', `🚀 BINANCE TRIGGER! Delta=${bDeltaPct.toFixed(2)}% -> Buying ${targetSide} at ${price} (Target: ${tokenId})`);
+            await executeTrade(signal, price, 100); 
+        } else {
+            logDecision('SKIP', `Binance OK but Poly Price ${price.toFixed(2)} out of range (${MIN_SIGNAL_P}-${MAX_SIGNAL_P})`);
+        }
+
+    } catch (e) {
+        console.error('[Engine] Loop Error:', e.message);
+    }
+}
+
+async function runStopLossPass() {
+    // 1. Load active positions
+    const positions = safeReadJson(POSITION_LOG) || [];
+    if (positions.length === 0) return;
+
+    for (const pos of positions) {
+        try {
+            // Guard: Ignore if tokenId is missing
+            if (!pos.tokenId) continue;
+
+            // v2025 Robust lookup: fetchMarket handles current price levels
+            const market = await clobClient.getMarket(pos.tokenId);
+            if (!market || !market.best_bid) {
+                console.warn(`[SL] Skip check for ${pos.tokenId}: Market data not available (closed?)`);
+                continue;
+            }
+
+            const currentPrice = parseFloat(market.best_bid); 
+            const entryPrice = parseFloat(pos.avgPrice);
+            
+            // SL Check (10% threshold)
+            const lossPct = (entryPrice - currentPrice) / entryPrice;
+            if (lossPct >= MAX_LOSS) {
+                logDecision('SL', `🛑 STOP-LOSS! Loss: ${(lossPct*100).toFixed(1)}% (Entry: ${entryPrice}, Cur: ${currentPrice})`);
+                await executeMarketSell(pos);
+            }
+        } catch (e) {
+            // Audit fix: catch isolated errors so one 404 doesn't kill the heartbeat
+            if (e.message.includes('404')) {
+                console.warn(`[SL] Position ${pos.tokenId} references an expired market. Cleaning up...`);
+                // Optional: remove stale position from log
+            } else {
+                console.warn(`[SL] Error checking ${pos.tokenId}:`, e.message);
+            }
+        }
+    }
+}
+
+async function executeTrade(signal, price, size) {
+    console.log(`[Trade] Executing on ${signal.tokenIdToBuy} at ${price}`);
+    const newPos = { tokenId: signal.tokenIdToBuy, avgPrice: price, size, at: Date.now() };
+    const current = safeReadJson(POSITION_LOG) || [];
+    atomicWriteJson(POSITION_LOG, [...current, newPos]);
+    updateHealth({ lastOrderAt: new Date().toISOString() });
+}
+
+async function executeMarketSell(pos) {
+    console.log(`[SL] Selling ${pos.tokenId} at market...`);
+    const current = safeReadJson(POSITION_LOG) || [];
+    atomicWriteJson(POSITION_LOG, current.filter(p => p.tokenId !== pos.tokenId));
+}
+
+function updateHealth(data) {
+    const current = safeReadJson(HEALTH_FILE) || {};
+    const updated = { 
+        ...current, 
+        ...data, 
+        at: new Date().toISOString(),
+        timestamp: Date.now(),
+        totalUsd: userBalance,
+        decisionFeed: decisionFeed
+    };
+    atomicWriteJson(HEALTH_FILE, updated);
+}
+
+init().catch(err => {
+    console.error("💀 FATAL STARTUP ERROR:", err.message);
+    process.exit(1);
+});

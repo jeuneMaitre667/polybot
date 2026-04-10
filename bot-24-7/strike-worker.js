@@ -3,6 +3,9 @@
  * Logic isolated to ensure 100% reliability for 5-minute hi-fidelity captures.
  * v2026 : Added Polymarket Gamma API as primary strike source.
  */
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 import { captureStrikeAtSlotOpen } from './chainlink-price.js';
 import { saveStrike, fetchStrikeFromPolymarket } from './src/core/strike-manager.js';
 import { SUPPORTED_ASSETS } from './config.js';
@@ -23,18 +26,29 @@ export const runBoundaryCapture = async () => {
         
         console.log(`[Strike-Worker] 🎯 TRIGGER detected for slot ${new Date(targetSlotStartMs).toISOString()}`);
 
-        // --- 🟢 NOUVELLE LOGIQUE BINANCE HYBRIDE ---
-        // Capture immédiate du prix Binance à la seconde 0 (ou proche)
+        // --- 🔵 BINANCE USDC ALIGNMENT ---
+        // Capture du prix "Ouverture" (Open) de la bougie
         for (const asset of SUPPORTED_ASSETS) {
             try {
-                const bRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDT`);
-                const bPrice = parseFloat(bRes.data.price);
-                if (bPrice > 0) {
+                // On utilise USDC comme demandé
+                const symbol = `${asset.toUpperCase()}USDC`;
+                
+                // On récupère le kline 5m pour avoir l' "Ouverture" exacte du graphique
+                const kRes = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${targetSlotStartMs}&limit=1`);
+                
+                if (kRes.data && kRes.data[0]) {
+                    const openPrice = parseFloat(kRes.data[0][1]); // Index 1 is Open Price
+                    saveBinanceStrike(asset, openPrice, targetSlotStartMs);
+                    console.log(`[Strike-Worker] 🔸 BINANCE USDC OPEN: ${openPrice.toFixed(2)} (${asset})`);
+                } else {
+                    // Fallback Tick si kline pas encore prêt
+                    const bRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
+                    const bPrice = parseFloat(bRes.data.price);
                     saveBinanceStrike(asset, bPrice, targetSlotStartMs);
-                    console.log(`[Strike-Worker] 🔸 BINANCE OPEN captured for ${asset}: ${bPrice.toFixed(2)}`);
+                    console.log(`[Strike-Worker] ⚠️ BINANCE TICK (Kline Fail): ${bPrice.toFixed(2)}`);
                 }
             } catch (e) {
-                console.error(`[Strike-Worker] ❌ BINANCE CAPTURE FAILED for ${asset}:`, e.message);
+                console.error(`[Strike-Worker] ❌ BINANCE CAPTURE FAILED:`, e.message);
             }
         }
 
