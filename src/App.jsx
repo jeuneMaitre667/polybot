@@ -59,7 +59,7 @@ export default function App() {
 
       <div className="bots-row px-4 py-2 border-b border-white/5 bg-white/[0.01]">
         <div className="flex gap-4">
-          {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER 5M" />}
+          {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER 5M" refreshIntervalMs={1000} />}
         </div>
       </div>
 

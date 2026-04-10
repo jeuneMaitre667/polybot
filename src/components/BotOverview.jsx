@@ -10,7 +10,7 @@ import { BinanceChartCard } from './BinanceChartCard';
 
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL; // Sniper specific
-  const { data, loading } = useBotStatus(statusUrl, 2000);
+  const { data, loading } = useBotStatus(statusUrl, 1000);
   
   // --- CLOCK & STALENESS ---
   const [currentTime, setCurrentTime] = useState(() => Date.now());

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useBotStatus, DEFAULT_BOT_STATUS_URL, DEFAULT_BOT_STATUS_URL_15M } from '@/hooks/useBotStatus.js';
+import { cn } from '@/lib/utils';
 
 function uptimeStrFrom(uptimeMs) {
   if (uptimeMs == null) return null;
@@ -13,9 +14,9 @@ function uptimeStrFrom(uptimeMs) {
 }
 
 /** Badge compact pour le header : pastille + statut + uptime + config (marché · 3s) + résultats + Rafraîchir. Optionnel : statusUrl + label (ex. "15m"). */
-export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
+export function BotStatusBadge({ statusUrl: statusUrlProp, label, refreshIntervalMs = 2000 }) {
   const statusUrl = statusUrlProp ?? DEFAULT_BOT_STATUS_URL;
-  const { data, loading, error, refresh } = useBotStatus(statusUrl);
+  const { data, loading, error, refresh } = useBotStatus(statusUrl, refreshIntervalMs);
   const [now, setNow] = useState(() => Date.now());
   const wasOnlineRef = useRef(false);
   const hadWsAlertRef = useRef(false);
@@ -45,12 +46,17 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
   if (!statusUrl) return null;
 
   const isOnline = data?.status === 'online';
-  const uptimeMs = data?.uptime ? now - data.uptime : null;
+  const uptimeMs = data?.uptime
+    ? now - data.uptime
+    : data?.timestamp
+      ? now - Number(data.timestamp)
+      : null;
   const uptimeStr = uptimeStrFrom(uptimeMs);
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
+  const isWsOnline = data?.wsConnected === true;
   const wsAlert = Array.isArray(data?.alerts) && data.alerts.some((a) => a?.kind === 'ws_disconnected');
-  const wsLabel = data?.useWebSocket === false ? null : (wsAlert ? 'WS KO' : 'WS OK');
+  const wsLabel = data?.useWebSocket === false ? null : (isWsOnline ? 'WS OK' : 'WS KO');
   const signalPriceSource = data?.signalPriceSource;
   const signalPollHint =
     signalPriceSource === 'clob'
@@ -64,12 +70,28 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label }) {
       className="bot-pill"
       title={[signalPollHint, `Ordre au marché ou limite, poll ${pollSec}s`].filter(Boolean).join(' · ')}
     >
-      <span
-        className={`dot ${loading ? 'status-dot--loading' : ''} ${isOnline ? 'status-dot--online' : ''}`}
-        title={isOnline ? 'En ligne' : 'Hors ligne'}
+      <span 
+        className="status-dot"
+        style={{ 
+          width: '8px', 
+          height: '8px', 
+          borderRadius: '50%', 
+          backgroundColor: isOnline ? '#10b981' : (loading ? '#3b82f6' : '#ef4444'),
+          boxShadow: isOnline ? '0 0 10px #10b981' : 'none',
+          animation: isOnline ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none'
+        }}
       />
-      <span className="name">{label || 'BOT'}</span>
-      <span className="uptime">{uptimeStr && isOnline ? uptimeStr : loading ? '…' : 'offline'}</span>
+      <span className="name" style={{ fontWeight: 900, fontSize: '11px', letterSpacing: '0.1em' }}>{label || 'BOT'}</span>
+      <span style={{ 
+        fontSize: '10px', 
+        fontWeight: 900, 
+        textTransform: 'uppercase', 
+        letterSpacing: '0.2em', 
+        marginLeft: '10px',
+        color: isOnline ? '#10b981' : 'rgba(255,255,255,0.2)'
+      }}>
+        {isOnline ? 'SNIPER LIVE' : (loading ? 'SYNCING...' : 'DISCONNECTED')}
+      </span>
       <span className="tag-sep">·</span>
       <span className="tag tag-sig">
         sig. {signalPriceSource === 'clob' ? 'CLOB' : signalPriceSource === 'gamma' ? 'Gamma' : orderLabel}
