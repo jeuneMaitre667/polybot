@@ -25,13 +25,14 @@ export function useBotStatus(url, refreshIntervalMs = 15000) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const baseUrl = (url && url.startsWith('http'))
+    ? url.replace(/\/$/, '') + '/api/bot-status'
+    : null;
+
   const fetchStatus = useCallback(async () => {
-    // Si l'URL est absente ou relative, on utilise un chemin relatif qui passera par le proxy Vite
-    const baseUrl = (url && url.startsWith('http')) 
-      ? url.replace(/\/$/, '') + '/api/bot-status'
-      : '/api/bot-status';
+    if (!baseUrl) return;
+
     const fetchUrl = `${baseUrl}?t=${Date.now()}`;
-      
     setError(null);
     try {
       const res = await fetch(fetchUrl, { method: 'GET' });
@@ -44,17 +45,18 @@ export function useBotStatus(url, refreshIntervalMs = 15000) {
     } finally {
       setLoading(false);
     }
-  }, [url]);
+  }, [baseUrl]);
 
   useEffect(() => {
-    fetchStatus();
-    if (!url) {
+    if (!baseUrl) {
       setLoading(false);
       return;
     }
+
+    fetchStatus();
     const t = setInterval(fetchStatus, refreshIntervalMs);
     return () => clearInterval(t);
-  }, [url, refreshIntervalMs, fetchStatus]);
+  }, [baseUrl, refreshIntervalMs, fetchStatus]);
 
   return { data, loading, error, refresh: fetchStatus };
 }
