@@ -14,11 +14,13 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Même dossier que le bot (où se trouvent balance.json et last-order.json). */
-const BOT_DIR = process.env.BOT_DIR || path.resolve(__dirname);
+const BOT_DIR = '/home/ubuntu/bot-24-7';
 
 const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
+const HOST = '0.0.0.0';
 const SECRET = process.env.BOT_STATUS_SECRET || '';
 const includeActiveWindowLiquidity = process.env.INCLUDE_ACTIVE_WINDOW_LIQUIDITY === 'true';
+const BOT_PM2_NAMES = ['polymarket-bot', 'bot-modular', 'bot-modular-v1'];
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -27,7 +29,13 @@ function cors(res) {
 }
 
 function json(res, data, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.writeHead(status, { 
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'Surrogate-Control': 'no-store'
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -41,18 +49,19 @@ function getPm2List() {
   try {
     const out = execSync('pm2 jlist 2>nul || exit 0', { encoding: 'utf8', timeout: 5000 });
     const list = JSON.parse(out);
-    const bot = Array.isArray(list) ? list.find((p) => p.name === 'polymarket-bot') : null;
+    const bot = Array.isArray(list) ? list.find((p) => BOT_PM2_NAMES.includes(p.name)) : null;
     const value = {
       status: bot?.pm2_env?.status === 'online' ? 'online' : 'offline',
       uptime: bot?.pm2_env?.pm_uptime ?? null,
       pid: bot?.pid ?? null,
+      botName: bot?.name ?? BOT_PM2_NAMES[0],
     };
     getPm2List._cache = { at: Date.now(), value };
     return value;
   } catch (e) {
     // v2026 : Fallback if PM2 is missing in PATH
     const health = readJsonFile(path.join(BOT_DIR, 'health.json'));
-    const isFresh = health && health.at && (Date.now() - new Date(health.at).getTime() < 30000);
+    const isFresh = health && health.at && (Date.now() - new Date(health.at).getTime() < 60000);
     
     return { 
       status: isFresh ? 'online' : 'offline', 
@@ -63,15 +72,25 @@ function getPm2List() {
 }
 
 function getLogs(lines = 40) {
+  const names = BOT_PM2_NAMES;
+  for (const name of names) {
+    try {
+      const out = execSync(`pm2 logs ${name} --nostream --lines ${lines} 2>nul || exit 0`, { encoding: 'utf8', timeout: 5000 });
+      const trimmed = String(out).trim();
+      if (trimmed) return trimmed;
+    } catch (_) {
+      // ignore and try next name
+    }
+  }
+
   try {
-    const out = execSync(`pm2 logs polymarket-bot --nostream --lines ${lines} 2>nul || exit 0`, { encoding: 'utf8', timeout: 5000 });
-    return String(out).trim();
-  } catch (e) {
     // v2026 : Direct file fallback
     const logPath = path.join(BOT_DIR, 'bot.log');
     if (fs.existsSync(logPath)) {
         return readFileTailUtf8(logPath, 4000); // approx 40 lines
     }
+    return '';
+  } catch (e) {
     return `Erreur logs: ${e.message}`;
   }
 }
@@ -281,6 +300,7 @@ function getHealth() {
     performance: o.performance ?? null,
     equityHistory: o.equityHistory ?? [],
     balance: o.balance ?? null,
+    sniperHUD: o.sniperHUD ?? null,
     totalUsd: o.totalUsd ?? null,
   };
 }
@@ -1126,6 +1146,7 @@ const server = http.createServer((req, res) => {
         const health = getHealth();
         const alerts = getHealthAlerts(health, config);
         const payload = {
+          sniperHUD: health?.sniperHUD ?? null,
           status: pm2.status,
           uptime: pm2.uptime,
           pid: pm2.pid,
@@ -1170,6 +1191,7 @@ const server = http.createServer((req, res) => {
             strikeSource: lastDecision.strikeSource ?? null,
           } : null,
           // v2026 : Industrial Sniper Mapping
+          sniperHUD: health?.sniperHUD ?? null,
           secondsLeftInSlot: health?.secondsLeftInSlot ?? 0,
           sniperFilterAudit: health?.sniperFilterAudit ?? null,
           performance: health?.performance ?? null,
