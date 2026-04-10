@@ -134,10 +134,13 @@ async function reportingLoop() {
         const slotStart = Math.floor(now / 300000) * 300000;
         
         // 1. Get Binance Context (AWAIT required for backfill)
-        const bStrike = await getBinanceStrike('BTC', slotStart);
+        let bStrike = await getBinanceStrike('BTC', slotStart);
         const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC');
         const bSpot = parseFloat(spotRes.data.price);
-        const bDeltaPct = bStrike ? ((bSpot - bStrike) / bStrike) * 100 : 0;
+        
+        // Fallback: Use spot as strike temporarily if no strike captured yet to unblock dashboard
+        const effectiveStrike = bStrike || bSpot;
+        const bDeltaPct = ((bSpot - effectiveStrike) / effectiveStrike) * 100;
         
         // 2. Get Polymarket Quote
         const signalData = await fetchSignals('BTC');
@@ -149,11 +152,11 @@ async function reportingLoop() {
         console.log(`[Pulse] BTC: $${bSpot.toFixed(2)} | Strike: $${bStrike?.toFixed(2) || '---'} | Delta: ${bDeltaPct.toFixed(3)}% | Poly Ask: ${pAsk.toFixed(3)}`);
         
         updateDashboardMarketView({ 
-            binanceStrike: bStrike || 0,
+            binanceStrike: bStrike || bSpot,
             binanceSpot: bSpot,
             bestBid: pBid,
             bestAsk: pAsk,
-            status: 'Monitoring Binance Delta...'
+            status: bStrike ? '🏹 Sniper Ready' : '⏳ Capturing Opening Strike...'
         });
 
     } catch (e) {
@@ -249,9 +252,10 @@ async function runStopLossPass() {
             }
         } catch (e) {
             // Audit fix: catch isolated errors so one 404 doesn't kill the heartbeat
-            if (e.message.includes('404')) {
-                console.warn(`[SL] Position ${pos.tokenId} references an expired market. Cleaning up...`);
-                // Optional: remove stale position from log
+            if (e.message?.includes('404') || e.response?.status === 404) {
+                console.warn(`[SL] Position ${pos.tokenId} references an expired market. Auto-pruning position log...`);
+                const current = safeReadJson(POSITION_LOG) || [];
+                atomicWriteJson(POSITION_LOG, current.filter(p => p.tokenId !== pos.tokenId));
             } else {
                 console.warn(`[SL] Error checking ${pos.tokenId}:`, e.message);
             }
