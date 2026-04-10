@@ -38,11 +38,6 @@ export function BotStatusBadge({ statusUrl: statusUrlProp, label, refreshInterva
   if (!statusUrl) return null;
 
   const isOnline = data?.status === 'online';
-  const uptimeMs = data?.uptime
-    ? now - data.uptime
-    : data?.timestamp
-      ? now - Number(data.timestamp)
-      : null;
   const orderLabel = data?.useMarketOrder !== false ? 'marché' : 'limite';
   const pollSec = data?.pollIntervalSec ?? 3;
   const isWsOnline = data?.wsConnected === true;
