@@ -164,7 +164,6 @@ async function reportingLoop() {
 
         // v17.4.0: Emergency Strike Sync (Proactive Recovery)
         // Si le strike est manquant et qu'on est dans la fenÃªtre de dÃ©cision (T-90s à T-30s)
-        const secondsLeft = Math.floor((slotStart + 300000 - Date.now()) / 1000);
         if (!bStrike && secondsLeft <= 100 && secondsLeft >= 0) {
             console.log(`[Strike] 🛡️ Emergency Sync Triggered for slot ${slotStart}...`);
             bStrike = await StrikeManager.fetchStrikeFromPolymarket('BTC', slotStart);
