@@ -29,7 +29,7 @@ export function BotOverview() {
   const isSimulation = data?.simulation !== undefined ? data.simulation : (data?.lastOrder?.simulationTrade || data?.config?.isSimulation || false);
 
   return (
-    <div className="space-y-10 p-4 md:p-8 animate-in fade-in duration-1000 max-w-[1600px] mx-auto">
+    <div className="space-y-6 pt-2 pb-8 px-4 md:px-8 animate-in fade-in duration-1000 max-w-[1700px] mx-auto">
       
       {/* 1. TOP PERFORMANCE HUD */}
       <div className="flex flex-wrap items-center justify-between gap-6 p-8 rounded-[2.5rem] bg-white/[0.01] border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden group">

@@ -44,7 +44,13 @@ export function LiveMarketView({ data }) {
   }
 
   return (
-    <div className="relative flex flex-col gap-6">
+    <div className="relative flex flex-col h-full overflow-hidden">
+      {/* Phantom Header for Alignment with BinanceChartCard */}
+      <div className="flex items-center justify-between px-8 py-4 bg-white/[0.01] border-b border-transparent mb-6">
+         <div className="flex items-center gap-3">
+            <h3 className="text-xs font-black text-white/10 uppercase tracking-[0.2em] select-none">Signal Intelligence</h3>
+         </div>
+      </div>
       
       {/* --- ERGONOMIC SIGNAL HUD --- */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -94,7 +100,9 @@ export function LiveMarketView({ data }) {
           <div className="text-[clamp(1.5rem,8vw,3.5rem)] font-mono font-black text-emerald-400 leading-none tracking-tighter py-2">
             {mv.bestAskUp ? (mv.bestAskUp * 100).toFixed(1) : '—'}<span className="text-xl text-emerald-500/40">¢</span>
           </div>
-          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+          <div className="mt-2 py-1.5 px-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 w-fit">
+            <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          </div>
         </div>
 
         {/* Market DOWN */}
@@ -108,29 +116,31 @@ export function LiveMarketView({ data }) {
           <div className="text-[clamp(1.5rem,8vw,3.5rem)] font-mono font-black text-rose-400 leading-none tracking-tighter py-2">
             {mv.bestAskDown ? (mv.bestAskDown * 100).toFixed(1) : '—'}<span className="text-xl text-rose-500/40">¢</span>
           </div>
-          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+          <div className="mt-2 py-1.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 w-fit">
+            <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          </div>
         </div>
       </div>
 
       {/* --- SECONDARY STATS GRID --- */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 overflow-hidden">
-           <span className="text-[9px] font-black text-white/20 uppercase tracking-widest block mb-1 truncate">Binance Mid</span>
-           <span className="text-base font-mono font-bold text-white/80 whitespace-nowrap">${Number(mv.binanceSpot).toLocaleString()}</span>
+      <div className="grid grid-cols-4 gap-3">
+        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
+           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Binance Mid</span>
+           <span className="text-sm font-mono font-bold text-white/80 items-center overflow-hidden truncate whitespace-nowrap">${Number(mv.binanceSpot).toLocaleString()}</span>
         </div>
-        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 overflow-hidden">
-           <span className="text-[9px] font-black text-white/20 uppercase tracking-widest block mb-1 truncate">Delta USD</span>
-           <span className={`text-base font-mono font-bold whitespace-nowrap ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
+        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
+           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Delta USD</span>
+           <span className={`text-sm font-mono font-bold truncate ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
              ${Math.abs(deltaAbs).toFixed(2)}
            </span>
         </div>
-        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 overflow-hidden">
-           <span className="text-[9px] font-black text-white/20 uppercase tracking-widest block mb-1 truncate">Threshold</span>
-           <span className="text-base font-mono font-bold text-white/40 whitespace-nowrap">${(mv.binanceStrike * 0.001).toFixed(2)}</span>
+        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
+           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Threshold</span>
+           <span className="text-sm font-mono font-bold text-white/40 truncate">${(mv.binanceStrike * 0.001).toFixed(2)}</span>
         </div>
-        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 overflow-hidden">
-           <span className="text-[9px] font-black text-white/20 uppercase tracking-widest block mb-1 truncate">Variation</span>
-           <span className={`text-base font-mono font-bold whitespace-nowrap ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
+        <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
+           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Variation</span>
+           <span className={`text-sm font-mono font-bold truncate ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
              {isUp ? '+' : ''}{mv.binanceDeltaPct.toFixed(3)}%
            </span>
         </div>
