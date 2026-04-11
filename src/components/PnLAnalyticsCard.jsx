@@ -3,11 +3,14 @@ import { TrendingUp, TrendingDown, Target, BarChart3, Activity } from 'lucide-re
 import { cn } from '@/lib/utils';
 
 export function PnLAnalyticsCard({ performance }) {
-  const { netProfit, winRatePct, totalVolume, tradeCount, updatedAt } = performance || {
+  const { netProfit, winRatePct, totalVolume, tradeCount, profitFactor, avgWin, avgLoss, updatedAt } = performance || {
     netProfit: 0,
     winRatePct: 0,
     totalVolume: 0,
     tradeCount: 0,
+    profitFactor: 0,
+    avgWin: 0,
+    avgLoss: 0,
     updatedAt: new Date().toISOString()
   };
 
@@ -26,17 +29,17 @@ export function PnLAnalyticsCard({ performance }) {
       <div className="flex flex-col h-full">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-400 border border-blue-500/20">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 border border-indigo-500/20">
             <BarChart3 size={24} />
           </div>
           <div>
-            <h2 className="text-xl font-black tracking-tight text-white uppercase">Operational Performance</h2>
-            <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase">Real-time Session Analytics</p>
+            <h2 className="text-xl font-black tracking-tight text-white uppercase italic">Intelligence Hub v17.3</h2>
+            <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase">Deep Performance Analytics</p>
           </div>
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 flex-1">
           {/* NET PROFIT */}
           <div className="bg-white/[0.03] border border-white/5 p-5 rounded-2xl hover:bg-white/[0.05] transition-all duration-300">
             <div className="flex justify-between items-center mb-3">
@@ -49,7 +52,36 @@ export function PnLAnalyticsCard({ performance }) {
               </span>
               <span className="text-[10px] 2xl:text-xs font-mono text-white/20 uppercase shrink-0">USDC</span>
             </div>
-            <p className="text-[10px] text-white/20 mt-2 font-mono">After Polymarket Fees (0.72%)</p>
+            <div className="mt-4 flex flex-col gap-1">
+                <div className="flex justify-between items-center">
+                    <span className="text-[9px] text-white/30 uppercase">Avg Win</span>
+                    <span className="text-[10px] text-green-400 font-mono">+${avgWin}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                    <span className="text-[9px] text-white/30 uppercase">Avg Loss</span>
+                    <span className="text-[10px] text-red-400 font-mono">-${avgLoss}</span>
+                </div>
+            </div>
+          </div>
+
+          {/* PROFIT FACTOR */}
+          <div className="bg-white/[0.03] border border-white/5 p-5 rounded-2xl hover:bg-white/[0.05] transition-all duration-300">
+            <div className="flex justify-between items-center mb-3">
+              <span className="text-[11px] text-white/40 uppercase font-mono tracking-widest">Profit Factor</span>
+              <Activity size={16} className="text-indigo-400" />
+            </div>
+            <div className="flex items-baseline gap-2 overflow-hidden">
+              <span className={cn("text-2xl 2xl:text-4xl font-black font-mono tracking-tighter transition-all truncate", profitFactor >= 1.5 ? "text-indigo-400" : "text-white/60")}>
+                {profitFactor}
+              </span>
+              <span className="text-[10px] 2xl:text-xs font-mono text-white/20 uppercase shrink-0">Ratio</span>
+            </div>
+            <div className="w-full h-1.5 bg-white/5 rounded-full mt-4 overflow-hidden">
+              <div 
+                className={cn("h-full transition-all duration-1000", profitFactor >= 2 ? "bg-indigo-400 shadow-[0_0_10px_rgba(129,140,248,0.5)]" : "bg-white/20")}
+                style={{ width: `${Math.min(100, (profitFactor / 3) * 100)}%` }} 
+              />
+            </div>
           </div>
 
           {/* WIN RATE */}
@@ -89,7 +121,7 @@ export function PnLAnalyticsCard({ performance }) {
                 <span className="text-xl font-bold font-mono tracking-tighter text-white/80">
                   {tradeCount}
                 </span>
-                <span className="text-[10px] font-mono text-white/20 uppercase">Filled Signals</span>
+                <span className="text-[10px] font-mono text-white/20 uppercase">Total Trades</span>
               </div>
             </div>
           </div>
@@ -98,10 +130,10 @@ export function PnLAnalyticsCard({ performance }) {
         {/* Footer */}
         <div className="mt-8 pt-4 border-t border-white/5 flex justify-between items-center">
           <p className="text-[10px] text-white/20 font-mono tracking-widest uppercase">
-            Data Source: orders.log | Refresh Interval: 60s
+            Source: trades-history.json | Refresh: 30s | Intelligence: Node-Engine
           </p>
           <p className="text-[10px] text-white/20 font-mono">
-            Last Compute: {new Date(updatedAt).toLocaleTimeString()}
+            Last Intelligence Sync: {new Date(updatedAt).toLocaleTimeString()}
           </p>
         </div>
       </div>

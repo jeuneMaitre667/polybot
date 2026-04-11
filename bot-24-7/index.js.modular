@@ -24,6 +24,7 @@ import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
 import * as SLSentinel from './sl-sentinel.js';
+import * as Analytics from './analytics-engine.js';
 import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
 import { 
     computeMiddayDigestStats, 
@@ -272,6 +273,8 @@ async function reportingLoop() {
         decisionFeed.unshift(logEntry);
         if (decisionFeed.length > MAX_FEED_SIZE) decisionFeed.pop();
 
+        const stats = Analytics.computePerformanceStats();
+
         updateHealth({ 
             dashboardMarketView: {
                 asset: 'BTC',
@@ -281,6 +284,7 @@ async function reportingLoop() {
                 bestAskUp,
                 bestAskDown
             },
+            performance: stats,
             sniperHUD: {
                 btc: {
                     secondsLeft,
@@ -663,6 +667,16 @@ async function executeRedeemOnChain(conditionId) {
             console.log(`[Relayer] Transaction submitted successfully: ${submitRes.data.transactionHash}`);
             lastResolvedCids.add(pos.tokenId);
             changed = true;
+
+            // v17.3.2: Record Winning Trade
+            Analytics.recordTrade({
+                asset: pos.asset || 'BTC',
+                side: pos.side,
+                entryPrice: pos.buyPrice,
+                exitPrice: 1.0, 
+                quantity: pos.amount,
+                pnlUsd: (1.0 - pos.buyPrice) * pos.amount
+            });
         }
 
     } catch (err) {
@@ -708,6 +722,16 @@ async function executeEmergencyExit(info) {
         if (sellOrder && sellOrder.orderID) {
             console.log(`[Emergency] ✅ EXIT SUCCESS: ${sellOrder.orderID}`);
             
+            // v17.3.2: Record Losing/Neutral Trade
+            Analytics.recordTrade({
+                asset: pos.asset || 'BTC',
+                side: pos.side,
+                entryPrice: pos.buyPrice,
+                exitPrice: info.currentPrice,
+                quantity: pos.amount,
+                pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
+            });
+
             // Cleanup
             activePosition = null;
             saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
