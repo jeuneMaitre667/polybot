@@ -302,6 +302,9 @@ function getHealth() {
     balance: o.balance ?? null,
     sniperHUD: o.sniperHUD ?? null,
     totalUsd: o.totalUsd ?? null,
+    dashboardMarketView: o.dashboardMarketView ?? null, // v17.8.0 Missing Key
+    version: o.version ?? null, // v17.8.0 Missing Key
+    balanceUsd: o.balanceUsd ?? null,
   };
 }
 

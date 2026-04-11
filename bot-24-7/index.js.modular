@@ -328,8 +328,12 @@ async function reportingLoop() {
                 queryEngine: 'Alchemy/Unified'
             },
             decisionFeed: decisionFeed,
-            gasBalance: maticBalance.toFixed(4)
+            gasBalance: maticBalance !== null ? maticBalance.toFixed(4) : "---"
         });
+    } catch (e) {
+        console.error('[Reporting] Critical loop error:', e.message);
+    }
+}
         
     } catch (e) {
         console.error('[Reporting] v16.3.1 Loop Error:', e.message);
