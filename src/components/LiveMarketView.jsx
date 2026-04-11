@@ -34,7 +34,10 @@ export function LiveMarketView({ data }) {
   const isWindowOpen = secondsLeft >= windowEnd && secondsLeft <= windowStart; 
   const isAuthorized = isWindowOpen && mv?.binanceStrike > 0;
   
-  if (!mv) {
+  // v17.8.2: Resilience Check - Only show skeleton if NO price data is available
+  const hasPartialData = mv?.binanceSpot || mv?.bestAskUp || mv?.bestAskDown;
+
+  if (!mv && !hasPartialData) {
     return (
       <div className="bg-[#0a0b14]/80 backdrop-blur-3xl border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center min-h-[400px]">
         <div className="relative mb-6">
