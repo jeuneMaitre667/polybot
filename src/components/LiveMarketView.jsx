@@ -21,7 +21,8 @@ export function LiveMarketView({ data }) {
   const decisionLog = data?.decisionFeed?.slice(-3).reverse();
 
   // v17.0.1: Dynamic Configuration Sync
-  const threshold = data?.config?.delta || 0.07;
+  const threshold = mv?.thresholdPct || data?.config?.delta || 0.07;
+
   const windowStart = data?.config?.windowStart || 90;
   const windowEnd = data?.config?.windowEnd || 30;
 
@@ -142,8 +143,10 @@ export function LiveMarketView({ data }) {
            </span>
         </div>
         <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
-           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Threshold</span>
-           <span className="text-sm font-mono font-bold text-white/40 truncate">${((mv?.binanceStrike || 0) * 0.001).toFixed(2)}</span>
+           <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Target Delta</span>
+           <span className="text-sm font-mono font-bold text-white/40 truncate">
+             {(threshold * (mv?.binanceStrike || 0) / 100).toFixed(2)}
+           </span>
         </div>
         <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
            <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Variation</span>

@@ -144,7 +144,37 @@ async function init() {
     console.log("[Init] All systems synchronized.");
 }
 
+
+// v17.22.0: Unified Market Context (Synchronized Decision Logic)
+async function getUnifiedMarketState(asset = 'BTC') {
+    const now = Date.now();
+    const slotStart = Math.floor(now / 300000) * 300000;
+    
+    // 1. Fetch Binance Spot (Current)
+    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`).catch(() => null);
+    const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+    
+    // 2. Fetch or Backfill Strike
+    let bStrike = await getBinanceStrike(asset, slotStart);
+    const source = bStrike ? 'OFFICIAL' : 'FALLBACK_SPOT';
+    const effectiveStrike = bStrike || bSpot;
+    
+    // 3. Calculate Delta
+    const bDeltaPct = (effectiveStrike > 0 && bSpot > 0) ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
+    
+    return {
+        asset,
+        slotStart,
+        bSpot,
+        effectiveStrike,
+        bDeltaPct,
+        source,
+        timestamp: now
+    };
+}
+
 async function reportingLoop() {
+
     try {
         const now = Date.now();
         const slotStart = Math.floor(now / 300000) * 300000;
@@ -169,15 +199,12 @@ async function reportingLoop() {
             console.error('[Reporting] Multi-balance fetch error:', err.message);
         }
 
-        // 1. Get Binance Context
-        let bStrike = await getBinanceStrike('BTC', slotStart);
+        // 1. Get Unified Market State (v17.22.0 Sync)
+        const marketState = await getUnifiedMarketState('BTC');
+        const { bSpot, effectiveStrike, bDeltaPct, source } = marketState;
 
-        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
-        const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+        // v17.20.0: Aggressive Pure Binance Strategy logic remains identical but now uses marketState
 
-        // v17.20.0: Aggressive Pure Binance Strategy
-        const effectiveStrike = bStrike || bSpot;
-        const bDeltaPct = effectiveStrike > 0 ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
         
         // 2. AGGRESSIVE DUAL DISCOVERY
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
@@ -294,11 +321,14 @@ async function reportingLoop() {
                 binanceSpot: bSpot,
                 binanceStrike: effectiveStrike,
                 binanceDeltaPct: bDeltaPct,
+                strikeSource: source, // v17.22.0: New source tag
                 bestAskUp,
                 bestAskDown,
                 // v17.7.0: Legacy Compatibility Aliases (Wake-up call for old UI)
                 priceUp: bestAskUp,
-                priceDown: bestAskDown
+                priceDown: bestAskDown,
+                variationPct: bDeltaPct,
+                thresholdPct: SNIPER_DELTA_THRESHOLD_PCT // v17.22.0: Dynamic threshold for UI
             },
             performance: stats,
             sniperHUD: {
@@ -347,16 +377,21 @@ async function mainLoop() {
             return; 
         }
 
-        // 3. Signal Detection
-        const mv = memoryHealth.dashboardMarketView;
-        if (!mv) return;
-
-        if (Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
+        // 3. Unified Decision Path (v17.22.0)
+        // Force a fresh context check specifically for the main Loop
+        const marketState = await getUnifiedMarketState('BTC');
+        const mv = marketState; // Use fresh state instead of memoryHealth fallback
+        
+        if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
             return;
         }
 
-        const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
-        const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
+        const bDeltaPct = mv.bDeltaPct; // Local variable for logging
+        const side = bDeltaPct > 0 ? 'YES' : 'NO';
+        
+        // Re-fetch asks from memoryHealth for latest orderbook depth (ReportingLoop handles depth)
+        const bestAsk = side === 'YES' ? memoryHealth.dashboardMarketView?.bestAskUp : memoryHealth.dashboardMarketView?.bestAskDown;
+
         
         // v16.17.1: Dynamic Price Filter
         if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
