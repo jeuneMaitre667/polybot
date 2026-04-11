@@ -68,21 +68,27 @@ let lastDigestWindow = ''; // 'morning' | 'night'
 let clobClient = null;
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
-let userBalance = 0;
-let maticBalance = 0; // v16.21.0: Real Gas Monitoring
+let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
+let maticBalance = null; 
 let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
 function updateHealth(data) {
     memoryHealth = { ...memoryHealth, ...data };
+    
+    // v17.7.0: Atomic Balance Guard
+    const displayBalance = userBalance !== null ? userBalance : (memoryHealth.totalUsd || 0);
+
     const fullHealth = { 
         ...memoryHealth, 
         at: new Date().toISOString(),
         timestamp: Date.now(),
-        totalUsd: userBalance,
+        totalUsd: displayBalance,
+        balanceUsd: displayBalance, // Sync second alias
         decisionFeed: decisionFeed,
-        status: 'online' 
+        status: 'online',
+        version: 'v17.7.0' // Traceability badge
     };
     memoryHealth = fullHealth;
     atomicWriteJson(HEALTH_FILE, fullHealth);
@@ -298,7 +304,10 @@ async function reportingLoop() {
                 binanceStrike: effectiveStrike,
                 binanceDeltaPct: bDeltaPct,
                 bestAskUp,
-                bestAskDown
+                bestAskDown,
+                // v17.7.0: Legacy Compatibility Aliases (Wake-up call for old UI)
+                priceUp: bestAskUp,
+                priceDown: bestAskDown
             },
             performance: stats,
             sniperHUD: {

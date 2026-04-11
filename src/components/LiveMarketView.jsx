@@ -118,7 +118,7 @@ export function LiveMarketView({ data }) {
              <ArrowDownRight size={10} className="text-rose-500" /> Polymarket DOWN Ask
           </span>
           <div className="text-[clamp(1.5rem,8vw,3.5rem)] font-mono font-black text-rose-400 leading-none tracking-tighter py-2">
-            {mv.bestAskDown ? (mv.bestAskDown * 100).toFixed(1) : '—'}<span className="text-xl text-rose-500/40">¢</span>
+            {(mv.bestAskDown ?? mv.priceDown ?? null) !== null ? (Number(mv.bestAskDown ?? mv.priceDown) * 100).toFixed(1) : '—'}<span className="text-xl text-rose-500/40">¢</span>
           </div>
           <div className="mt-2 py-1.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 w-fit">
             <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>

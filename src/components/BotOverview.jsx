@@ -118,10 +118,15 @@ export function BotOverview() {
       </div>
 
       {/* 4. LATENCY & DECISION STREAM */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 relative">
         <LatencySentinelCards data={data} />
         <div className="glass-panel border border-white/5 bg-black/40 rounded-[2rem] overflow-hidden h-full max-h-[500px]">
            <DecisionFeed feed={data?.decisionFeed} />
+        </div>
+        
+        {/* v17.7.0: Traceability Badge */}
+        <div className="absolute bottom-4 right-4 opacity-10 text-[8px] font-mono text-white select-none pointer-events-none uppercase tracking-widest">
+           Core Engine v17.7.0 • Pulse Sync Active
         </div>
       </div>
     </div>
