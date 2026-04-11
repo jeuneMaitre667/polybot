@@ -43,11 +43,11 @@ export function PnLAnalyticsCard({ performance }) {
               <span className="text-[11px] text-white/40 uppercase font-mono tracking-widest">Net Session Profit</span>
               {isProfitable ? <TrendingUp size={16} className="text-green-400" /> : <TrendingDown size={16} className="text-red-400" />}
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className={cn("text-4xl 2xl:text-6xl font-black font-mono tracking-tighter transition-all", isProfitable ? "text-green-400" : "text-red-400")}>
+            <div className="flex items-baseline gap-2 overflow-hidden">
+              <span className={cn("text-2xl 2xl:text-4xl font-black font-mono tracking-tighter transition-all truncate", isProfitable ? "text-green-400" : "text-red-400")}>
                 {isProfitable ? '+' : ''}{netProfit.toFixed(2)}
               </span>
-              <span className="text-sm 2xl:text-base font-mono text-white/20 uppercase">USDC</span>
+              <span className="text-[10px] 2xl:text-xs font-mono text-white/20 uppercase shrink-0">USDC</span>
             </div>
             <p className="text-[10px] text-white/20 mt-2 font-mono">After Polymarket Fees (0.72%)</p>
           </div>
@@ -58,11 +58,11 @@ export function PnLAnalyticsCard({ performance }) {
               <span className="text-[11px] text-white/40 uppercase font-mono tracking-widest">Execution Edge</span>
               <Target size={16} className="text-blue-400" />
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-4xl 2xl:text-6xl font-black font-mono tracking-tighter text-white transition-all">
+            <div className="flex items-baseline gap-2 overflow-hidden">
+              <span className="text-2xl 2xl:text-4xl font-black font-mono tracking-tighter text-white transition-all truncate">
                 {winRatePct}%
               </span>
-              <span className="text-sm 2xl:text-base font-mono text-white/20 uppercase">Win Rate</span>
+              <span className="text-[10px] 2xl:text-xs font-mono text-white/20 uppercase shrink-0">Win Rate</span>
             </div>
             <div className="w-full h-1.5 bg-white/5 rounded-full mt-4 overflow-hidden">
               <div 

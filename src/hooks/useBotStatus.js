@@ -20,7 +20,7 @@ export function areBotStatusUrlsDuplicate(url1h, url15m) {
   return a !== '' && b !== '' && a === b;
 }
 
-export function useBotStatus(url, refreshIntervalMs = 15000) {
+export function useBotStatus(url, refreshIntervalMs = 2000) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

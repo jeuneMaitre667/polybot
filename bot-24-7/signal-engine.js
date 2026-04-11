@@ -133,14 +133,12 @@ export async function fetchSignals(asset, context = {}) {
 }
 
 function getSlotSlugForAsset(asset) {
-    // v2025 : Standardizing on numeric timestamp slug for 5m markets
+    // v16.9.3 : Target the CURRENT ACTIVE slot (the one currently trading)
     const now = Date.now();
-    const slotSec = Math.floor(now / 300000) * 300; // Round to past 5m boundary in seconds
-    const targetSlotSec = slotSec + 300;           // Target next 5m boundary
+    const slotSec = Math.floor(now / 300000) * 300; 
     
-    // For BTC, use the btc-updown-5m prefix
     const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
-    return `${prefix}-${targetSlotSec}`;
+    return `${prefix}-${slotSec}`;
 }
 
 /**

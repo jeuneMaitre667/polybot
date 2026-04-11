@@ -8,6 +8,8 @@ import { PnLAnalyticsCard } from './PnLAnalyticsCard';
 import { LiveMarketView } from './LiveMarketView';
 import { BinanceChartCard } from './BinanceChartCard';
 
+import { SniperLaunchpad } from './SniperLaunchpad';
+
 export function BotOverview() {
   const statusUrl = DEFAULT_BOT_STATUS_URL; // Sniper specific
   const { data, loading } = useBotStatus(statusUrl, 1000);
@@ -67,7 +69,7 @@ export function BotOverview() {
         </div>
       </div>
 
-      {/* 2. HYBRID SNIPER COMMAND (Split Chart / Metrics) */}
+      {/* 2. HYBRID COMMAND (Main Metrics) */}
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-8">
         <div className="xl:col-span-3">
           <BinanceChartCard />

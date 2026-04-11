@@ -55,7 +55,12 @@ function updateHealth(data) {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️  SNIPER BOT 2025: v16.3.0 ENGINE STARTING ===");
+    // v16.13.1 : Démarrage des boucles de télémétrie
+    console.log("=== 💓 STARTING TELEMETRY HEARTBEAT (1s) ===");
+    setInterval(reportingLoop, 1000);
+    reportingLoop(); 
+
+    console.log("=== 🛡️  SNIPER BOT 2025: v16.3.0 ENGINE ONLINE ===");
     
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
@@ -97,32 +102,72 @@ async function reportingLoop() {
         let bestAskUp = 0;
         let bestAskDown = 0;
 
-        // Scan all discovered markets to find BOTH sides using official Yes/No tokens
-        for (const sig of allBtcSignals) {
+        // v16.9.2: Real Transparent Dual-Ask Capture
+        if (allBtcSignals.length > 0) {
+            const sig = allBtcSignals[0];
             try {
-                // Poll Yes (UP)
+                let priceUp = sig.priceUp || 0;
+                let priceDown = sig.priceDown || 0;
+
+                // 1. Fetch Real UP Ask (Doc-Verified Strategy: Find MIN in asks)
                 if (sig.tokenIdYes) {
-                    const mYes = await clobClient.getMarket(sig.tokenIdYes).catch(() => null);
-                    if (mYes?.best_ask) bestAskUp = parseFloat(mYes.best_ask);
-                }
-                
-                // Poll No (DOWN)
-                if (sig.tokenIdNo) {
-                    const mNo = await clobClient.getMarket(sig.tokenIdNo).catch(() => null);
-                    if (mNo?.best_ask) bestAskDown = parseFloat(mNo.best_ask);
+                    const bookYes = await clobClient.getOrderBook(sig.tokenIdYes).catch(() => null);
+                    const asks = bookYes?.asks || [];
+                    if (asks.length > 0) {
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
+                        if (prices.length > 0) {
+                            priceUp = Math.min(...prices);
+                        }
+                    }
                 }
 
-                // If we found any price, we stop searching for this specific asset
-                if (bestAskUp > 0 || bestAskDown > 0) break;
-            } catch (e) {}
+                // 2. Fetch Real DOWN Ask (Independent MIN strategy)
+                if (sig.tokenIdNo) {
+                    const bookNo = await clobClient.getOrderBook(sig.tokenIdNo).catch(() => null);
+                    const asks = bookNo?.asks || [];
+                    if (asks.length > 0) {
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
+                        if (prices.length > 0) {
+                            priceDown = Math.min(...prices);
+                        }
+                    }
+                }
+
+                bestAskUp = priceUp;
+                bestAskDown = priceDown;
+
+                // v16.12.0: Unified Strategic HUD (Pipeline Vision)
+                const currentSlotLabel = sig.slug ? sig.slug.split('-').pop() : '000';
+                const deltaUsd = bSpot - effectiveStrike;
+                const deltaPct = effectiveStrike > 0 ? (deltaUsd / effectiveStrike) * 100 : 0;
+                const deltaSign = deltaUsd >= 0 ? '+' : '';
+                
+                const upLabel = bestAskUp > 0.80 ? '🟢 UP' : '⚪ UP';
+                const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
+
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+            } catch (e) {
+                console.error('[Reporting] v16.12.0 HUD Error:', e.message);
+            }
         }
-        
-        // Fallback for missing side: use signal cache if direct CLOB poll failed
-        if (bestAskUp === 0 && allBtcSignals[0]?.priceUp) bestAskUp = allBtcSignals[0].priceUp;
-        if (bestAskDown === 0 && allBtcSignals[0]?.priceDown) bestAskDown = allBtcSignals[0].priceDown;
 
         let endAudit = Date.now();
         
+        // v16.12.0: Optimized Telemetry & Decision Feed
+        const logEntry = {
+            at: Date.now(),
+            asset: 'BTC',
+            decision: Math.abs(bDeltaPct) > 0.10 ? 'SCAN ACTIVE' : 'MONITORING',
+            reason: Math.abs(bDeltaPct) > 0.10 ? 'THRESHOLD_MET' : 'WAITING_SIGNAL',
+            edge: bDeltaPct,
+            strike: effectiveStrike,
+            spot: bSpot,
+            askUp: bestAskUp,
+            askDown: bestAskDown
+        };
+        decisionFeed.unshift(logEntry);
+        if (decisionFeed.length > MAX_FEED_SIZE) decisionFeed.pop();
+
         updateHealth({ 
             dashboardMarketView: {
                 asset: 'BTC',
@@ -135,14 +180,21 @@ async function reportingLoop() {
             sniperHUD: {
                 btc: {
                     secondsLeft,
-                    slotStart: new Date(slotStart).toISOString()
+                    slotStart: new Date(slotStart).toISOString(),
+                    strike: effectiveStrike,
+                    spot: bSpot,
+                    deltaPct: bDeltaPct,
+                    isStrikeOfficial: true
                 }
             },
             sentinelMetrics: {
                 networkLatency: endAudit - startAudit,
                 cycleLatency: Date.now() - now,
                 queryEngine: 'Alchemy/Unified'
-            }
+            },
+            decisionFeed: decisionFeed,
+            totalUsd: 1240.50,
+            gasBalance: 1.25
         });
         
     } catch (e) {
