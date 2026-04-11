@@ -32,6 +32,18 @@ export function startMonitoring(tokenId, buyPrice, side, stopLossPct, onTrigger)
 }
 
 /**
+ * Returns true if WebSocket is alive.
+ */
+export function isConnected() {
+    return ws && ws.readyState === WebSocket.OPEN;
+}
+
+// v17.6.0: Persistent Passive Connection
+setTimeout(() => {
+    if (!ws) initWebSocket();
+}, 2000);
+
+/**
  * Stop monitoring.
  */
 export function stopMonitoring() {

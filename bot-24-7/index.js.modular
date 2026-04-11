@@ -308,9 +308,11 @@ async function reportingLoop() {
                     strike: effectiveStrike,
                     spot: bSpot,
                     deltaPct: bDeltaPct,
-                    isStrikeOfficial: true
+                    isStrikeOfficial: !!bStrike
                 }
             },
+            currentSlot: slotStart,
+            wsConnected: SLSentinel.isConnected(),
             sentinelMetrics: {
                 networkLatency: endAudit - startAudit,
                 cycleLatency: Date.now() - now,

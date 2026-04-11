@@ -38,7 +38,7 @@ export function BotOverview() {
           <div className="space-y-1">
             <span className="text-[10px] text-white/20 uppercase font-black tracking-[0.2em]">Net Capital</span>
             <div className="text-3xl font-mono font-bold text-emerald-400 tracking-tighter">
-               {data?.totalUsd || data?.balanceUsd ? `$${Number(data.totalUsd || data.balanceUsd).toLocaleString(undefined, {minimumFractionDigits:2})}` : '---'}
+               {(data?.totalUsd ?? data?.balanceUsd ?? null) !== null ? `$${Number(data.totalUsd ?? data.balanceUsd).toLocaleString(undefined, {minimumFractionDigits:2})}` : '---'}
             </div>
           </div>
           <div className="h-12 w-[1px] bg-white/5" />
