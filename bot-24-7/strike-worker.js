@@ -52,27 +52,25 @@ export const runBoundaryCapture = async () => {
             }
         }
 
-        // Attente de sécurité (15s) pour laisser Polymarket publier le nouveau Strike via l'API Gamma (Rétrocompatibilité)
-        console.log('[Strike-Worker] ⏳ Waiting 15s for Polymarket API to populate strike...');
-        await new Promise(r => setTimeout(r, 15000));
-        
-        // ... (Reste de la logique Polymarket existante pour la continuité des données)
-        for (const asset of SUPPORTED_ASSETS) {
-            try {
-                const apiStrike = await fetchStrikeFromPolymarket(asset, targetSlotStartMs);
-                if (apiStrike != null) {
-                    console.log(`[Strike-Worker] 🏆 API SYNC SUCCESS for ${asset}: ${apiStrike}`);
-                    continue; 
+        // v17.21.0: Real-time sync (No more 15s wait)
+        // We fetch the AI/Gamma Strike in the background to avoid delaying the Binance pulse
+        (async () => {
+            for (const asset of SUPPORTED_ASSETS) {
+                try {
+                    const apiStrike = await fetchStrikeFromPolymarket(asset, targetSlotStartMs);
+                    if (apiStrike != null) {
+                        console.log(`[Strike-Worker] 🏆 API SYNC SUCCESS for ${asset}: ${apiStrike}`);
+                        continue; 
+                    }
+                    const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
+                    if (strikeData && strikeData.price) {
+                        saveStrike(asset, strikeData.price, targetSlotStartMs);
+                    }
+                } catch (err) {
+                    console.error(`[Strike-Worker] ❌ ERROR ${asset}:`, err.message);
                 }
-                // Fallback Chainlink
-                const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
-                if (strikeData && strikeData.price) {
-                    saveStrike(asset, strikeData.price, targetSlotStartMs);
-                }
-            } catch (err) {
-                console.error(`[Strike-Worker] ❌ ERROR ${asset}:`, err.message);
             }
-        }
+        })();
 
     } catch (e) {
         console.error('[Strike-Worker] 💀 CRITICAL:', e.message);

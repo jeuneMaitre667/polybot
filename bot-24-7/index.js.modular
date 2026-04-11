@@ -352,7 +352,6 @@ async function mainLoop() {
         if (!mv) return;
 
         if (Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
-            // No log here to keep console clean, PIPELINE line already shows delta
             return;
         }
 
