@@ -49,7 +49,7 @@ const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
 const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
 const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
 
-const HEALTH_FILE = path.join(process.cwd(), 'health.json');
+const HEALTH_FILE = path.join(process.cwd(), 'health-v17.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';

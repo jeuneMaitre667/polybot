@@ -253,58 +253,15 @@ function getStats24h() {
   };
 }
 
-/** Lit health.json (écrit par le bot : WS, dernier ordre, geoblock, kill switch). */
+/** Lit health-v17.json (isolé v17) écrit par le bot. */
 function getHealth() {
-  const o = readJsonFile(path.join(BOT_DIR, 'health.json'));
+  const o = readJsonFile(path.join(BOT_DIR, 'health-v17.json'));
   if (!o || typeof o !== 'object') return null;
+  
+  // Return EVERYTHING to avoid gatekeeping bugs
   return {
-    wsConnected: !!o.wsConnected,
-    wsLastChangeAt: o.wsLastChangeAt ?? null,
-    wsLastConnectedAt: o.wsLastConnectedAt ?? null,
-    wsLastBidAskAt: o.wsLastBidAskAt ?? null,
-    lastOrderAt: o.lastOrderAt ?? null,
-    lastOrderSource: o.lastOrderSource ?? null,
-    geoblockOk: o.geoblockOk,
-    // v4.1.4 Visual Quant Engine
-    parkinsonVol: o.parkinsonVol ?? null,
-    realizedVol60m: o.realizedVol60m ?? null,
-    strikeLocked: !!o.strikeLocked,
-    currentSlot: o.currentSlot ?? null,
-    lastNetEdge: o.lastNetEdge ?? null,
-    killSwitchActive: !!o.killSwitchActive,
-    polymarketDegraded: !!o.polymarketDegraded,
-    degradedReason: o.degradedReason ?? null,
-    degradedUntil: o.degradedUntil ?? null,
-    staleWsData: !!o.staleWsData,
-    staleWsDataAt: o.staleWsDataAt ?? null,
-    executionDelayed: !!o.executionDelayed,
-    executionDelayedAt: o.executionDelayedAt ?? null,
-    lastSkipReason: o.lastSkipReason ?? null,
-    lastSkipSource: o.lastSkipSource ?? null,
-    lastSkipAt: o.lastSkipAt ?? null,
-    lastSkipDetails: o.lastSkipDetails ?? null,
-    lastTimingForbiddenSkip: o.lastTimingForbiddenSkip ?? null,
-    lastRateLimitInfo: o.lastRateLimitInfo ?? null, // v5.3.0 (Blindage 2026)
-    last425ErrorAt: o.last425ErrorAt ?? null,
-    isMaintenance: !!o.isMaintenance,
-    perpSources: o.perpSources ?? null,
-    pythSources: o.pythSources ?? null, // v5.6.3 (Alchemy Visibility)
-    uptimeStart: o.uptimeStart ?? null, // v5.6.3 (Bot Uptime)
-    kellyFraction: o.kellyFraction ?? null, // v5.6.3 (Risk)
-    availableCapital: o.availableCapital ?? null, // v5.6.3 (Bankroll)
-    at: o.at ?? null,
-    timestamp: o.timestamp ?? null,
-    assetStates: o.assetStates ?? null,
-    secondsLeftInSlot: o.secondsLeftInSlot ?? null,
-    sniperFilterAudit: o.sniperFilterAudit ?? null,
-    performance: o.performance ?? null,
-    equityHistory: o.equityHistory ?? [],
-    balance: o.balance ?? null,
-    sniperHUD: o.sniperHUD ?? null,
-    totalUsd: o.totalUsd ?? null,
-    dashboardMarketView: o.dashboardMarketView ?? null, // v17.8.0 Missing Key
-    version: o.version ?? null, // v17.8.0 Missing Key
-    balanceUsd: o.balanceUsd ?? null,
+    ...o,
+    wsConnected: !!o.wsConnected, // Enforce boolean for old indicator logic
   };
 }
 
