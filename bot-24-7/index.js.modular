@@ -39,7 +39,14 @@ process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0);
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
 
 // --- CONFIG ---
-const SNIPER_DELTA_THRESHOLD_PCT = 0.08; 
+// --- STRATEGY PARAMETERS (v16.20.3: Env-Driven) ---
+const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.08"); 
+const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
+const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
+const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
+const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
+const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
+
 const HEALTH_FILE = path.join(process.cwd(), 'health.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
@@ -51,6 +58,7 @@ const CTF_ABI = [
 ];
 
 // --- STATE ---
+let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
 let lastExecutedCid = null;
 let lastResolvedCids = new Set(); // Track resolved markets to avoid double alerts
 let lastDigestDate = ''; // YYYY-MM-DD
@@ -292,12 +300,16 @@ async function mainLoop() {
         const now = Date.now();
         const slotStart = Math.floor(now / 300000) * 300000;
         
-        // 1. Position Lock (1 max per slot)
-        if (activePosition && activePosition.slotStart === slotStart) return;
+        // 1. Slot Lock (1 trigger max per 5m slot - Anti-Spam Fix v16.20.4)
+        if (lastExecutedSlot === slotStart) return;
+        if (activePosition && activePosition.slotStart === slotStart) {
+            lastExecutedSlot = slotStart; // Safety sync
+            return;
+        }
 
-        // 2. Timing Check (Strategic Window: T-90s to T-30s)
+        // 2. Timing Check (Dynamic Window: T-start to T-end)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        if (secondsLeft < 30 || secondsLeft > 90) return; 
+        if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) return; 
 
         // 3. Signal Detection
         const mv = memoryHealth.dashboardMarketView;
@@ -306,11 +318,11 @@ async function mainLoop() {
         const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
         const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
         
-        // v16.17.1: Strategic Price Filter (0.87$ - 0.97$)
-        if (!bestAsk || bestAsk < 0.87 || bestAsk > 0.97) return;
+        // v16.17.1: Dynamic Price Filter
+        if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) return;
 
         // 4. Risk & Collateral
-        const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 100); 
+        const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
         await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
 
         // 5. Execution
@@ -327,6 +339,16 @@ async function mainLoop() {
         }
 
         const quantity = Math.floor(tradeAmountUsd / bestAsk);
+        
+        // Mark slot as processed (Anti-Spam)
+        lastExecutedSlot = slotStart;
+
+        if (IS_SIMULATION_ENABLED) {
+            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk}`);
+            sendTelegramAlert(`🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n(Mode démo actif, aucun fonds engagé)`);
+            return;
+        }
+
         const order = await clobClient.createOrder({
             token_id: tokenId,
             price: bestAsk + 0.005, // Buffer to ensure fill
