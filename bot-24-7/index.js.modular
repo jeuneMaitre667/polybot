@@ -67,6 +67,8 @@ let clobClient = null;
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
 let userBalance = 0;
+let maticBalance = 0; // v16.21.0: Real Gas Monitoring
+let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
@@ -106,7 +108,7 @@ async function init() {
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
 
-    const wallet = new ethers.Wallet(privateKey);
+    wallet = new ethers.Wallet(privateKey);
     clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
         funderAddress: process.env.CLOB_FUNDER_ADDRESS
     });
@@ -142,10 +144,22 @@ async function reportingLoop() {
         try {
             const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
             const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-            const balRaw = await usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address);
-            userBalance = parseFloat(ethers.formatUnits(balRaw, 6));
+            
+            // v16.21.0: Dual Balance Fetch (Signer MATIC + Funder USDC)
+            const [usdcRaw, maticRaw] = await Promise.all([
+                usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address),
+                provider.getBalance(wallet.address)
+            ]);
+
+            userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
+            maticBalance = parseFloat(ethers.formatEther(maticRaw));
+
+            // Low Gas Alert (v16.21.0)
+            if (maticBalance < 1.0 && now % 300000 < 3000) { // Every 5 min if low
+                sendTelegramAlert(`⚠️ *ALERT GAS FAIBLE*\nSolde MATIC : ${maticBalance.toFixed(4)}\nPrévoyez une recharge pour assurer les rachat de gains (Redeems).`);
+            }
         } catch (err) {
-            console.error('[Reporting] Balance chain fetch error:', err.message);
+            console.error('[Reporting] Multi-balance fetch error:', err.message);
         }
 
         // 1. Get Binance Context
@@ -287,7 +301,7 @@ async function reportingLoop() {
                 queryEngine: 'Alchemy/Unified'
             },
             decisionFeed: decisionFeed,
-            gasBalance: 1.25
+            gasBalance: maticBalance.toFixed(4)
         });
         
     } catch (e) {
@@ -309,17 +323,30 @@ async function mainLoop() {
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) return; 
+        if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
+            if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
+                console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);
+            }
+            return; 
+        }
 
         // 3. Signal Detection
         const mv = memoryHealth.dashboardMarketView;
-        if (!mv || Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) return;
+        if (!mv) return;
+
+        if (Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
+            // No log here to keep console clean, PIPELINE line already shows delta
+            return;
+        }
 
         const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
         const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
         
         // v16.17.1: Dynamic Price Filter
-        if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) return;
+        if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
+            console.warn(`[Engine] Skip: Price outside range ($${bestAsk} for ${side})`);
+            return;
+        }
 
         // 4. Risk & Collateral
         const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
