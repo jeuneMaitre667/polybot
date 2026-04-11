@@ -50,9 +50,9 @@ export function BotOverview() {
           </div>
           <div className="h-12 w-[1px] bg-white/5" />
           <div className="space-y-1">
-            <span className="text-[10px] text-white/20 uppercase font-black tracking-[0.2em]">Strategy Mode</span>
-            <div className="text-xl font-mono font-bold text-blue-400">
-               GASLESS <span className="text-[10px] opacity-40">RELAYER</span>
+            <span className="text-[10px] text-white/20 uppercase font-black tracking-[0.2em]">Strike Sync</span>
+            <div className={`text-xl font-mono font-bold ${data?.sniperHUD?.btc?.isStrikeOfficial ? 'text-emerald-400' : 'text-amber-500 animate-pulse'}`}>
+               {data?.sniperHUD?.btc?.isStrikeOfficial ? 'LOCKED' : 'SYNCING...'}
             </div>
           </div>
         </div>
