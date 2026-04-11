@@ -19,7 +19,6 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 import { SUPPORTED_ASSETS, MARKET_MODE } from './config.js';
 import { startStrikeWorker } from './strike-worker.js';
 import { fetchSignals, getSignalKey } from './signal-engine.js';
-import { isSlotEntryTimeForbiddenNow, getSlotEntryTimingDetail } from './entryTiming.js';
 import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
@@ -58,12 +57,7 @@ function updateHealth(data) {
 
 // --- INITIALIZATION ---
 async function init() {
-    // v16.13.1 : Démarrage des boucles de télémétrie
-    console.log("=== 💓 STARTING TELEMETRY HEARTBEAT (1s) ===");
-    setInterval(reportingLoop, 1000);
-    reportingLoop(); 
-
-    console.log("=== 🛡️  SNIPER BOT 2025: v16.3.0 ENGINE ONLINE ===");
+    console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
     
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
@@ -71,17 +65,19 @@ async function init() {
     const wallet = new ethers.Wallet(privateKey);
     clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet);
     
-    console.log(`[Init] Wallet: ${wallet.address} - v16.3.0 READY`);
+    console.log(`[Init] Wallet: ${wallet.address} - READY`);
 
     startStrikeWorker();
     
+    // Core Operational Loops (1Hz)
     setInterval(mainLoop, 1000);
-    setInterval(reportingLoop, 1000); // 1Hz Pulse
+    setInterval(reportingLoop, 1000);
     
-    console.log("[Init] Reporting Pulse (1Hz) & Loops connected");
+    reportingLoop(); // Initial pulse
     
     // v16.16.0: Initialize Risk Baseline
     RiskManager.initSession(memoryHealth.totalUsd || 0);
+    console.log("[Init] All systems synchronized.");
 }
 
 async function reportingLoop() {
@@ -219,7 +215,6 @@ async function reportingLoop() {
                 queryEngine: 'Alchemy/Unified'
             },
             decisionFeed: decisionFeed,
-            totalUsd: 1240.50,
             gasBalance: 1.25
         });
         
