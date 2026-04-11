@@ -30,7 +30,7 @@ process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0);
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
 
 // --- CONFIG ---
-const SNIPER_DELTA_THRESHOLD_PCT = 0.10; 
+const SNIPER_DELTA_THRESHOLD_PCT = 0.08; 
 const HEALTH_FILE = path.join(process.cwd(), 'health.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
@@ -236,9 +236,9 @@ async function mainLoop() {
         // 1. Position Lock (1 max per slot)
         if (activePosition && activePosition.slotStart === slotStart) return;
 
-        // 2. Timing Check (Authorization Window)
+        // 2. Timing Check (Strategic Window: T-60s to T-20s)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        if (secondsLeft < 15 || secondsLeft > 280) return; // Standard window
+        if (secondsLeft < 20 || secondsLeft > 60) return; 
 
         // 3. Signal Detection
         const mv = memoryHealth.dashboardMarketView;
@@ -247,7 +247,8 @@ async function mainLoop() {
         const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
         const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
         
-        if (!bestAsk || bestAsk === 0) return;
+        // v16.17.1: Strategic Price Filter (0.87$ - 0.97$)
+        if (!bestAsk || bestAsk < 0.87 || bestAsk > 0.97) return;
 
         // 4. Risk & Collateral
         const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 100); 
