@@ -179,35 +179,37 @@ async function reportingLoop() {
         if (allBtcSignals.length > 0) {
             const sig = allBtcSignals[0];
             try {
-                let priceUp = sig.priceUp || 0;
-                let priceDown = sig.priceDown || 0;
+                let priceUp = 0;
+                let priceDown = 0;
 
-                // 1. Fetch Real UP Ask (Doc-Verified Strategy: Find MIN in asks)
+                // 1. Fetch Real UP Ask
                 if (sig.tokenIdYes) {
                     const bookYes = await clobClient.getOrderBook(sig.tokenIdYes).catch(() => null);
                     const asks = bookYes?.asks || [];
                     if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
-                        if (prices.length > 0) {
-                            priceUp = Math.min(...prices);
-                        }
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                        if (prices.length > 0) priceUp = Math.min(...prices);
                     }
                 }
 
-                // 2. Fetch Real DOWN Ask (Independent MIN strategy)
+                // 2. Fetch Real DOWN Ask
                 if (sig.tokenIdNo) {
                     const bookNo = await clobClient.getOrderBook(sig.tokenIdNo).catch(() => null);
                     const asks = bookNo?.asks || [];
                     if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
-                        if (prices.length > 0) {
-                            priceDown = Math.min(...prices);
-                        }
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                        if (prices.length > 0) priceDown = Math.min(...prices);
                     }
                 }
 
-                bestAskUp = priceUp;
-                bestAskDown = priceDown;
+                // v17.3.5: Extreme Price Calibration (Cross-Inference)
+                // If one side has 0 liquidity but the other is extremely cheap, infer the expensive side
+                if (priceUp > 0 && priceUp < 0.05 && priceDown === 0) priceDown = 0.99;
+                if (priceDown > 0 && priceDown < 0.05 && priceUp === 0) priceUp = 0.99;
+                
+                // Final fallback only if both are empty (unlikely during active slot)
+                bestAskUp = priceUp || sig.priceUp || 0.5;
+                bestAskDown = priceDown || sig.priceDown || 0.5;
 
                 // v16.16.0: Active Stop Loss Monitoring
                 if (activePosition && activePosition.slotStart === slotStart) {
