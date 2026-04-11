@@ -94,7 +94,7 @@ export function LiveMarketView({ data }) {
           <div className="text-[clamp(1.5rem,8vw,3.5rem)] font-mono font-black text-emerald-400 leading-none tracking-tighter py-2">
             {mv.bestAskUp ? (mv.bestAskUp * 100).toFixed(1) : '—'}<span className="text-xl text-emerald-500/40">¢</span>
           </div>
-          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString()}</div>
+          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
         </div>
 
         {/* Market DOWN */}
@@ -108,7 +108,7 @@ export function LiveMarketView({ data }) {
           <div className="text-[clamp(1.5rem,8vw,3.5rem)] font-mono font-black text-rose-400 leading-none tracking-tighter py-2">
             {mv.bestAskDown ? (mv.bestAskDown * 100).toFixed(1) : '—'}<span className="text-xl text-rose-500/40">¢</span>
           </div>
-          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString()}</div>
+          <div className="text-[9px] font-bold text-white/20 uppercase tracking-widest">Strike: ${Number(mv.binanceStrike).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
         </div>
       </div>
 

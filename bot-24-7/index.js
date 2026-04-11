@@ -91,8 +91,8 @@ async function reportingLoop() {
         const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
         const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
         
-        // v16.3.1: Precision Strike rounding for market lookup
-        const effectiveStrike = bStrike ? Math.round(bStrike) : Math.round(bSpot);
+        // v16.14.2: Restore decimals for Strategic HUD precision
+        const effectiveStrike = bStrike ? bStrike : bSpot;
         const bDeltaPct = effectiveStrike > 0 ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
         
         // 2. AGGRESSIVE DUAL DISCOVERY (v16.3.1)
