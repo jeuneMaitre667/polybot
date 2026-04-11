@@ -3,16 +3,15 @@ import { TrendingUp, TrendingDown, Target, BarChart3, Activity } from 'lucide-re
 import { cn } from '@/lib/utils';
 
 export function PnLAnalyticsCard({ performance }) {
-  const { netProfit, winRatePct, totalVolume, tradeCount, profitFactor, avgWin, avgLoss, updatedAt } = performance || {
-    netProfit: 0,
-    winRatePct: 0,
-    totalVolume: 0,
-    tradeCount: 0,
-    profitFactor: 0,
-    avgWin: 0,
-    avgLoss: 0,
-    updatedAt: new Date().toISOString()
-  };
+  const p = performance || {};
+  const netProfit = p.netProfit || 0;
+  const winRatePct = p.winRatePct || 0;
+  const totalVolume = p.totalVolume || 0;
+  const tradeCount = p.tradeCount || 0;
+  const profitFactor = p.profitFactor || 0;
+  const avgWin = p.avgWin || 0;
+  const avgLoss = p.avgLoss || 0;
+  const updatedAt = p.updatedAt || new Date().toISOString();
 
   const isProfitable = netProfit >= 0;
   
@@ -48,7 +47,7 @@ export function PnLAnalyticsCard({ performance }) {
             </div>
             <div className="flex items-baseline gap-2 overflow-hidden">
               <span className={cn("text-2xl 2xl:text-4xl font-black font-mono tracking-tighter transition-all truncate", isProfitable ? "text-green-400" : "text-red-400")}>
-                {isProfitable ? '+' : ''}{netProfit.toFixed(2)}
+                {isProfitable ? '+' : ''}{(netProfit || 0).toFixed(2)}
               </span>
               <span className="text-[10px] 2xl:text-xs font-mono text-white/20 uppercase shrink-0">USDC</span>
             </div>

@@ -64,7 +64,7 @@ export function LiveMarketView({ data }) {
         {/* Signal Hub */}
         <div className={`relative overflow-hidden border rounded-3xl p-6 transition-all duration-500 ${isTriggered ? 'bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_40px_rgba(16,185,129,0.1)]' : 'bg-white/[0.02] border-white/5'}`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Signal Delta ({threshold.toFixed(2)}%)</span>
+            <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Signal Delta ({(threshold || 0).toFixed(2)}%)</span>
             {isTriggered ? <CheckCircle2 size={16} className="text-emerald-500" /> : <XCircle size={16} className="text-white/10" />}
           </div>
           <div className="flex items-baseline gap-2 overflow-hidden">
@@ -73,7 +73,7 @@ export function LiveMarketView({ data }) {
             </div>
           </div>
           <div className={`mt-2 text-[10px] font-bold uppercase tracking-widest ${isTriggered ? 'text-emerald-400' : 'text-white/20'}`}>
-            Variation: {isUp ? '+' : ''}{mv.binanceDeltaPct.toFixed(3)}%
+            Variation: {isUp ? '+' : ''}{(mv?.binanceDeltaPct || 0).toFixed(3)}%
           </div>
         </div>
 
@@ -138,17 +138,17 @@ export function LiveMarketView({ data }) {
         <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
            <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Delta USD</span>
            <span className={`text-sm font-mono font-bold truncate ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
-             ${Math.abs(deltaAbs).toFixed(2)}
+             ${Math.abs(deltaAbs || 0).toFixed(2)}
            </span>
         </div>
         <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
            <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Threshold</span>
-           <span className="text-sm font-mono font-bold text-white/40 truncate">${(mv.binanceStrike * 0.001).toFixed(2)}</span>
+           <span className="text-sm font-mono font-bold text-white/40 truncate">${((mv?.binanceStrike || 0) * 0.001).toFixed(2)}</span>
         </div>
         <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
            <span className="text-[8px] font-black text-white/20 uppercase tracking-widest block mb-1">Variation</span>
            <span className={`text-sm font-mono font-bold truncate ${isUp ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
-             {isUp ? '+' : ''}{mv.binanceDeltaPct.toFixed(3)}%
+             {isUp ? '+' : ''}{(mv?.binanceDeltaPct || 0).toFixed(3)}%
            </span>
         </div>
       </div>

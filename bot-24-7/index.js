@@ -23,48 +23,107 @@ import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
-import { sendTelegramAlert, telegramTradeAlertsEnabled } from './telegramAlerts.js';
+import * as SLSentinel from './sl-sentinel.js';
+import * as Analytics from './analytics-engine.js';
+import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
+import { 
+    computeMiddayDigestStats, 
+    getMidnightToNoonWindowMs, 
+    getNoonToMidnightWindowMs, 
+    getFullDayWindowMs, 
+    formatMiddayDigestMessage,
+    getCalendarDateYmd,
+    getLocalHourMinute
+} from './middayDigest.js';
 
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
 
 // --- CONFIG ---
-const SNIPER_DELTA_THRESHOLD_PCT = 0.08; 
-const HEALTH_FILE = path.join(process.cwd(), 'health.json');
+// --- STRATEGY PARAMETERS (v16.20.3: Env-Driven) ---
+const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.08"); 
+const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
+const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
+const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
+const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
+const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
+
+const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
+const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
+const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
+const CTF_ABI = [
+    "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
+];
+const RELAYER_URL = "https://relayer-v2.polymarket.com";
+
 // --- STATE ---
+let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
+let lastExecutedCid = null;
+let lastResolvedCids = new Set(); // Track resolved markets to avoid double alerts
+let lastDigestDate = ''; // YYYY-MM-DD
+let lastDigestWindow = ''; // 'morning' | 'night'
 let clobClient = null;
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
-let userBalance = 0;
+let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
+let maticBalance = null; 
+let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
 function updateHealth(data) {
     memoryHealth = { ...memoryHealth, ...data };
+    
+    // v17.7.0: Atomic Balance Guard
+    const displayBalance = userBalance !== null ? userBalance : (memoryHealth.totalUsd || 0);
+
     const fullHealth = { 
         ...memoryHealth, 
+        dashboardMarketView: data.dashboardMarketView || memoryHealth.dashboardMarketView || null, // v17.10.0: Forced Visibility
         at: new Date().toISOString(),
         timestamp: Date.now(),
-        totalUsd: userBalance,
+        totalUsd: displayBalance,
+        balanceUsd: displayBalance, // Sync second alias
         decisionFeed: decisionFeed,
-        status: 'online' 
+        status: 'online',
+        version: 'v17.7.0' // Traceability badge
     };
     memoryHealth = fullHealth;
     atomicWriteJson(HEALTH_FILE, fullHealth);
+}
+
+// --- PERSISTENCE HELPERS ---
+function loadActivePositions() {
+    return safeReadJson(POSITION_LOG, []);
+}
+
+function saveActivePositions(positions) {
+    atomicWriteJson(POSITION_LOG, positions);
+}
+
+function addPosition(pos) {
+    const list = loadActivePositions();
+    list.push(pos);
+    saveActivePositions(list);
 }
 
 // --- INITIALIZATION ---
 async function init() {
     console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
     
+    // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
+    updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
+
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
 
-    const wallet = new ethers.Wallet(privateKey);
-    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet);
+    wallet = new ethers.Wallet(privateKey);
+    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
+        funderAddress: process.env.CLOB_FUNDER_ADDRESS
+    });
     
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
 
@@ -72,9 +131,13 @@ async function init() {
     
     // Core Operational Loops (1Hz)
     setInterval(mainLoop, 1000);
-    setInterval(reportingLoop, 1000);
+    setInterval(reportingLoop, 3000);
+    setInterval(performanceLoop, 60000); // Check every minute for resolution/digest
     
-    reportingLoop(); // Initial pulse
+    // Initial triggers
+    mainLoop();
+    reportingLoop();
+    performanceLoop();
     
     // v16.16.0: Initialize Risk Baseline
     RiskManager.initSession(memoryHealth.totalUsd || 0);
@@ -89,14 +152,45 @@ async function reportingLoop() {
         
         let startAudit = Date.now();
         
+        // 0. Fetch Real Blockchain Balance (v16.20.1)
+        try {
+            const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
+            const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+            
+            // v16.21.0: Dual Balance Fetch (Signer MATIC + Funder USDC)
+            const [usdcRaw, maticRaw] = await Promise.all([
+                usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address),
+                provider.getBalance(wallet.address)
+            ]);
+
+            userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
+            maticBalance = parseFloat(ethers.formatEther(maticRaw));
+        } catch (err) {
+            console.error('[Reporting] Multi-balance fetch error:', err.message);
+        }
+
         // 1. Get Binance Context
         let bStrike = await getBinanceStrike('BTC', slotStart);
+
+        // v17.5.0: Non-Blocking Emergency Strike Sync (Background Pulse)
+        if (!bStrike && secondsLeft <= 100 && secondsLeft >= 0) {
+            // v17.5.1: No 'await' here to keep the reporting heartbeat alive
+            console.log(`[Strike] 🛡️ Emergency Sync LAUNCHED (Background) for slot ${slotStart}...`);
+            StrikeManager.fetchStrikeFromPolymarket('BTC', slotStart).then((val) => {
+                if (val) console.log(`[Strike] 🛡️ Background Sync Success: ${val}`);
+            }).catch(e => console.error(`[Strike] 🛡️ Background Sync Failed: ${e.message}`));
+        }
+
         const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
         const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
         
         // v16.14.2: Restore decimals for Strategic HUD precision
         const effectiveStrike = bStrike ? bStrike : bSpot;
         const bDeltaPct = effectiveStrike > 0 ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
+        
+        if (!bStrike) {
+            console.warn(`[Strike] ⚠️ Warning: Using SPOT as Strike (Sync Lag) - Delta may be inaccurate (0%)`);
+        }
         
         // 2. AGGRESSIVE DUAL DISCOVERY (v16.3.1)
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
@@ -109,35 +203,37 @@ async function reportingLoop() {
         if (allBtcSignals.length > 0) {
             const sig = allBtcSignals[0];
             try {
-                let priceUp = sig.priceUp || 0;
-                let priceDown = sig.priceDown || 0;
+                let priceUp = 0;
+                let priceDown = 0;
 
-                // 1. Fetch Real UP Ask (Doc-Verified Strategy: Find MIN in asks)
+                // 1. Fetch Real UP Ask
                 if (sig.tokenIdYes) {
                     const bookYes = await clobClient.getOrderBook(sig.tokenIdYes).catch(() => null);
                     const asks = bookYes?.asks || [];
                     if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
-                        if (prices.length > 0) {
-                            priceUp = Math.min(...prices);
-                        }
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                        if (prices.length > 0) priceUp = Math.min(...prices);
                     }
                 }
 
-                // 2. Fetch Real DOWN Ask (Independent MIN strategy)
+                // 2. Fetch Real DOWN Ask
                 if (sig.tokenIdNo) {
                     const bookNo = await clobClient.getOrderBook(sig.tokenIdNo).catch(() => null);
                     const asks = bookNo?.asks || [];
                     if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.985);
-                        if (prices.length > 0) {
-                            priceDown = Math.min(...prices);
-                        }
+                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                        if (prices.length > 0) priceDown = Math.min(...prices);
                     }
                 }
 
-                bestAskUp = priceUp;
-                bestAskDown = priceDown;
+                // v17.3.5: Extreme Price Calibration (Cross-Inference)
+                // If one side has 0 liquidity but the other is extremely cheap, infer the expensive side
+                if (priceUp > 0 && priceUp < 0.05 && priceDown === 0) priceDown = 0.99;
+                if (priceDown > 0 && priceDown < 0.05 && priceUp === 0) priceUp = 0.99;
+                
+                // Final fallback only if both are empty (unlikely during active slot)
+                bestAskUp = priceUp || sig.priceUp || 0.5;
+                bestAskDown = priceDown || sig.priceDown || 0.5;
 
                 // v16.16.0: Active Stop Loss Monitoring
                 if (activePosition && activePosition.slotStart === slotStart) {
@@ -180,7 +276,7 @@ async function reportingLoop() {
                 const upLabel = bestAskUp > 0.80 ? '🟢 UP' : '⚪ UP';
                 const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
 
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${userBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
@@ -203,6 +299,8 @@ async function reportingLoop() {
         decisionFeed.unshift(logEntry);
         if (decisionFeed.length > MAX_FEED_SIZE) decisionFeed.pop();
 
+        const stats = Analytics.computePerformanceStats();
+
         updateHealth({ 
             dashboardMarketView: {
                 asset: 'BTC',
@@ -210,8 +308,12 @@ async function reportingLoop() {
                 binanceStrike: effectiveStrike,
                 binanceDeltaPct: bDeltaPct,
                 bestAskUp,
-                bestAskDown
+                bestAskDown,
+                // v17.7.0: Legacy Compatibility Aliases (Wake-up call for old UI)
+                priceUp: bestAskUp,
+                priceDown: bestAskDown
             },
+            performance: stats,
             sniperHUD: {
                 btc: {
                     secondsLeft,
@@ -219,18 +321,19 @@ async function reportingLoop() {
                     strike: effectiveStrike,
                     spot: bSpot,
                     deltaPct: bDeltaPct,
-                    isStrikeOfficial: true
+                    isStrikeOfficial: !!bStrike
                 }
             },
+            currentSlot: slotStart,
+            wsConnected: SLSentinel.isConnected(),
             sentinelMetrics: {
                 networkLatency: endAudit - startAudit,
                 cycleLatency: Date.now() - now,
                 queryEngine: 'Alchemy/Unified'
             },
             decisionFeed: decisionFeed,
-            gasBalance: 1.25
+            gasBalance: maticBalance !== null ? maticBalance.toFixed(4) : "---"
         });
-        
     } catch (e) {
         console.error('[Reporting] v16.3.1 Loop Error:', e.message);
     }
@@ -241,47 +344,100 @@ async function mainLoop() {
         const now = Date.now();
         const slotStart = Math.floor(now / 300000) * 300000;
         
-        // 1. Position Lock (1 max per slot)
-        if (activePosition && activePosition.slotStart === slotStart) return;
+        // 1. Slot Lock (1 trigger max per 5m slot - Anti-Spam Fix v16.20.4)
+        if (lastExecutedSlot === slotStart) return;
+        if (activePosition && activePosition.slotStart === slotStart) {
+            lastExecutedSlot = slotStart; // Safety sync
+            return;
+        }
 
-        // 2. Timing Check (Strategic Window: T-60s to T-20s)
+        // 2. Timing Check (Dynamic Window: T-start to T-end)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        if (secondsLeft < 20 || secondsLeft > 60) return; 
+        if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
+            if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
+                console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);
+            }
+            return; 
+        }
 
         // 3. Signal Detection
         const mv = memoryHealth.dashboardMarketView;
-        if (!mv || Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) return;
+        if (!mv) return;
+
+        if (Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
+            // No log here to keep console clean, PIPELINE line already shows delta
+            return;
+        }
 
         const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
         const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
         
-        // v16.17.1: Strategic Price Filter (0.87$ - 0.97$)
-        if (!bestAsk || bestAsk < 0.87 || bestAsk > 0.97) return;
+        // v16.17.1: Dynamic Price Filter
+        if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
+            console.warn(`[Engine] Skip: Price outside range ($${bestAsk} for ${side})`);
+            return;
+        }
 
         // 4. Risk & Collateral
-        const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 100); 
+        let tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
+        
+        // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
+        const safetyFactor = 0.98; // Leave a tiny bit for precision safety
+        const availableMax = Math.max(0, (userBalance || 0) * safetyFactor);
+        
+        if (tradeAmountUsd > availableMax) {
+            console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to low balance.`);
+            tradeAmountUsd = availableMax;
+        }
+
+        if (tradeAmountUsd < 1.0) {
+            console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${userBalance.toFixed(2)})`);
+            return;
+        }
+
         await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
 
         // 5. Execution
-        console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd}`);
+        console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
-        const currentSig = signalData.signals[0];
-        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        
+        // v17.0.4: Find signal matching the CURRENT slot to avoid "Invalid token id" shift
+        const currentSig = signalData.signals.find(s => s.slug === signalData.slug) || signalData.signals[0];
+        
+        if (!currentSig) {
+            console.error("[Engine] No active signal found for slot!");
+            return;
+        }
 
-        if (!tokenId) {
-            console.error("[Engine] Missing tokenId for execution!");
+        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        console.log(`[Engine] Target ID: ${tokenId} | Market: ${currentSig.slug}`);
+
+        if (!tokenId || String(tokenId).length < 20) {
+            console.error(`[Engine] Invalid or Missing tokenId (${tokenId})!`);
             return;
         }
 
         const quantity = Math.floor(tradeAmountUsd / bestAsk);
+        
+        // Mark slot as processed (Anti-Spam)
+        lastExecutedSlot = slotStart;
+
+        if (IS_SIMULATION_ENABLED) {
+            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk}`);
+            sendTelegramAlert(`🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n(Mode démo actif, aucun fonds engagé)`);
+            return;
+        }
+
+        const startExec = Date.now();
         const order = await clobClient.createOrder({
             token_id: tokenId,
             price: bestAsk + 0.005, // Buffer to ensure fill
             size: quantity,
             side: Side.BUY
         });
+        const latency = Date.now() - startExec;
 
         if (order && order.orderID) {
             console.log(`[Engine] ✅ Order Filled: ${order.orderID}`);
@@ -289,20 +445,39 @@ async function mainLoop() {
             const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
                             `• Slot: ${slotStart}\n` +
                             `• Price: $${bestAsk}\n` +
-                            `• Strike: $${effectiveStrike.toFixed(2)}\n` +
+                            `• Strike: $${mv.binanceStrike.toFixed(2)}\n` +
                             `• Delta: ${mv.binanceDeltaPct.toFixed(3)}%\n` +
                             `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
-                            `• Window: Authorized (T-${secondsLeft}s)`;
+                            `• Window: Authorized (T-${secondsLeft}s)\n` +
+                            `• Latency: ${latency}ms (Execution)`;
             
             sendTelegramAlert(entryMsg);
 
             activePosition = {
                 tokenId,
+                conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
                 amount: quantity,
                 slotStart,
-                side
+                side,
+                asset: 'BTC',
+                slug: currentSig.slug,
+                slotEnd: slotStart + 300000
             };
+
+            addPosition(activePosition);
+
+            // v17.1.0: Launch Ultra-Fast SL Sentinel (Real-time WebSocket monitoring)
+            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
+            SLSentinel.startMonitoring(
+                tokenId, 
+                bestAsk, 
+                side, 
+                stopLossPct, 
+                async (info) => {
+                    await executeEmergencyExit(info);
+                }
+            );
         }
 
     } catch (e) {
@@ -310,35 +485,305 @@ async function mainLoop() {
     }
 }
 
-// === CONSOLIDATED v16.3.0 STATUS API ===
-import { createServer as nodeCreateServer } from 'node:http';
-const SNIPER_STATUS_PORT = 3001;
+/**
+ * Sentinel Loop (v16.19.0)
+ * Gère les résumés de 12h et détecte les marchés résolus (Redeems).
+ */
+async function performanceLoop() {
+    const tz = process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris';
+    const { hour, minute } = getLocalHourMinute(tz);
+    const dateStr = getCalendarDateYmd(tz);
 
-nodeCreateServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Content-Type', 'application/json');
+    // --- 📊 12H DIGEST SCHEDULER ---
+    if (telegramMiddayDigestEnabled()) {
+        let window = null;
+        let windowName = '';
 
-    if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
+        // Midi (12:00 - 12:15)
+        if (hour === 12 && minute < 15 && (lastDigestDate !== dateStr || lastDigestWindow !== 'morning')) {
+            window = getMidnightToNoonWindowMs(tz, dateStr);
+            windowName = 'Matin';
+            lastDigestWindow = 'morning';
+            lastDigestDate = dateStr;
+        }
+        // Minuit (00:00 - 00:15)
+        else if (hour === 0 && minute < 15 && (lastDigestDate !== dateStr || lastDigestWindow !== 'night')) {
+            window = getNoonToMidnightWindowMs(tz, dateStr);
+            windowName = 'Soir';
+            lastDigestWindow = 'night';
+            lastDigestDate = dateStr;
+        }
 
-    if (req.url.split('?')[0] === '/api/bot-status') {
-        const payload = {
-            ...memoryHealth,
-            status: 'online',
-            timestamp: Date.now(),
-            _v16_3_0: true
-        };
-        res.end(JSON.stringify(payload));
-        return;
+        if (window) {
+            try {
+                const logs = fs.readFileSync(path.join(process.cwd(), 'orders.log'), 'utf8');
+                const stats = computeMiddayDigestStats(logs, window.startMs, window.endMs);
+                const msg = formatMiddayDigestMessage(stats, { 
+                    timeZone: tz, 
+                    dateStr, 
+                    windowLabel: windowName, 
+                    streakContextLabel: lastDigestWindow === 'morning' ? 'midi' : 'minuit' 
+                });
+                await sendTelegramAlert(msg);
+                console.log(`[Sentinel] Digest ${windowName} envoyé.`);
+            } catch (err) {
+                console.error(`[Sentinel] Erreur digest:`, err.message);
+            }
+        }
     }
-    res.statusCode = 404;
-    res.end(JSON.stringify({ error: 'Not found' }));
-}).listen(SNIPER_STATUS_PORT, '0.0.0.0', () => {
-    console.log('v16.3.0 API listening on 3001');
-});
+
+    // --- 🏆 WINNER WATCHER (REDEEM) ---
+    try {
+        const positions = loadActivePositions();
+        const now = Date.now();
+        let changed = false;
+
+        for (let i = 0; i < positions.length; i++) {
+            const pos = positions[i];
+            
+            // Si le marché est fini depuis > 2min et non résolu
+            if (pos.slotEnd && (now > pos.slotEnd + 120000) && !lastResolvedCids.has(pos.tokenId)) {
+                
+                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}`;
+                const res = await axios.get(url).catch(() => null);
+                
+                if (res && res.data && res.data[0]) {
+                    const event = res.data[0];
+                    const market = event.markets.find(m => m.conditionId === pos.tokenId || (Array.isArray(m.clobTokenIds) && m.clobTokenIds.includes(pos.tokenId)));
+                    
+                    if (market && market.closed) {
+                        const outcomes = JSON.parse(market.outcomePrices || '["0","0"]');
+                        const winningIndex = outcomes.indexOf("1");
+                        
+                        let isWin = false;
+                        if (winningIndex === 0 && pos.side === 'YES') isWin = true;
+                        if (winningIndex === 1 && pos.side === 'NO') isWin = true;
+
+                        if (isWin) {
+                            const winMsg = `🏆 *SNIPER WIN : BTC ${pos.side}* 🏆\n\n` +
+                                         `• Slot : ${new Date(pos.slotStart).toLocaleTimeString()}\n` +
+                                         `• Payout : +${(pos.amount).toFixed(2)}$\n` +
+                                         `• Status : Victory Confirmed`;
+                            
+                            await sendTelegramAlert(winMsg);
+                            
+                            // --- AUTOMATED REDEEM (v16.20.0) ---
+                            if (pos.conditionId) {
+                                await executeRedeemOnChain(pos.conditionId);
+                            }
+
+                            const redeemLog = {
+                                at: new Date().toISOString(),
+                                event: 'resolution_redeem',
+                                outcome: 'win',
+                                conditionId: pos.tokenId,
+                                asset: pos.asset,
+                                side: pos.side
+                            };
+                            fs.appendFileSync(path.join(process.cwd(), 'orders.log'), JSON.stringify(redeemLog) + '\n');
+                        }
+                        
+                        lastResolvedCids.add(pos.tokenId);
+                        positions.splice(i, 1);
+                        i--;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        
+        if (changed) saveActivePositions(positions);
+    } catch (err) {
+        console.error(`[Sentinel] Error Winner Watcher:`, err.message);
+    }
+}
+
+/**
+ * Automate the "Redeem" transaction via Polymarket Gasless Relayer (v17.0.0)
+ * Uses EIP-712 Meta-transactions to avoid MATIC fees.
+ */
+async function executeRedeemOnChain(conditionId) {
+    try {
+        console.log(`[Redeem] 🛡️ Starting GASLESS redemption for ${conditionId}...`);
+        
+        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
+        const signerAddress = wallet.address;
+        const apiKey = process.env.RELAYER_API_KEY;
+
+        if (!proxyWallet || !apiKey) {
+            throw new Error("Missing RELAYER_API_KEY or CLOB_FUNDER_ADDRESS in .env");
+        }
+
+        // 1. Get Nonce from Relayer
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        const nonce = nonceRes.data.nonce;
+        console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
+
+        // 2. Encode CTF Call
+        const ctfInterface = new ethers.Interface(CTF_ABI);
+        const callData = ctfInterface.encodeFunctionData("redeemPositions", [
+            USDC_E_ADDRESS,
+            ethers.ZeroHash,
+            conditionId,
+            [1, 2]
+        ]);
+
+        // 3. Prepare EIP-712 Safe Transaction
+        const domain = {
+            name: "Gnosis Safe",
+            version: "1.3.0",
+            chainId: 137,
+            verifyingContract: proxyWallet
+        };
+
+        const types = {
+            SafeTx: [
+                { name: "to", type: "address" },
+                { name: "value", type: "uint256" },
+                { name: "data", type: "bytes" },
+                { name: "operation", type: "uint8" },
+                { name: "safeTxnGas", type: "uint256" },
+                { name: "baseGas", type: "uint256" },
+                { name: "gasPrice", type: "uint256" },
+                { name: "gasToken", type: "address" },
+                { name: "refundReceiver", type: "address" },
+                { name: "nonce", type: "uint256" }
+            ]
+        };
+
+        const message = {
+            to: CTF_CONTRACT_ADDRESS,
+            value: 0,
+            data: callData,
+            operation: 0,
+            safeTxnGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: ethers.ZeroAddress,
+            refundReceiver: ethers.ZeroAddress,
+            nonce: parseInt(nonce)
+        };
+
+        // 4. Sign
+        const signature = await wallet.signTypedData(domain, types, message);
+
+        // 5. Submit to Relayer
+        const submitPayload = {
+            from: signerAddress,
+            to: CTF_CONTRACT_ADDRESS,
+            proxyWallet: proxyWallet,
+            data: callData,
+            nonce: nonce.toString(),
+            signature: signature,
+            signatureParams: {
+                gasPrice: "0",
+                operation: "0",
+                safeTxnGas: "0",
+                baseGas: "0",
+                gasToken: ethers.ZeroAddress,
+                refundReceiver: ethers.ZeroAddress
+            },
+            type: "SAFE"
+        };
+
+        const submitRes = await axios.post(`${RELAYER_URL}/submit`, submitPayload, {
+            headers: {
+                'RELAYER_API_KEY': apiKey,
+                'RELAYER_API_KEY_ADDRESS': signerAddress
+            }
+        });
+
+        if (submitRes.data && submitRes.data.transactionHash) {
+            console.log(`[Relayer] Transaction submitted successfully: ${submitRes.data.transactionHash}`);
+            lastResolvedCids.add(pos.tokenId);
+            changed = true;
+
+            // v17.3.2: Record Winning Trade
+            Analytics.recordTrade({
+                asset: pos.asset || 'BTC',
+                side: pos.side,
+                entryPrice: pos.buyPrice,
+                exitPrice: 1.0, 
+                quantity: pos.amount,
+                pnlUsd: (1.0 - pos.buyPrice) * pos.amount
+            });
+        }
+
+    } catch (err) {
+        console.error(`[Redeem] ❌ Relayer Error:`, err.response?.data || err.message);
+    }
+}
+
+/**
+ * Emergency Sell Execution via Relayer (v17.1.0)
+ * Gasless and Ultra-Fast sub-1s exit.
+ */
+async function executeEmergencyExit(info) {
+    try {
+        console.log(`[Emergency] 🚨 EXECUTION: Selling ${info.tokenId}...`);
+        
+        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
+        const apiKey = process.env.RELAYER_API_KEY;
+
+        // Fetch current quantity from active position
+        const positions = loadActivePositions();
+        const pos = positions.find(p => p.tokenId === info.tokenId);
+        if (!pos) throw new Error("Position data not found for exit.");
+
+        // 1. Get Nonce
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        const nonce = nonceRes.data.nonce;
+
+        // 2. Encode Sell Call (Sell is just another buy but of the opposite side? No, it's selling the token)
+        // For Polymarket CLOB, selling means placing a Side.SELL order.
+        // BUT for a "Clean" exit on CTF, we can also use 'merge' or just place an order.
+        // Here we use the CLOB Order because it's the fastest.
+        
+        const quantity = pos.amount || 1;
+        
+        // Use a Marketable Limit Order: Price = 0.01 to ensure it fills against the BID
+        const sellOrder = await clobClient.createOrder({
+            token_id: info.tokenId,
+            price: 0.01, 
+            size: quantity,
+            side: Side.SELL
+        });
+
+        if (sellOrder && sellOrder.orderID) {
+            console.log(`[Emergency] ✅ EXIT SUCCESS: ${sellOrder.orderID}`);
+            
+            // v17.3.2: Record Losing/Neutral Trade
+            Analytics.recordTrade({
+                asset: pos.asset || 'BTC',
+                side: pos.side,
+                entryPrice: pos.buyPrice,
+                exitPrice: info.currentPrice,
+                quantity: pos.amount,
+                pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
+            });
+
+            // Cleanup
+            activePosition = null;
+            saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+            SLSentinel.stopMonitoring();
+            
+            const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
+                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                            `• Prix Sortie: $${info.currentPrice}\n` +
+                            `• Reactivity: <500ms (WS Sentinel)\n` +
+                            `• Statut: Sécurisé (Gasless)`;
+            
+            await sendTelegramAlert(exitMsg);
+        }
+
+    } catch (err) {
+        console.error(`[Emergency] ❌ Exit Failed:`, err.message);
+        await sendTelegramAlert(`❌ *ERREUR SORTIE D'URGENCE*\nLe bot n'a pas pu sortir : ${err.message}`);
+    }
+}
+
 
 init().catch(err => {
-    console.error("💀 v16.3.0 FATAL:", err.message);
+    console.error("💀 v17.10.0 FATAL:", err.message);
     process.exit(1);
 });

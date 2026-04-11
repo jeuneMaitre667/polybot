@@ -128,7 +128,7 @@ export function BotBalanceChart() {
   const exportCsv = () => {
     if (fullChartData.length === 0) return;
     const headers = 'date;heure;solde_usd\n';
-    const rows = fullChartData.map((d) => `${d.date};${d.time};${d.balance.toFixed(2)}`).join('\n');
+    const rows = fullChartData.map((d) => `${d.date};${d.time};${(d.balance || 0).toFixed(2)}`).join('\n');
     const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -159,7 +159,7 @@ export function BotBalanceChart() {
               <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>
                 PnL sur la période :{' '}
                 <strong style={{ color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                  {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} $
+                  {pnl >= 0 ? '+' : ''}{(pnl || 0).toFixed(2)} $
                 </strong>
               </div>
             )}
@@ -203,7 +203,7 @@ export function BotBalanceChart() {
                 />
                 <YAxis
                   tick={{ fontSize: 10, fill: '#7b849a' }}
-                  tickFormatter={(v) => `${v.toFixed(0)} $`}
+                  tickFormatter={(v) => `${(v || 0).toFixed(0)} $`}
                   axisLine={{ stroke: 'transparent' }}
                   tickLine={false}
                 />
@@ -217,7 +217,7 @@ export function BotBalanceChart() {
                   }}
                   content={({ payload }) =>
                     payload?.[0]
-                      ? <span style={{ fontSize: 12, color: 'var(--text-1)' }}>{payload[0].value?.toFixed(2)} $</span>
+                      ? <span style={{ fontSize: 12, color: 'var(--text-1)' }}>{(payload[0].value || 0).toFixed(2)} $</span>
                       : null
                   }
                 />

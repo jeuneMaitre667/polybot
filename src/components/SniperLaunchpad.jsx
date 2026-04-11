@@ -95,7 +95,7 @@ export function SniperLaunchpad({ data }) {
                   isSyncing ? "text-white/20" : (isUp ? 'text-emerald-400' : 'text-red-400')
                 )}>
                    {!isSyncing && (isUp ? <TrendingUp size={18} /> : <TrendingDown size={18} />)}
-                   {isSyncing ? '0.00' : (isUp ? '+' : '') + deltaAbs.toFixed(2)}$
+                   {isSyncing ? '0.00' : (isUp ? '+' : '') + (deltaAbs || 0).toFixed(2)}$
                 </div>
               </div>
             </div>
@@ -121,7 +121,7 @@ export function SniperLaunchpad({ data }) {
                 )}>
                   <span className="text-[8px] font-black opacity-40 mb-1 tracking-tighter">YES / UP</span>
                   <div className="text-xl font-mono font-black">
-                     ${btcHUD?.upPrice ? btcHUD.upPrice.toFixed(2) : '--'}
+                     ${btcHUD?.upPrice && typeof btcHUD.upPrice === 'number' ? btcHUD.upPrice.toFixed(2) : '--'}
                   </div>
                 </div>
                 <div className={cn(
@@ -130,7 +130,7 @@ export function SniperLaunchpad({ data }) {
                 )}>
                   <span className="text-[8px] font-black opacity-40 mb-1 tracking-tighter">NO / DOWN</span>
                   <div className="text-xl font-mono font-black">
-                     ${btcHUD?.downPrice ? btcHUD.downPrice.toFixed(2) : '--'}
+                     ${btcHUD?.downPrice && typeof btcHUD.downPrice === 'number' ? btcHUD.downPrice.toFixed(2) : '--'}
                   </div>
                 </div>
               </div>
@@ -151,12 +151,9 @@ export function SniperLaunchpad({ data }) {
                    <Target size={12} />
                    <span className="text-[9px] uppercase font-bold tracking-widest">Edge %</span>
                  </div>
-                 <div className={cn(
-                   "text-xl font-mono font-bold",
-                   isSyncing ? "text-white/20" : (isUp ? 'text-emerald-400' : 'text-red-400')
-                 )}>
-                   {isSyncing ? '0.000' : (isUp ? '+' : '') + deltaPct.toFixed(3)}%
-                 </div>
+                 <div className={cn("text-2xl font-black font-mono tracking-tight", isUp ? "text-emerald-400" : "text-rose-400")}>
+                   {isSyncing ? '0.00' : (isUp ? '+' : '') + (deltaPct || 0).toFixed(3) + '%'}
+                </div>
                </div>
             </div>
           </div>

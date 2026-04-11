@@ -68,7 +68,7 @@ export function AssetSentinelCard({ asset, data }) {
               ${consensusPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
             <span className={cn("text-sm font-black px-2 py-0.5 rounded", drift >= 0 ? "text-green-400 bg-green-400/10" : "text-red-400 bg-red-400/10")}>
-              {drift >= 0 ? '+' : ''}{drift.toFixed(3)}%
+              {drift >= 0 ? '+' : ''}{(drift || 0).toFixed(3)}%
             </span>
           </div>
           <p className="text-[10px] font-mono opacity-30 mt-2 uppercase tracking-tight">Oracle Spot: ${clPrice.toLocaleString()}</p>
@@ -79,7 +79,7 @@ export function AssetSentinelCard({ asset, data }) {
           <div className="stat-card bg-white/[0.03] border-white/[0.05] p-4 rounded-xl flex flex-col justify-between">
             <span className="text-[10px] opacity-50 uppercase font-mono tracking-widest">Realized Vol</span>
             <div className="flex items-center gap-2 mt-2">
-              <span className={cn("text-xl font-black font-mono", volColor)}>{(vol * 100).toFixed(1)}%</span>
+              <span className={cn("text-xl font-black font-mono", volColor)}>{((vol || 0) * 100).toFixed(1)}%</span>
               <div className={cn("w-2 h-2 rounded-full shadow-[0_0_10px_currentColor]", volBg)} />
             </div>
           </div>

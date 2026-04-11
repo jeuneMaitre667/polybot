@@ -60,9 +60,12 @@ export function GlobalRiskSentinel({ data, paperBalance, realBalance }) {
           </div>
           
           <div className="flex justify-between mt-2 font-mono text-[9px] uppercase tracking-widest">
-            <span className={cn(dailyPnL < 0 ? "text-red-400" : "text-green-400")}>
-              Current PnL: {dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}
-            </span>
+            <div className="flex items-center gap-2">
+              <TrendingUp size={16} className={`transition-all ${dailyPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`} />
+              <span className={cn(dailyPnL < 0 ? "text-red-400" : "text-green-400")}>
+                Current PnL: {dailyPnL >= 0 ? '+' : ''}${(dailyPnL || 0).toFixed(2)}
+              </span>
+            </div>
             <span className="opacity-30">Threshold -500</span>
           </div>
         </div>
