@@ -22,6 +22,8 @@ import { fetchSignals, getSignalKey } from './signal-engine.js';
 import { isSlotEntryTimeForbiddenNow, getSlotEntryTimingDetail } from './entryTiming.js';
 import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
+import * as RiskManager from './risk-manager.js';
+import * as CollateralManager from './collateral-manager.js';
 
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
@@ -37,6 +39,7 @@ let clobClient = null;
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
 let userBalance = 0;
+let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
 function updateHealth(data) {
@@ -76,6 +79,9 @@ async function init() {
     setInterval(reportingLoop, 1000); // 1Hz Pulse
     
     console.log("[Init] Reporting Pulse (1Hz) & Loops connected");
+    
+    // v16.16.0: Initialize Risk Baseline
+    RiskManager.initSession(memoryHealth.totalUsd || 0);
 }
 
 async function reportingLoop() {
@@ -135,6 +141,26 @@ async function reportingLoop() {
 
                 bestAskUp = priceUp;
                 bestAskDown = priceDown;
+
+                // v16.16.0: Active Stop Loss Monitoring
+                if (activePosition && activePosition.slotStart === slotStart) {
+                    const currentPrice = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
+                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice)) {
+                        console.warn(`[Risk] 🚨 Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
+                        try {
+                            const sellOrder = await clobClient.createOrder({
+                                token_id: activePosition.tokenId,
+                                price: currentPrice * 0.95, // Aggressive sell limit
+                                size: activePosition.amount,
+                                side: Side.SELL
+                            });
+                            console.log(`[Risk] Stop Loss Order Placed:`, sellOrder.orderID);
+                            activePosition = null; // Clear position after sell
+                        } catch (err) {
+                            console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
+                        }
+                    }
+                }
 
                 // v16.12.0: Unified Strategic HUD (Pipeline Vision)
                 const currentSlotLabel = sig.slug ? sig.slug.split('-').pop() : '000';
@@ -203,7 +229,65 @@ async function reportingLoop() {
 }
 
 async function mainLoop() {
-    // Business logic placeholder - Trading engine continues standard 5m strategy
+    try {
+        const now = Date.now();
+        const slotStart = Math.floor(now / 300000) * 300000;
+        
+        // 1. Position Lock (1 max per slot)
+        if (activePosition && activePosition.slotStart === slotStart) return;
+
+        // 2. Timing Check (Authorization Window)
+        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+        if (secondsLeft < 15 || secondsLeft > 280) return; // Standard window
+
+        // 3. Signal Detection
+        const mv = memoryHealth.dashboardMarketView;
+        if (!mv || Math.abs(mv.binanceDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) return;
+
+        const side = mv.binanceDeltaPct > 0 ? 'YES' : 'NO';
+        const bestAsk = side === 'YES' ? mv.bestAskUp : mv.bestAskDown;
+        
+        if (!bestAsk || bestAsk === 0) return;
+
+        // 4. Risk & Collateral
+        const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 100); 
+        await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
+
+        // 5. Execution
+        console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd}`);
+        
+        // Fetch specific tokenId from signals
+        const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
+        const currentSig = signalData.signals[0];
+        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+
+        if (!tokenId) {
+            console.error("[Engine] Missing tokenId for execution!");
+            return;
+        }
+
+        const quantity = Math.floor(tradeAmountUsd / bestAsk);
+        const order = await clobClient.createOrder({
+            token_id: tokenId,
+            price: bestAsk + 0.005, // Buffer to ensure fill
+            size: quantity,
+            side: Side.BUY
+        });
+
+        if (order && order.orderID) {
+            console.log(`[Engine] ✅ Order Filled: ${order.orderID}`);
+            activePosition = {
+                tokenId,
+                buyPrice: bestAsk,
+                amount: quantity,
+                slotStart,
+                side
+            };
+        }
+
+    } catch (e) {
+        console.error('[Engine] Main Loop Error:', e.message);
+    }
 }
 
 // === CONSOLIDATED v16.3.0 STATUS API ===
