@@ -23,6 +23,7 @@ import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
+import { sendTelegramAlert, telegramTradeAlertsEnabled } from './telegramAlerts.js';
 
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
@@ -143,6 +144,18 @@ async function reportingLoop() {
                     const currentPrice = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
                     if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice)) {
                         console.warn(`[Risk] 🚨 Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
+                        
+                        const pnl = ((currentPrice - activePosition.buyPrice) / activePosition.buyPrice * 100).toFixed(2);
+                        const slMsg = `🚨 *STOP LOSS TRIGGERED* 🚨\n\n` +
+                                     `• Slot: ${activePosition.slotStart}\n` +
+                                     `• Side: ${activePosition.side}\n` +
+                                     `• Entry: $${activePosition.buyPrice}\n` +
+                                     `• Exit: $${currentPrice}\n` +
+                                     `• PnL: ${pnl}%\n` +
+                                     `• Status: Position Closed to Protect Capital`;
+                        
+                        sendTelegramAlert(slMsg);
+
                         try {
                             const sellOrder = await clobClient.createOrder({
                                 token_id: activePosition.tokenId,
@@ -272,6 +285,17 @@ async function mainLoop() {
 
         if (order && order.orderID) {
             console.log(`[Engine] ✅ Order Filled: ${order.orderID}`);
+            
+            const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
+                            `• Slot: ${slotStart}\n` +
+                            `• Price: $${bestAsk}\n` +
+                            `• Strike: $${effectiveStrike.toFixed(2)}\n` +
+                            `• Delta: ${mv.binanceDeltaPct.toFixed(3)}%\n` +
+                            `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
+                            `• Window: Authorized (T-${secondsLeft}s)`;
+            
+            sendTelegramAlert(entryMsg);
+
             activePosition = {
                 tokenId,
                 buyPrice: bestAsk,
