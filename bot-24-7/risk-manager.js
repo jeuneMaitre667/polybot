@@ -11,22 +11,22 @@ let sessionStartingBalance = null;
 
 /**
  * Calculates the next trade size based on compound strategy
- * @param {number} currentBalance - The current USDC/pUSD balance
+ * @param {number} availableBalance - The current USDC/pUSD balance
  * @returns {number} The size of the next trade in USD
  */
-export function calculateTradeSize(currentBalance) {
+export function calculateTradeSize(availableBalance) {
     if (sessionStartingBalance === null) {
-        sessionStartingBalance = currentBalance;
+        sessionStartingBalance = availableBalance;
     }
 
     // Compound: reinvest profit
-    const sessionProfit = Math.max(0, currentBalance - sessionStartingBalance);
+    const sessionProfit = Math.max(0, availableBalance - sessionStartingBalance);
     const calculatedSize = INITIAL_BET_USD + sessionProfit;
 
-    // Cap at $100
-    const finalSize = Math.min(calculatedSize, MAX_BET_USD);
+    // Cap at $100 and available balance
+    const finalSize = Math.min(calculatedSize, MAX_BET_USD, availableBalance);
     
-    console.log(`[RiskManager] Balance: $${currentBalance.toFixed(2)} | Profit: $${sessionProfit.toFixed(2)} | Next Trade: $${finalSize.toFixed(2)}`);
+    console.log(`[RiskManager] Balance: $${availableBalance.toFixed(2)} | Profit: $${sessionProfit.toFixed(2)} | Next Trade: $${finalSize.toFixed(2)}`);
     return finalSize;
 }
 

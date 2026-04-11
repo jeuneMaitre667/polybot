@@ -23,6 +23,7 @@ import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
+import * as SLSentinel from './sl-sentinel.js';
 import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
 import { 
     computeMiddayDigestStats, 
@@ -153,11 +154,6 @@ async function reportingLoop() {
 
             userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
             maticBalance = parseFloat(ethers.formatEther(maticRaw));
-
-            // Low Gas Alert (v16.21.0)
-            if (maticBalance < 1.0 && now % 300000 < 3000) { // Every 5 min if low
-                sendTelegramAlert(`⚠️ *ALERT GAS FAIBLE*\nSolde MATIC : ${maticBalance.toFixed(4)}\nPrévoyez une recharge pour assurer les rachat de gains (Redeems).`);
-            }
         } catch (err) {
             console.error('[Reporting] Multi-balance fetch error:', err.message);
         }
@@ -349,19 +345,43 @@ async function mainLoop() {
         }
 
         // 4. Risk & Collateral
-        const tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
+        let tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
+        
+        // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
+        const safetyFactor = 0.98; // Leave a tiny bit for precision safety
+        const availableMax = Math.max(0, (userBalance || 0) * safetyFactor);
+        
+        if (tradeAmountUsd > availableMax) {
+            console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to low balance.`);
+            tradeAmountUsd = availableMax;
+        }
+
+        if (tradeAmountUsd < 1.0) {
+            console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${userBalance.toFixed(2)})`);
+            return;
+        }
+
         await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
 
         // 5. Execution
-        console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd}`);
+        console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
-        const currentSig = signalData.signals[0];
-        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        
+        // v17.0.4: Find signal matching the CURRENT slot to avoid "Invalid token id" shift
+        const currentSig = signalData.signals.find(s => s.slug === signalData.slug) || signalData.signals[0];
+        
+        if (!currentSig) {
+            console.error("[Engine] No active signal found for slot!");
+            return;
+        }
 
-        if (!tokenId) {
-            console.error("[Engine] Missing tokenId for execution!");
+        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        console.log(`[Engine] Target ID: ${tokenId} | Market: ${currentSig.slug}`);
+
+        if (!tokenId || String(tokenId).length < 20) {
+            console.error(`[Engine] Invalid or Missing tokenId (${tokenId})!`);
             return;
         }
 
@@ -407,8 +427,20 @@ async function mainLoop() {
                 slug: currentSig.slug,
                 slotEnd: slotStart + 300000
             };
-            
+
             addPosition(activePosition);
+
+            // v17.1.0: Launch Ultra-Fast SL Sentinel (Real-time WebSocket monitoring)
+            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
+            SLSentinel.startMonitoring(
+                tokenId, 
+                bestAsk, 
+                side, 
+                stopLossPct, 
+                async (info) => {
+                    await executeEmergencyExit(info);
+                }
+            );
         }
 
     } catch (e) {
@@ -625,18 +657,70 @@ async function executeRedeemOnChain(conditionId) {
         });
 
         if (submitRes.data && submitRes.data.transactionHash) {
-            console.log(`[Redeem] 🚀 Relayer Success! Hash: ${submitRes.data.transactionHash}`);
-            console.log(`[Redeem] ✅ Gasless Redemption completed for ${conditionId}`);
-            await sendTelegramAlert(`💰 *GAINS RÉCUPÉRÉS (GRATUIT)* 💰\nLe relais Polymarket a payé les frais pour toi ! Tes USDC sont recyclés.`);
-        } else {
-            throw new Error(JSON.stringify(submitRes.data));
+            console.log(`[Relayer] Transaction submitted successfully: ${submitRes.data.transactionHash}`);
+            lastResolvedCids.add(pos.tokenId);
+            changed = true;
         }
 
     } catch (err) {
         console.error(`[Redeem] ❌ Relayer Error:`, err.response?.data || err.message);
-        if (!err.message.includes('NOTHING_TO_REDEEM')) {
-            await sendTelegramAlert(`⚠️ *ÉCHEC RACHAT GASLESS*\nLe relais a refusé la transaction : ${err.message}`);
+    }
+}
+
+/**
+ * Emergency Sell Execution via Relayer (v17.1.0)
+ * Gasless and Ultra-Fast sub-1s exit.
+ */
+async function executeEmergencyExit(info) {
+    try {
+        console.log(`[Emergency] 🚨 EXECUTION: Selling ${info.tokenId}...`);
+        
+        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
+        const apiKey = process.env.RELAYER_API_KEY;
+
+        // Fetch current quantity from active position
+        const positions = loadActivePositions();
+        const pos = positions.find(p => p.tokenId === info.tokenId);
+        if (!pos) throw new Error("Position data not found for exit.");
+
+        // 1. Get Nonce
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        const nonce = nonceRes.data.nonce;
+
+        // 2. Encode Sell Call (Sell is just another buy but of the opposite side? No, it's selling the token)
+        // For Polymarket CLOB, selling means placing a Side.SELL order.
+        // BUT for a "Clean" exit on CTF, we can also use 'merge' or just place an order.
+        // Here we use the CLOB Order because it's the fastest.
+        
+        const quantity = pos.amount || 1;
+        
+        // Use a Marketable Limit Order: Price = 0.01 to ensure it fills against the BID
+        const sellOrder = await clobClient.createOrder({
+            token_id: info.tokenId,
+            price: 0.01, 
+            size: quantity,
+            side: Side.SELL
+        });
+
+        if (sellOrder && sellOrder.orderID) {
+            console.log(`[Emergency] ✅ EXIT SUCCESS: ${sellOrder.orderID}`);
+            
+            // Cleanup
+            activePosition = null;
+            saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+            SLSentinel.stopMonitoring();
+            
+            const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
+                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                            `• Prix Sortie: $${info.currentPrice}\n` +
+                            `• Statut: Sécurisé (Gasless)`;
+            
+            await sendTelegramAlert(exitMsg);
         }
+
+    } catch (err) {
+        console.error(`[Emergency] ❌ Exit Failed:`, err.message);
+        await sendTelegramAlert(`❌ *ERREUR SORTIE D'URGENCE*\nLe bot n'a pas pu sortir : ${err.message}`);
     }
 }
 
