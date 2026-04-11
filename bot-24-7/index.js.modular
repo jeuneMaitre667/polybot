@@ -82,6 +82,7 @@ function updateHealth(data) {
 
     const fullHealth = { 
         ...memoryHealth, 
+        dashboardMarketView: data.dashboardMarketView || memoryHealth.dashboardMarketView || null, // v17.10.0: Forced Visibility
         at: new Date().toISOString(),
         timestamp: Date.now(),
         totalUsd: displayBalance,
@@ -778,35 +779,8 @@ async function executeEmergencyExit(info) {
     }
 }
 
-// === CONSOLIDATED v16.3.0 STATUS API ===
-import { createServer as nodeCreateServer } from 'node:http';
-const SNIPER_STATUS_PORT = 3001;
-
-nodeCreateServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Content-Type', 'application/json');
-
-    if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
-
-    if (req.url.split('?')[0] === '/api/bot-status') {
-        const payload = {
-            ...memoryHealth,
-            status: 'online',
-            timestamp: Date.now(),
-            _v16_3_0: true
-        };
-        res.end(JSON.stringify(payload));
-        return;
-    }
-    res.statusCode = 404;
-    res.end(JSON.stringify({ error: 'Not found' }));
-}).listen(SNIPER_STATUS_PORT, '0.0.0.0', () => {
-    console.log('v16.3.0 API listening on 3001');
-});
 
 init().catch(err => {
-    console.error("💀 v16.3.0 FATAL:", err.message);
+    console.error("💀 v17.10.0 FATAL:", err.message);
     process.exit(1);
 });
