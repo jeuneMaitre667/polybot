@@ -32,10 +32,14 @@ export function useBotStatus(url, refreshIntervalMs = 2000) {
   const fetchStatus = useCallback(async () => {
     if (!baseUrl) return;
 
-    const fetchUrl = `${baseUrl}?t=${Date.now()}`;
+    const fetchUrl = `${baseUrl}?t=${Date.now()}&_burst=${Math.random().toString(36).substring(7)}`;
     setError(null);
     try {
-      const res = await fetch(fetchUrl, { method: 'GET' });
+      const res = await fetch(fetchUrl, { 
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Pragma': 'no-cache', 'Cache-Control': 'no-cache' }
+      });
       if (!res.ok) throw new Error(res.status === 401 ? 'Token invalide' : `HTTP ${res.status}`);
       const json = await res.json();
       setData(json);

@@ -18,8 +18,9 @@ export function BotOverview() {
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    console.log(`[DEBUG] Dashboard Syncing with: ${statusUrl}`);
     return () => clearInterval(timer);
-  }, []);
+  }, [statusUrl]);
 
   const isStale = data?.timestamp 
     ? (currentTime - data.timestamp > 300_000) 
