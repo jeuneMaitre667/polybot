@@ -162,11 +162,13 @@ async function reportingLoop() {
         // 1. Get Binance Context
         let bStrike = await getBinanceStrike('BTC', slotStart);
 
-        // v17.4.0: Emergency Strike Sync (Proactive Recovery)
-        // Si le strike est manquant et qu'on est dans la fenÃªtre de dÃ©cision (T-90s à T-30s)
+        // v17.5.0: Non-Blocking Emergency Strike Sync (Background Pulse)
         if (!bStrike && secondsLeft <= 100 && secondsLeft >= 0) {
-            console.log(`[Strike] 🛡️ Emergency Sync Triggered for slot ${slotStart}...`);
-            bStrike = await StrikeManager.fetchStrikeFromPolymarket('BTC', slotStart);
+            // v17.5.1: No 'await' here to keep the reporting heartbeat alive
+            console.log(`[Strike] 🛡️ Emergency Sync LAUNCHED (Background) for slot ${slotStart}...`);
+            StrikeManager.fetchStrikeFromPolymarket('BTC', slotStart).then((val) => {
+                if (val) console.log(`[Strike] 🛡️ Background Sync Success: ${val}`);
+            }).catch(e => console.error(`[Strike] 🛡️ Background Sync Failed: ${e.message}`));
         }
 
         const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);

@@ -104,8 +104,8 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
 
     console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
 
-    // Retry loop : tenter toutes les 10s pendant 3 minutes (18 tentatives)
-    for (let attempt = 1; attempt <= 18; attempt++) {
+    // Retry loop : tenter toutes les 10s pendant 1 minute (6 tentatives)
+    for (let attempt = 1; attempt <= 6; attempt++) {
         try {
             const response = await axios.get(url, { timeout: 10000 });
             const strike = response.data?.eventMetadata?.priceToBeat;
@@ -117,17 +117,17 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
                 return numericStrike;
             }
 
-            if (attempt < 18) {
-                console.warn(`[Strike] [API] ⏳ Tentative ${attempt}/18 : Strike non encore publié. Attente 10s...`);
+            if (attempt < 6) {
+                console.warn(`[Strike] [API] ⏳ Tentative ${attempt}/6 : Strike non encore publié. Attente 10s...`);
                 await new Promise(r => setTimeout(r, 10000));
             }
         } catch (e) {
-            console.warn(`[Strike] [API] ❌ Tentative ${attempt}/18 échouée (${e.message}).`);
-            if (attempt < 18) await new Promise(r => setTimeout(r, 10000));
+            console.warn(`[Strike] [API] ❌ Tentative ${attempt}/6 échouée (${e.message}).`);
+            if (attempt < 6) await new Promise(r => setTimeout(r, 10000));
         }
     }
 
-    console.error(`[Strike] [API] 💀 Échec définitif pour ${slug} après 3 minutes.`);
+    console.error(`[Strike] [API] 💀 Échec définitif pour ${slug} après 1 minute.`);
     return null;
 };
 
