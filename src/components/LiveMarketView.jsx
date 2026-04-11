@@ -20,14 +20,18 @@ export function LiveMarketView({ data }) {
   const sniper = data?.sniperHUD?.btc;
   const decisionLog = data?.decisionFeed?.slice(-3).reverse();
 
-  // v16.1: Precision Logic
+  // v17.0.1: Dynamic Configuration Sync
+  const threshold = data?.config?.delta || 0.07;
+  const windowStart = data?.config?.windowStart || 90;
+  const windowEnd = data?.config?.windowEnd || 30;
+
   const isUp = mv?.binanceDeltaPct > 0;
   const deltaAbs = mv ? (mv.binanceSpot - mv.binanceStrike) : 0;
-  const isTriggered = Math.abs(mv?.binanceDeltaPct || 0) >= 0.10;
+  const isTriggered = Math.abs(mv?.binanceDeltaPct || 0) >= threshold;
   
   // Server-synced secondsLeft (0-300 range for 5m candle)
   const secondsLeft = sniper?.secondsLeft || 0;
-  const isWindowOpen = secondsLeft >= 15 && secondsLeft <= 70; 
+  const isWindowOpen = secondsLeft >= windowEnd && secondsLeft <= windowStart; 
   const isAuthorized = isWindowOpen && mv?.binanceStrike > 0;
   
   if (!mv) {
@@ -57,7 +61,7 @@ export function LiveMarketView({ data }) {
         {/* Signal Hub */}
         <div className={`relative overflow-hidden border rounded-3xl p-6 transition-all duration-500 ${isTriggered ? 'bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_40px_rgba(16,185,129,0.1)]' : 'bg-white/[0.02] border-white/5'}`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Signal Delta (0.10%)</span>
+            <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Signal Delta ({threshold.toFixed(2)}%)</span>
             {isTriggered ? <CheckCircle2 size={16} className="text-emerald-500" /> : <XCircle size={16} className="text-white/10" />}
           </div>
           <div className="flex items-baseline gap-2 overflow-hidden">
