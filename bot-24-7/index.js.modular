@@ -99,7 +99,9 @@ async function init() {
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
 
     const wallet = new ethers.Wallet(privateKey);
-    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet);
+    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
+        funderAddress: process.env.CLOB_FUNDER_ADDRESS
+    });
     
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
 
@@ -128,6 +130,16 @@ async function reportingLoop() {
         
         let startAudit = Date.now();
         
+        // 0. Fetch Real Blockchain Balance (v16.20.1)
+        try {
+            const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
+            const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+            const balRaw = await usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address);
+            userBalance = parseFloat(ethers.formatUnits(balRaw, 6));
+        } catch (err) {
+            console.error('[Reporting] Balance chain fetch error:', err.message);
+        }
+
         // 1. Get Binance Context
         let bStrike = await getBinanceStrike('BTC', slotStart);
         const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
@@ -219,7 +231,7 @@ async function reportingLoop() {
                 const upLabel = bestAskUp > 0.80 ? '🟢 UP' : '⚪ UP';
                 const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
 
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${userBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
