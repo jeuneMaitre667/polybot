@@ -172,27 +172,17 @@ async function reportingLoop() {
         // 1. Get Binance Context
         let bStrike = await getBinanceStrike('BTC', slotStart);
 
-        // v17.5.0: Non-Blocking Emergency Strike Sync (Background Pulse)
-        if (!bStrike && secondsLeft <= 100 && secondsLeft >= 0) {
-            // v17.5.1: No 'await' here to keep the reporting heartbeat alive
-            console.log(`[Strike] 🛡️ Emergency Sync LAUNCHED (Background) for slot ${slotStart}...`);
-            StrikeManager.fetchStrikeFromPolymarket('BTC', slotStart).then((val) => {
-                if (val) console.log(`[Strike] 🛡️ Background Sync Success: ${val}`);
-            }).catch(e => console.error(`[Strike] 🛡️ Background Sync Failed: ${e.message}`));
-        }
-
-        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
-        const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
-        
-        // v16.14.2: Restore decimals for Strategic HUD precision
-        const effectiveStrike = bStrike ? bStrike : bSpot;
+        // v17.20.0: Aggressive Pure Binance Strategy
+        // We Use Binance Strike (Open Price) as the anchor. If not found, we use bSpot as fallback
+        // but we prioritize getting the real Open price via Binance Klines API (in getBinanceStrike).
+        const effectiveStrike = bStrike || bSpot;
         const bDeltaPct = effectiveStrike > 0 ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
         
-        if (!bStrike) {
-            console.warn(`[Strike] ⚠️ Warning: Using SPOT as Strike (Sync Lag) - Delta may be inaccurate (0%)`);
-        }
+        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
+        const bSpotNow = spotRes ? parseFloat(spotRes.data.price) : bSpot;
         
-        // 2. AGGRESSIVE DUAL DISCOVERY (v16.3.1)
+        // 2. AGGRESSIVE DUAL DISCOVERY
+        const bSpot = bSpotNow; // Sync for consistency in this loop
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
         const allBtcSignals = signalData.signals || [];
         

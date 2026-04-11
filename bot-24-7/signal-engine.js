@@ -278,10 +278,10 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
             
             if (cleanKey) {
                 const captured = data[cleanKey];
-                console.log(`[Strike] MATCH for ${asset}: ${captured} (Key: ${targetKey})`);
                 return captured;
             } else {
-                console.warn(`[Strike] NO MATCH for ${asset} (${targetKey}). Available: ${Object.keys(data).slice(-5).join(',')}`);
+                // v17.20.0: Non-blocking miss
+                return null;
             }
         } else {
             console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
