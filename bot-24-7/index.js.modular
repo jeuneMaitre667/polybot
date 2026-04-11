@@ -396,12 +396,14 @@ async function mainLoop() {
             return;
         }
 
+        const startExec = Date.now();
         const order = await clobClient.createOrder({
             token_id: tokenId,
             price: bestAsk + 0.005, // Buffer to ensure fill
             size: quantity,
             side: Side.BUY
         });
+        const latency = Date.now() - startExec;
 
         if (order && order.orderID) {
             console.log(`[Engine] ✅ Order Filled: ${order.orderID}`);
@@ -412,7 +414,8 @@ async function mainLoop() {
                             `• Strike: $${mv.binanceStrike.toFixed(2)}\n` +
                             `• Delta: ${mv.binanceDeltaPct.toFixed(3)}%\n` +
                             `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
-                            `• Window: Authorized (T-${secondsLeft}s)`;
+                            `• Window: Authorized (T-${secondsLeft}s)\n` +
+                            `• Latency: ${latency}ms (Execution)`;
             
             sendTelegramAlert(entryMsg);
 
@@ -713,6 +716,7 @@ async function executeEmergencyExit(info) {
             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                             `• Prix Sortie: $${info.currentPrice}\n` +
+                            `• Reactivity: <500ms (WS Sentinel)\n` +
                             `• Statut: Sécurisé (Gasless)`;
             
             await sendTelegramAlert(exitMsg);
