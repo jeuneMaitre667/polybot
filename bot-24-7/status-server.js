@@ -1106,6 +1106,7 @@ const server = http.createServer((req, res) => {
         const health = getHealth();
         const alerts = getHealthAlerts(health, config);
         const payload = {
+          ...health, // Flatten everything! dashboardMarketView, decisionFeed, etc.
           sniperHUD: health?.sniperHUD ?? null,
           status: pm2.status,
           uptime: pm2.uptime,
@@ -1126,7 +1127,6 @@ const server = http.createServer((req, res) => {
           ordersLast24h: stats.ordersLast24h,
           winRate: stats.winRate,
           fillExecutionStats24h: stats.fillExecutionStats24h,
-          health,
           alerts,
           liquidityStats,
           liquidityStats24h,
@@ -1136,7 +1136,7 @@ const server = http.createServer((req, res) => {
           cycleLatencyStats,
           signalDecisionLatencyStats,
           signalInRangeNoOrderRecent,
-          decisionFeed,
+          decisionFeed: (health?.decisionFeed && health.decisionFeed.length > 0) ? health.decisionFeed : decisionFeed,
           liveArbitrage: lastDecision ? {
             btc: lastDecision.btc,
             strike: lastDecision.strike,
