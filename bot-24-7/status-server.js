@@ -25,7 +25,7 @@ const BOT_PM2_NAMES = ['polymarket-bot', 'bot-modular', 'bot-modular-v1'];
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Pragma, Cache-Control, _burst');
 }
 
 function json(res, data, status = 200) {
