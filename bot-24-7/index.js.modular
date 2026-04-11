@@ -338,7 +338,7 @@ async function reportingLoop() {
                     strike: effectiveStrike,
                     spot: bSpot,
                     deltaPct: bDeltaPct,
-                    isStrikeOfficial: !!bStrike
+                    isStrikeOfficial: source === 'OFFICIAL'
                 }
             },
             currentSlot: slotStart,
