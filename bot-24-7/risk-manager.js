@@ -3,8 +3,9 @@
  * Logic: Compound reinvestment & Stop Loss
  */
 
-const MAX_BET_USD = 100;
-const INITIAL_BET_USD = 10; // Default if not specified
+const INITIAL_BET_USD = parseFloat(process.env.ORDER_SIZE_USD || "2");
+const MAX_BET_USD = parseFloat(process.env.MAX_STAKE_USD || "100");
+const SESSION_MAX_LOSS = parseFloat(process.env.MAX_LOSS || "0.10");
 
 let sessionStartingBalance = null;
 
@@ -40,8 +41,8 @@ export function shouldTriggerStopLoss(buyPrice, currentAsk) {
     
     const pnlPct = (currentAsk - buyPrice) / buyPrice;
     
-    // -10% threshold
-    if (pnlPct <= -0.10) {
+    // Stop Loss threshold (from .env)
+    if (pnlPct <= -SESSION_MAX_LOSS) {
         console.warn(`[RiskManager] ⚠️ STOP LOSS TRIGGERED: Buy price was ${buyPrice}, Current is ${currentAsk} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
         return true;
     }
