@@ -256,7 +256,15 @@ function getStats24h() {
 /** Lit health-v17.json (isolé v17) écrit par le bot. */
 function getHealth() {
   const o = readJsonFile(path.join(BOT_DIR, 'health-v17.json'));
-  if (!o || typeof o !== 'object') return null;
+  if (!o || typeof o !== 'object') {
+    // v17.16.0: Fallback for fresh boot (Eliminate skeleton screens)
+    return {
+      status: 'init',
+      sniperHUD: 'ENGINE STARTING...',
+      dashboardMarketView: { status: 'waiting' },
+      at: new Date().toISOString()
+    };
+  }
   
   // Return EVERYTHING to avoid gatekeeping bugs
   return {
