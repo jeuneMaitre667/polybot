@@ -172,17 +172,14 @@ async function reportingLoop() {
         // 1. Get Binance Context
         let bStrike = await getBinanceStrike('BTC', slotStart);
 
+        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
+        const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+
         // v17.20.0: Aggressive Pure Binance Strategy
-        // We Use Binance Strike (Open Price) as the anchor. If not found, we use bSpot as fallback
-        // but we prioritize getting the real Open price via Binance Klines API (in getBinanceStrike).
         const effectiveStrike = bStrike || bSpot;
         const bDeltaPct = effectiveStrike > 0 ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
         
-        const spotRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC').catch(() => null);
-        const bSpotNow = spotRes ? parseFloat(spotRes.data.price) : bSpot;
-        
         // 2. AGGRESSIVE DUAL DISCOVERY
-        const bSpot = bSpotNow; // Sync for consistency in this loop
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
         const allBtcSignals = signalData.signals || [];
         
