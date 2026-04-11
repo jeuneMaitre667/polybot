@@ -50,12 +50,12 @@ const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
 const HEALTH_FILE = path.join(process.cwd(), 'health.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
-// --- BLOCKCHAIN CONSTANTS (REDEEM) ---
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
 const CTF_ABI = [
     "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
 ];
+const RELAYER_URL = "https://relayer-v2.polymarket.com";
 
 // --- STATE ---
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
@@ -530,38 +530,112 @@ async function performanceLoop() {
 }
 
 /**
- * Automate the "Redeem" transaction on Polygon (v16.20.0)
+ * Automate the "Redeem" transaction via Polymarket Gasless Relayer (v17.0.0)
+ * Uses EIP-712 Meta-transactions to avoid MATIC fees.
  */
 async function executeRedeemOnChain(conditionId) {
     try {
-        console.log(`[Redeem] 💰 Starting automated redemption for ${conditionId}...`);
+        console.log(`[Redeem] 🛡️ Starting GASLESS redemption for ${conditionId}...`);
         
-        // On vérifie le RPC
-        const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
-        const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-        const ctf = new ethers.Contract(CTF_CONTRACT_ADDRESS, CTF_ABI, wallet);
+        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
+        const signerAddress = wallet.address;
+        const apiKey = process.env.RELAYER_API_KEY;
 
-        // Paramètres standard Polymarket
-        const parentCollectionId = ethers.ZeroHash;
-        const indexSets = [1, 2]; // Redeems both outcomes
+        if (!proxyWallet || !apiKey) {
+            throw new Error("Missing RELAYER_API_KEY or CLOB_FUNDER_ADDRESS in .env");
+        }
 
-        const tx = await ctf.redeemPositions(
+        // 1. Get Nonce from Relayer
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        const nonce = nonceRes.data.nonce;
+        console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
+
+        // 2. Encode CTF Call
+        const ctfInterface = new ethers.Interface(CTF_ABI);
+        const callData = ctfInterface.encodeFunctionData("redeemPositions", [
             USDC_E_ADDRESS,
-            parentCollectionId,
+            ethers.ZeroHash,
             conditionId,
-            indexSets,
-            { gasLimit: 250000 }
-        );
+            [1, 2]
+        ]);
 
-        console.log(`[Redeem] 🚀 Transaction sent: ${tx.hash}`);
-        await tx.wait();
-        console.log(`[Redeem] ✅ Winnings successfully recycled for ${conditionId}`);
-        await sendTelegramAlert(`💰 *GAINS RÉCUPÉRÉS* 💰\nLes USDC ont été réinjectés dans ton solde de trading automatiquement.`);
+        // 3. Prepare EIP-712 Safe Transaction
+        const domain = {
+            name: "Gnosis Safe",
+            version: "1.3.0",
+            chainId: 137,
+            verifyingContract: proxyWallet
+        };
+
+        const types = {
+            SafeTx: [
+                { name: "to", type: "address" },
+                { name: "value", type: "uint256" },
+                { name: "data", type: "bytes" },
+                { name: "operation", type: "uint8" },
+                { name: "safeTxnGas", type: "uint256" },
+                { name: "baseGas", type: "uint256" },
+                { name: "gasPrice", type: "uint256" },
+                { name: "gasToken", type: "address" },
+                { name: "refundReceiver", type: "address" },
+                { name: "nonce", type: "uint256" }
+            ]
+        };
+
+        const message = {
+            to: CTF_CONTRACT_ADDRESS,
+            value: 0,
+            data: callData,
+            operation: 0,
+            safeTxnGas: 0,
+            baseGas: 0,
+            gasPrice: 0,
+            gasToken: ethers.ZeroAddress,
+            refundReceiver: ethers.ZeroAddress,
+            nonce: parseInt(nonce)
+        };
+
+        // 4. Sign
+        const signature = await wallet.signTypedData(domain, types, message);
+
+        // 5. Submit to Relayer
+        const submitPayload = {
+            from: signerAddress,
+            to: CTF_CONTRACT_ADDRESS,
+            proxyWallet: proxyWallet,
+            data: callData,
+            nonce: nonce.toString(),
+            signature: signature,
+            signatureParams: {
+                gasPrice: "0",
+                operation: "0",
+                safeTxnGas: "0",
+                baseGas: "0",
+                gasToken: ethers.ZeroAddress,
+                refundReceiver: ethers.ZeroAddress
+            },
+            type: "SAFE"
+        };
+
+        const submitRes = await axios.post(`${RELAYER_URL}/submit`, submitPayload, {
+            headers: {
+                'RELAYER_API_KEY': apiKey,
+                'RELAYER_API_KEY_ADDRESS': signerAddress
+            }
+        });
+
+        if (submitRes.data && submitRes.data.transactionHash) {
+            console.log(`[Redeem] 🚀 Relayer Success! Hash: ${submitRes.data.transactionHash}`);
+            console.log(`[Redeem] ✅ Gasless Redemption completed for ${conditionId}`);
+            await sendTelegramAlert(`💰 *GAINS RÉCUPÉRÉS (GRATUIT)* 💰\nLe relais Polymarket a payé les frais pour toi ! Tes USDC sont recyclés.`);
+        } else {
+            throw new Error(JSON.stringify(submitRes.data));
+        }
+
     } catch (err) {
-        console.error(`[Redeem] ❌ Execution failed:`, err.message);
-        // Si erreur spécifique "nothing to redeem", on peut ignorer
+        console.error(`[Redeem] ❌ Relayer Error:`, err.response?.data || err.message);
         if (!err.message.includes('NOTHING_TO_REDEEM')) {
-            await sendTelegramAlert(`⚠️ *ÉCHEC RACHAT GAINS*\nL'automatisation du rachat a échoué : ${err.message}`);
+            await sendTelegramAlert(`⚠️ *ÉCHEC RACHAT GASLESS*\nLe relais a refusé la transaction : ${err.message}`);
         }
     }
 }
