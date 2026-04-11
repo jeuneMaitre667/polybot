@@ -43,6 +43,13 @@ const SNIPER_DELTA_THRESHOLD_PCT = 0.08;
 const HEALTH_FILE = path.join(process.cwd(), 'health.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
 
+// --- BLOCKCHAIN CONSTANTS (REDEEM) ---
+const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
+const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
+const CTF_ABI = [
+    "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
+];
+
 // --- STATE ---
 let lastExecutedCid = null;
 let lastResolvedCids = new Set(); // Track resolved markets to avoid double alerts
@@ -276,9 +283,9 @@ async function mainLoop() {
         // 1. Position Lock (1 max per slot)
         if (activePosition && activePosition.slotStart === slotStart) return;
 
-        // 2. Timing Check (Strategic Window: T-60s to T-20s)
+        // 2. Timing Check (Strategic Window: T-90s to T-30s)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        if (secondsLeft < 20 || secondsLeft > 60) return; 
+        if (secondsLeft < 30 || secondsLeft > 90) return; 
 
         // 3. Signal Detection
         const mv = memoryHealth.dashboardMarketView;
@@ -330,6 +337,7 @@ async function mainLoop() {
 
             activePosition = {
                 tokenId,
+                conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
                 amount: quantity,
                 slotStart,
@@ -429,6 +437,11 @@ async function performanceLoop() {
                             
                             await sendTelegramAlert(winMsg);
                             
+                            // --- AUTOMATED REDEEM (v16.20.0) ---
+                            if (pos.conditionId) {
+                                await executeRedeemOnChain(pos.conditionId);
+                            }
+
                             const redeemLog = {
                                 at: new Date().toISOString(),
                                 event: 'resolution_redeem',
@@ -452,6 +465,43 @@ async function performanceLoop() {
         if (changed) saveActivePositions(positions);
     } catch (err) {
         console.error(`[Sentinel] Error Winner Watcher:`, err.message);
+    }
+}
+
+/**
+ * Automate the "Redeem" transaction on Polygon (v16.20.0)
+ */
+async function executeRedeemOnChain(conditionId) {
+    try {
+        console.log(`[Redeem] 💰 Starting automated redemption for ${conditionId}...`);
+        
+        // On vérifie le RPC
+        const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
+        const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+        const ctf = new ethers.Contract(CTF_CONTRACT_ADDRESS, CTF_ABI, wallet);
+
+        // Paramètres standard Polymarket
+        const parentCollectionId = ethers.ZeroHash;
+        const indexSets = [1, 2]; // Redeems both outcomes
+
+        const tx = await ctf.redeemPositions(
+            USDC_E_ADDRESS,
+            parentCollectionId,
+            conditionId,
+            indexSets,
+            { gasLimit: 250000 }
+        );
+
+        console.log(`[Redeem] 🚀 Transaction sent: ${tx.hash}`);
+        await tx.wait();
+        console.log(`[Redeem] ✅ Winnings successfully recycled for ${conditionId}`);
+        await sendTelegramAlert(`💰 *GAINS RÉCUPÉRÉS* 💰\nLes USDC ont été réinjectés dans ton solde de trading automatiquement.`);
+    } catch (err) {
+        console.error(`[Redeem] ❌ Execution failed:`, err.message);
+        // Si erreur spécifique "nothing to redeem", on peut ignorer
+        if (!err.message.includes('NOTHING_TO_REDEEM')) {
+            await sendTelegramAlert(`⚠️ *ÉCHEC RACHAT GAINS*\nL'automatisation du rachat a échoué : ${err.message}`);
+        }
     }
 }
 
