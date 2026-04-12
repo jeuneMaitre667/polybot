@@ -503,15 +503,18 @@ async function mainLoop() {
 
         if (IS_SIMULATION_ENABLED) {
             const totalLatency = Date.now() - cycleStart;
-            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | Latency: ${totalLatency}ms`);
+            // v17.36.75: Subtract stake from balance at entry for realism
+            const newBal = updateVirtualBalance(-tradeAmountUsd);
+            
+            console.log(`[Engine] 🧪 SIMULATION: Order placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | New Bal: $${newBal.toFixed(2)}`);
             
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
                                 `• Side: ${side}\n` +
                                 `• Price: $${bestAsk}\n` +
                                 `• Latency: ${totalLatency}ms\n` +
                                 `• Delta: ${bDeltaPct.toFixed(3)}%\n` +
-                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
-                                `• Capital: $${getVirtualBalance().toFixed(2)}`;
+                                `• Size: -$${tradeAmountUsd.toFixed(2)}\n` +
+                                `• Capital: $${newBal.toFixed(2)}`;
             sendTelegramAlert(simEntryMsg);
             // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
         } else {
@@ -660,7 +663,6 @@ async function performanceLoop() {
                                 const newBal = updateVirtualBalance(payout);
                                 
                                 const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
-                                               `• Entry: $${pos.buyPrice}\n` +
                                                `• Profit: +$${profitNet.toFixed(2)}\n` +
                                                `• Capital: $${newBal.toFixed(2)}\n` +
                                                `• Statut: simulation gagnante`;
@@ -669,9 +671,10 @@ async function performanceLoop() {
                                 await sendTelegramAlert(winMsg);
                             } else {
                                 if (pos.isSimulated) {
-                                    const newBal = getVirtualBalance();
-                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${newBal.toFixed(2)}`);
-                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)}`);
+                                    // v17.36.75: No balance change for loss (stake already subtracted at entry)
+                                    const curBal = getVirtualBalance();
+                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${curBal.toFixed(2)}`);
+                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${curBal.toFixed(2)}`);
                                 }
                             }
 
