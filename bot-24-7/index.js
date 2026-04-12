@@ -631,13 +631,20 @@ async function performanceLoop() {
             for (let i = positions.length - 1; i >= 0; i--) {
                 const pos = positions[i];
                 
-                // On cherche notre événement dans la liste des clos
-                const event = closedEvents.find(e => e.slug === pos.slug || e.markets.some(m => m.conditionId === pos.conditionId || (m.clobTokenIds && m.clobTokenIds.includes(pos.tokenId))));
+                // v17.36.55: Matching laser par Condition ID ou Token ID CLOB (Infaillible)
+                const event = closedEvents.find(e => {
+                    return e.markets.some(m => 
+                        m.conditionId === pos.conditionId || 
+                        (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
+                    );
+                });
 
-                if (event && event.closed) {
-                    console.log(`[Sentinel] 🏁 Market Resolution Found: ${event.slug}`);
-                    
-                    const market = event.markets.find(m => m.conditionId === pos.conditionId || (Array.isArray(m.clobTokenIds) && m.clobTokenIds.includes(pos.tokenId)));
+                if (event) {
+                    // console.log(`[Sentinel] 🏁 Match Found in closed events for slot ${pos.slotStart}`);
+                    const market = event.markets.find(m => 
+                        m.conditionId === pos.conditionId || 
+                        (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
+                    );
                     
                     if (market && market.closed) {
                         const winningIndex = parseInt(market.winningOutcomeIndex);
