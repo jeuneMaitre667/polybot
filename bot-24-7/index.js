@@ -148,7 +148,7 @@ async function init() {
 // v17.22.0: Unified Market Context (Synchronized Decision Logic)
 async function getUnifiedMarketState(asset = 'BTC') {
     const now = Date.now();
-    const slotStart = Math.ceil(now / 300000) * 300000;
+    const slotStart = Math.floor(now / 300000) * 300000;
     
     // 1. Fetch Binance Spot (Current)
     const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`).catch(() => null);
@@ -177,8 +177,8 @@ async function reportingLoop() {
 
     try {
         const now = Date.now();
-        const slotStart = Math.ceil(now / 300000) * 300000;
-        const secondsLeft = Math.floor((slotStart - now) / 1000);
+        const slotStart = Math.floor(now / 300000) * 300000;
+        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
         
         let startAudit = Date.now();
         
@@ -358,9 +358,8 @@ async function reportingLoop() {
 
 async function mainLoop() {
     try {
-        const now = Date.now();
-        // v17.22.16: Round-to-NEXT-5m (Target future expiry)
-        const slotStart = Math.ceil(now / 300000) * 300000;
+        // v17.22.17: Revert to START-time slot convention (Math.floor)
+        const slotStart = Math.floor(now / 300000) * 300000;
         
         // 1. Slot Lock (1 trigger max per 5m slot - Anti-Spam Fix v16.20.4)
         if (lastExecutedSlot === slotStart) return;
@@ -370,7 +369,7 @@ async function mainLoop() {
         }
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
-        const secondsLeft = Math.floor((slotStart - now) / 1000);
+        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
             if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
                 console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);

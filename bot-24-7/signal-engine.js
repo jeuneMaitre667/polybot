@@ -136,8 +136,8 @@ export function getSlotSlugForAsset(asset) {
     const now = Date.now();
     const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
     
-    // v17.22.16: Round-to-NEXT-5m (Target the UPCOMING expiry, not the past)
-    const slotSec = Math.ceil(now / 300000) * 300; 
+    // v17.22.17: Revert to START-time slot convention (Math.floor)
+    const slotSec = Math.floor(now / 300000) * 300; 
     return `${prefix}-${slotSec}`;
 }
 
