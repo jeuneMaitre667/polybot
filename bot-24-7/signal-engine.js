@@ -34,9 +34,10 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    // v17.29.19: Recherche la plus large possible pour garantir l'inclusion des 5m dans les résultats
+    // v17.31.0: Utilisation de l'ID de série stable (10684 pour BTC) pour une découverte sans faille
+    const seriesId = asset === 'BTC' ? '10684' : '10685'; // 10685 supposé pour ETH, à vérifier.
     const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin' : asset}`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=${seriesId}&active=true&closed=false`;
     
     const startFetch = Date.now();
     try {
