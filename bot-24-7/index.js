@@ -502,7 +502,13 @@ async function mainLoop() {
 
         if (IS_SIMULATION_ENABLED) {
             console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)})`);
-            sendTelegramAlert(`🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n(Mode démo actif, Capital Virtuel: $${VIRTUAL_BALANCE})`);
+            const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
+                                `• Slot: ${slotStart}\n` +
+                                `• Price: $${bestAsk}\n` +
+                                `• Delta: ${bDeltaPct.toFixed(3)}%\n` +
+                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
+                                `• Capital: $${getVirtualBalance().toFixed(2)}`;
+            sendTelegramAlert(simEntryMsg);
             // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
         } else {
             const startExec = Date.now();
@@ -825,10 +831,12 @@ async function executeEmergencyExit(info) {
 
             console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (PnL: ${(info.pnlPct * 100).toFixed(2)}%)`);
             const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
+                            `• Slot: ${pos.slotStart}\n` +
+                            `• Entry: $${pos.buyPrice}\n` +
+                            `• Exit: $${info.currentPrice}\n` +
                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                             `• Perte : -${lossUsd.toFixed(2)}$\n` +
-                            `• Capital actuel : $${newBal.toFixed(2)}\n` +
-                            `• Statut: simulation réussie`;
+                            `• Capital actuel : $${newBal.toFixed(2)}`;
             await sendTelegramAlert(exitMsg);
             
             activePosition = null;
