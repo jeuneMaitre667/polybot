@@ -621,68 +621,63 @@ async function performanceLoop() {
         const now = Date.now();
         let changed = false;
 
-        // v17.36.49: Use active=false (includes ended but not yet archived)
-        const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=10684&active=false&limit=20`;
-        const res = await axios.get(discoveryUrl).catch(() => null);
-        
-        if (res && res.data && Array.isArray(res.data)) {
-            const closedEvents = res.data;
-
-            for (let i = positions.length - 1; i >= 0; i--) {
-                const pos = positions[i];
+        for (let i = positions.length - 1; i >= 0; i--) {
+            const pos = positions[i];
+            
+            // Si le marché est fini depuis > 1min
+            if (pos.slotEnd && (now > pos.slotEnd + 60000)) {
+                // v17.36.65: Targeted query by Slug (Direct & Accurate)
+                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}`;
+                const res = await axios.get(url).catch(() => null);
                 
-                // v17.36.55: Matching laser par Condition ID ou Token ID CLOB (Infaillible)
-                const event = closedEvents.find(e => {
-                    return e.markets.some(m => 
-                        m.conditionId === pos.conditionId || 
-                        (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
-                    );
-                });
-
-                if (event) {
-                    // console.log(`[Sentinel] 🏁 Match Found in closed events for slot ${pos.slotStart}`);
-                    const market = event.markets.find(m => 
-                        m.conditionId === pos.conditionId || 
-                        (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
-                    );
+                if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
+                    const event = res.data[0];
                     
-                    if (market && market.closed) {
-                        const winningIndex = parseInt(market.winningOutcomeIndex);
-                        let isWin = false;
+                    if (event.closed) {
+                        console.log(`[Sentinel] 🏁 Resolution Found for ${pos.slug}`);
+                        const market = event.markets.find(m => 
+                            m.conditionId === pos.conditionId || 
+                            (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
+                        );
+                        
+                        if (market && market.closed) {
+                            const winningIndex = parseInt(market.winningOutcomeIndex);
+                            let isWin = false;
 
-                        if (winningIndex === 0 && pos.side === 'YES') isWin = true;
-                        if (winningIndex === 1 && pos.side === 'NO') isWin = true;
+                            if (winningIndex === 0 && pos.side === 'YES') isWin = true;
+                            if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
-                        if (isWin) {
-                            const payout = pos.amount; // 1$ per share
-                            const cost = pos.buyPrice * pos.amount;
-                            const profitNet = payout - cost;
-                            const newBal = updateVirtualBalance(payout);
-                            
-                            const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
-                                           `• Entry: $${pos.buyPrice}\n` +
-                                           `• Profit: +$${profitNet.toFixed(2)}\n` +
-                                           `• Capital: $${newBal.toFixed(2)}\n` +
-                                           `• Statut: simulation gagnante`;
-                            
-                            console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
-                            await sendTelegramAlert(winMsg);
-                        } else {
-                            if (pos.isSimulated) {
-                                const newBal = getVirtualBalance();
-                                console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${newBal.toFixed(2)}`);
-                                await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)}`);
+                            if (isWin) {
+                                const payout = pos.amount; 
+                                const cost = pos.buyPrice * pos.amount;
+                                const profitNet = payout - cost;
+                                const newBal = updateVirtualBalance(payout);
+                                
+                                const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
+                                               `• Entry: $${pos.buyPrice}\n` +
+                                               `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                               `• Capital: $${newBal.toFixed(2)}\n` +
+                                               `• Statut: simulation gagnante`;
+                                
+                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
+                                await sendTelegramAlert(winMsg);
+                            } else {
+                                if (pos.isSimulated) {
+                                    const newBal = getVirtualBalance();
+                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${newBal.toFixed(2)}`);
+                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)}`);
+                                }
                             }
-                        }
 
-                        lastResolvedCids.add(pos.tokenId);
-                        positions.splice(i, 1);
-                        changed = true;
+                            lastResolvedCids.add(pos.tokenId);
+                            positions.splice(i, 1);
+                            changed = true;
+                        }
                     }
                 }
             }
         }
-        
+
         if (changed) {
             saveActivePositions(positions);
         }
