@@ -384,6 +384,9 @@ async function mainLoop() {
         const mv = marketState; // Use fresh state instead of memoryHealth fallback
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
+            if (now % 30000 < 1000) { 
+                console.log(`[Engine] Pulse: Monitoring BTC (Delta: ${mv.bDeltaPct.toFixed(3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
+            }
             return;
         }
 
@@ -414,13 +417,26 @@ async function mainLoop() {
             return;
         }
 
-        // Fetch Real-time Orderbook Ask
+        // v17.22.22: Dual-Source Price Discovery (Realtime Orderbook + Gamma Fallback)
         let bestAsk = 0;
-        const book = await clobClient.getOrderBook(tokenId).catch(() => null);
-        const asks = book?.asks || [];
-        if (asks.length > 0) {
-            const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
-            if (prices.length > 0) bestAsk = Math.min(...prices);
+        try {
+            const book = await clobClient.getOrderBook(tokenId).catch(() => null);
+            const asks = book?.asks || [];
+            if (asks.length > 0) {
+                const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                if (prices.length > 0) bestAsk = Math.min(...prices);
+            }
+        } catch (err) {
+            console.error(`[Engine] CLOB Orderbook error for ${tokenId}:`, err.message);
+        }
+
+        // Fallback to Gamma Price if Orderbook is empty (prevents missing trades due to API lag)
+        if (bestAsk === 0) {
+            const gammaPrice = side === 'YES' ? parseFloat(currentSig.priceYes || 0) : parseFloat(currentSig.priceNo || 0);
+            if (gammaPrice > 0) {
+                console.log(`[Engine] ⚠️ Orderbook empty. Using Gamma Fallback: $${gammaPrice}`);
+                bestAsk = gammaPrice;
+            }
         }
 
         // v16.17.1: Dynamic Price Filter
