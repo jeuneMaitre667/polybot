@@ -122,13 +122,17 @@ function processOrderBook(book) {
 
     // We hold a BUY position, so we need to sell. 
     // To sell, we look at the BEST BID (what buyers are offering right now).
-    const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : null;
+    const topBid = book.bids && book.bids.length > 0 ? book.bids[0] : null;
+    let bestBid = topBid ? parseFloat(topBid.price) : null;
     
-    if (!bestBid) return;
+    // v17.36.19: Noise Protection
+    // Ignore extreme outliers (dust bids) often received during initial pipe sync.
+    // If a market starts around 0.50, a bid of 0.005 is noise, not a real crash.
+    if (!bestBid || bestBid < 0.01) return;
 
     const pnlPct = (bestBid - activeSubscription.buyPrice) / activeSubscription.buyPrice;
     
-    // Debug log every few updates to avoid overwhelming console
+    // Debug log status (5% of messages)
     if (Math.random() < 0.05) {
         // console.log(`[SL Sentinel] Spot: ${bestBid} | PnL: ${(pnlPct * 100).toFixed(2)}%`);
     }
