@@ -34,24 +34,42 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin-Performance' : asset}`;
+    const seriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?series_slug=${seriesSlug}&active=true&closed=false`;
     
     const startFetch = Date.now();
     try {
-        console.log(`[${asset}] Discovering active markets from: ${discoveryUrl}`);
+        console.log(`[${asset}] Discovering active 5m markets from: ${discoveryUrl}`);
         const res = await axios.get(discoveryUrl, { timeout: 5000 });
 
         const events = res.data;
         if (!events || !Array.isArray(events) || events.length === 0) {
-            console.warn(`[${asset}] No active events found via discovery.`);
+            console.warn(`[${asset}] No active 5m events found via discovery.`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
-        // On cherche l'Ã©vÃ©nement dont le slug correspond au slot actuel
+        // v17.29.1: Verrou temporel strict (< 15 min du temps actuel) pour Ã©viter les marchÃ©s 2026
+        const nowMs = Date.now();
+        const maxFutureMs = 15 * 60 * 1000; 
+
+        // On cherche l'Ã©vÃ©nement dont le slug correspond au slot actuel OU le plus proche (correctement filtrÃ©)
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
-        const event = events.find(e => e.slug === targetSlug) || events[0]; // Fallback au plus rÃ©cent si slug pas encore indexÃ© mais event prÃ©sent
+        
+        const validEvents = events.filter(e => {
+            const endMs = new Date(e.endDate).getTime();
+            return Math.abs(endMs - nowMs) < maxFutureMs;
+        });
+
+        if (validEvents.length === 0) {
+            console.warn(`[${asset}] No valid 5m events found (all were too far in future or past).`);
+            return { signals: [], slug: null, hasEvent: false };
+        }
+
+        const event = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
         const slug = event.slug;
+        console.log(`[${asset}] Targeted active event: ${event.title} (${slug}) | Ends: ${event.endDate}`);
+        
         if (!event.markets) return [];
 
         const signalsRaw = event.markets.map(m => {
