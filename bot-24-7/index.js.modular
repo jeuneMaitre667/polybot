@@ -148,7 +148,7 @@ async function init() {
 // v17.22.0: Unified Market Context (Synchronized Decision Logic)
 async function getUnifiedMarketState(asset = 'BTC') {
     const now = Date.now();
-    const slotStart = Math.floor(now / 300000) * 300000;
+    const slotStart = Math.ceil(now / 300000) * 300000;
     
     // 1. Fetch Binance Spot (Current)
     const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`).catch(() => null);
@@ -177,8 +177,8 @@ async function reportingLoop() {
 
     try {
         const now = Date.now();
-        const slotStart = Math.floor(now / 300000) * 300000;
-        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+        const slotStart = Math.ceil(now / 300000) * 300000;
+        const secondsLeft = Math.floor((slotStart - now) / 1000);
         
         let startAudit = Date.now();
         
@@ -359,7 +359,8 @@ async function reportingLoop() {
 async function mainLoop() {
     try {
         const now = Date.now();
-        const slotStart = Math.floor(now / 300000) * 300000;
+        // v17.22.16: Round-to-NEXT-5m (Target future expiry)
+        const slotStart = Math.ceil(now / 300000) * 300000;
         
         // 1. Slot Lock (1 trigger max per 5m slot - Anti-Spam Fix v16.20.4)
         if (lastExecutedSlot === slotStart) return;
@@ -369,7 +370,7 @@ async function mainLoop() {
         }
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
-        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+        const secondsLeft = Math.floor((slotStart - now) / 1000);
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
             if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
                 console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);
@@ -395,7 +396,10 @@ async function mainLoop() {
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
-        const currentSig = signalData.signals.find(s => s.slug === signalData.slug) || signalData.signals[0];
+        
+        // v17.22.15: Strict Slot Matching (Ensure we use the ID of the current trading slot)
+        const currentSlotSec = Math.floor(slotStart / 1000);
+        const currentSig = signalData.signals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec))) || signalData.signals[0];
         
         if (!currentSig) {
             console.error("[Engine] No active signal found for slot!");
@@ -404,6 +408,12 @@ async function mainLoop() {
 
         const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
         
+        // v17.22.15: Strict Token Validation
+        if (!tokenId || String(tokenId).length < 20 || !/^\d+$/.test(String(tokenId))) {
+            console.error(`[Engine] ❌ CRITICAL: Invalid Token ID detected for ${side}: "${tokenId}" (Market: ${currentSig?.slug || 'Unknown'})`);
+            return;
+        }
+
         // Fetch Real-time Orderbook Ask
         let bestAsk = 0;
         const book = await clobClient.getOrderBook(tokenId).catch(() => null);
@@ -441,13 +451,8 @@ async function mainLoop() {
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
         
-        // v17.22.13 Logic already fetched tokenId and currentSig above
-        console.log(`[Engine] Target ID: ${tokenId} | Market: ${currentSig.slug}`);
-
-        if (!tokenId || String(tokenId).length < 20) {
-            console.error(`[Engine] Invalid or Missing tokenId (${tokenId})!`);
-            return;
-        }
+        // v17.22.15: Already validated tokenId above
+        console.log(`[Engine] 🛡️ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Side: ${side}`);
 
         const quantity = Math.floor(tradeAmountUsd / bestAsk);
         

@@ -132,12 +132,12 @@ export async function fetchSignals(asset, context = {}) {
     }
 }
 
-function getSlotSlugForAsset(asset) {
-    // v16.9.3 : Target the CURRENT ACTIVE slot (the one currently trading)
+export function getSlotSlugForAsset(asset) {
     const now = Date.now();
-    const slotSec = Math.floor(now / 300000) * 300; 
-    
     const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
+    
+    // v17.22.16: Round-to-NEXT-5m (Target the UPCOMING expiry, not the past)
+    const slotSec = Math.ceil(now / 300000) * 300; 
     return `${prefix}-${slotSec}`;
 }
 
