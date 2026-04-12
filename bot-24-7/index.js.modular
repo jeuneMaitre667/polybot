@@ -483,7 +483,7 @@ async function mainLoop() {
 
         const startExec = Date.now();
         const order = await clobClient.createOrder({
-            token_id: tokenId,
+            tokenId: tokenId, // v17.22.23: Fixed camelCase for SDK
             price: bestAsk + 0.005, // Buffer to ensure fill
             size: quantity,
             side: Side.BUY
@@ -793,15 +793,15 @@ async function executeEmergencyExit(info) {
         const quantity = pos.amount || 1;
         
         // Use a Marketable Limit Order: Price = 0.01 to ensure it fills against the BID
-        const sellOrder = await clobClient.createOrder({
-            token_id: info.tokenId,
-            price: 0.01, 
+        const orderRes = await clobClient.createOrder({
+            tokenId: info.tokenId, // v17.22.23: Fixed camelCase for SDK
+            price: 0.1, // Fixed price for better fills on SL
             size: quantity,
             side: Side.SELL
         });
 
-        if (sellOrder && sellOrder.orderID) {
-            console.log(`[Emergency] ✅ EXIT SUCCESS: ${sellOrder.orderID}`);
+        if (orderRes && orderRes.orderID) {
+            console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
             
             // v17.3.2: Record Losing/Neutral Trade
             Analytics.recordTrade({
