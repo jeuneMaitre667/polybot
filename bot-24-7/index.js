@@ -616,36 +616,38 @@ async function performanceLoop() {
     // --- 🏆 WINNER WATCHER (REDEEM) ---
     try {
         const positions = loadActivePositions();
+        if (positions.length === 0) return;
+
         const now = Date.now();
         let changed = false;
 
-        for (let i = 0; i < positions.length; i++) {
-            const pos = positions[i];
-            
-            // Si le marché est fini depuis > 2min et non résolu
-            if (pos.slotEnd && (now > pos.slotEnd + 120000) && !lastResolvedCids.has(pos.tokenId)) {
+        // v17.36.41: Robust Discovery-based Resolution
+        // Instead of querying each slug (flaky API), we scan the last closed events in the series
+        const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=10684&closed=true&limit=20`;
+        const res = await axios.get(discoveryUrl).catch(() => null);
+        
+        if (res && res.data && Array.isArray(res.data)) {
+            const closedEvents = res.data;
+
+            for (let i = positions.length - 1; i >= 0; i--) {
+                const pos = positions[i];
                 
-                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}`;
-                const res = await axios.get(url).catch(() => null);
-                
-                if (res && res.data && res.data[0]) {
-                    const event = res.data[0];
-                    const market = event.markets.find(m => m.conditionId === pos.tokenId || (Array.isArray(m.clobTokenIds) && m.clobTokenIds.includes(pos.tokenId)));
+                // On cherche notre événement dans la liste des clos
+                const event = closedEvents.find(e => e.slug === pos.slug || e.markets.some(m => m.conditionId === pos.conditionId || (m.clobTokenIds && m.clobTokenIds.includes(pos.tokenId))));
+
+                if (event && event.closed) {
+                    console.log(`[Sentinel] 🏁 Market Resolution Found: ${event.slug}`);
+                    
+                    const market = event.markets.find(m => m.conditionId === pos.conditionId || (Array.isArray(m.clobTokenIds) && m.clobTokenIds.includes(pos.tokenId)));
                     
                     if (market && market.closed) {
-                        const outcomes = JSON.parse(market.outcomePrices || '["0","0"]');
-                        const winningIndex = outcomes.indexOf("1");
-                        
+                        const winningIndex = parseInt(market.winningOutcomeIndex);
                         let isWin = false;
+
                         if (winningIndex === 0 && pos.side === 'YES') isWin = true;
                         if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
                         if (isWin) {
-                            const profitTotal = pos.amount; // En gros pos.amount * ($1 - $0) si on ignore les frais
-                            const profitNet = profitTotal - (pos.buyPrice * pos.amount);
-
-                            const winMsg = `🏆 *SNIPER WIN : BTC ${pos.side}* 🏆\n\n` +
-                                         `• Slot : ${new Date(pos.slotStart).toLocaleTimeString()}\n` +
                                          `• Payout : +${(pos.amount).toFixed(2)}$\n` +
                                          `• Profit Net : +${profitNet.toFixed(2)}$\n` +
                                          `• Status : Victory Confirmed`;
