@@ -55,22 +55,20 @@ export async function fetchSignals(asset, context = {}) {
         const maxFutureMs = 15 * 60 * 1000; 
 
         const validEvents = events.filter(e => {
-            // 1. Uniquement la série officielle 5 minutes
-            if (e.seriesSlug !== targetSeriesSlug) return false;
-            
-            // 2. Verrou temporel (Évite les marchés de 2026/2027)
+            // v17.32.0: Filtrage par série (stable) et verrou temporel (sécurité capital)
             const endMs = new Date(e.endDate).getTime();
             const timeDiff = endMs - nowMs;
-            if (timeDiff <= 0 || timeDiff > maxFutureMs) return false;
-            
-            // 3. Validation par titre (Sécurité visuelle)
-            if (!String(e.title).includes("5 minutes")) return false;
-            
+            const seriesMatch = e.seriesSlug === targetSeriesSlug;
+
+            // On rejette si on n'est pas sur la bonne série ou si le marché est trop loin (2026/2027)
+            if (!seriesMatch || timeDiff <= 0 || timeDiff > maxFutureMs) {
+                return false;
+            }
             return true;
         });
 
         if (validEvents.length === 0) {
-            console.warn(`[${asset}] 🛡️ SCAN RESULTS: ${events.length} events found, but ZERO matched the 5m Sniper filters. (Check if 2026 markets were excluded).`);
+            console.warn(`[${asset}] 🛡️ SCAN RESULTS: ${events.length} events found in Series ${seriesId}, but NONE matched the temporal security window (15m).`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
