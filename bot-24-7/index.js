@@ -222,9 +222,11 @@ async function reportingLoop() {
         let bestAskUp = 0;
         let bestAskDown = 0;
 
-        // v16.9.2: Real Transparent Dual-Ask Capture
-        if (allBtcSignals.length > 0) {
-            const sig = allBtcSignals[0];
+        // v17.25.0: Strict Reporting Guard (Ensure we only show data for the CURRENT slot)
+        const currentSlotSec = Math.floor(slotStart / 1000);
+        const sig = allBtcSignals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec)));
+
+        if (sig) {
             try {
                 let priceUp = 0;
                 let priceDown = 0;
@@ -411,12 +413,14 @@ async function mainLoop() {
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
         
-        // v17.22.15: Strict Slot Matching (Ensure we use the ID of the current trading slot)
+        // v17.25.0: Strict Slot Matching (REMOVED unsafe fallback to ensure zero "Invalid token id" errors)
         const currentSlotSec = Math.floor(slotStart / 1000);
-        const currentSig = signalData.signals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec))) || signalData.signals[0];
+        const currentSig = signalData.signals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec)));
         
         if (!currentSig) {
-            console.error("[Engine] No active signal found for slot!");
+            if (now % 30000 < 1000) {
+                console.warn(`[Engine] Skip: Target market (slug ends with ${currentSlotSec}) not published yet by Polymarket.`);
+            }
             return;
         }
 
