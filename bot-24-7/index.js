@@ -113,6 +113,60 @@ function addPosition(pos) {
     saveActivePositions(list);
 }
 
+/**
+ * checkFastResolution(currentPrice)
+ * v17.36.85: Zero-latency local resolution for fast compounding.
+ * Releases simulated funds as soon as the slot ends.
+ */
+async function checkFastResolution(currentPrice) {
+    if (!IS_SIMULATION_ENABLED) return;
+    
+    const positions = loadActivePositions();
+    if (positions.length === 0) return;
+    
+    const now = Date.now();
+    let changed = false;
+    
+    for (let i = positions.length - 1; i >= 0; i--) {
+        const pos = positions[i];
+        if (!pos.isSimulated || !pos.slotEnd || !pos.strike) continue;
+        
+        // Fast resolution window: End reached + 2s margin
+        if (now > pos.slotEnd + 2000) {
+            const isUp = currentPrice >= pos.strike;
+            const winningSide = isUp ? 'YES' : 'NO';
+            const isWin = pos.side === winningSide;
+            
+            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | Strike:${pos.strike} | EndPrice:${currentPrice} | Side:${pos.side} | Winner:${winningSide}`);
+            
+            if (isWin) {
+                const payout = pos.amount;
+                const profitNet = payout - (pos.buyPrice * pos.amount);
+                const newBal = updateVirtualBalance(payout);
+                
+                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${newBal.toFixed(2)}`);
+                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${newBal.toFixed(2)}\n• Statut: Libération ultra-rapide`);
+            } else {
+                const curBal = getVirtualBalance();
+                console.log(`[FastResolution] 💀 Local LOSS. Balance remains: $${curBal.toFixed(2)}`);
+                await sendTelegramAlert(`🧪 *FAST REDEEM (LOSS)* 💀\nCapital restant: $${curBal.toFixed(2)}`);
+            }
+            
+            lastResolvedCids.add(pos.tokenId);
+            positions.splice(i, 1);
+            changed = true;
+        }
+    }
+    
+    if (changed) {
+        saveActivePositions(positions);
+        // Refresh local activePosition state if it was the one we just resolved
+        if (activePosition && !positions.find(p => p.tokenId === activePosition.tokenId)) {
+            activePosition = null;
+        }
+    }
+}
+
 // --- INITIALIZATION ---
 async function init() {
     console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
@@ -404,6 +458,11 @@ async function mainLoop() {
         const marketState = await getUnifiedMarketState('BTC');
         const mv = marketState; // Use fresh state instead of memoryHealth fallback
         
+        // v17.36.85: Fast Resolution - released budget for potential compounding
+        if (IS_SIMULATION_ENABLED && marketState) {
+            await checkFastResolution(marketState.bSpot);
+        }
+        
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
             if (now % 30000 < 1000) { 
                 console.log(`[Engine] Pulse: Monitoring BTC (Delta: ${mv.bDeltaPct.toFixed(3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
@@ -546,6 +605,7 @@ async function mainLoop() {
                 tokenId,
                 conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
+                strike: currentSig.strike, // v17.36.85: Added for Fast-Resolution
                 amount: quantity,
                 slotStart,
                 side,
