@@ -376,6 +376,7 @@ async function reportingLoop() {
 
 async function mainLoop() {
     try {
+        const cycleStart = Date.now();
         const now = Date.now();
         lastPulseTime = now; // v17.24.0: Activity Signal
         
@@ -501,10 +502,13 @@ async function mainLoop() {
         lastExecutedSlot = slotStart;
 
         if (IS_SIMULATION_ENABLED) {
-            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)})`);
+            const totalLatency = Date.now() - cycleStart;
+            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | Latency: ${totalLatency}ms`);
+            
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
-                                `• Slot: ${slotStart}\n` +
+                                `• Side: ${side}\n` +
                                 `• Price: $${bestAsk}\n` +
+                                `• Latency: ${totalLatency}ms\n` +
                                 `• Delta: ${bDeltaPct.toFixed(3)}%\n` +
                                 `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
                                 `• Capital: $${getVirtualBalance().toFixed(2)}`;
@@ -525,9 +529,11 @@ async function mainLoop() {
         // --- COMMON STATE TRACKING (v17.35.0: Unifed for Real & Sim) ---
         if (IS_SIMULATION_ENABLED || (order && order.orderID)) {
             if (!IS_SIMULATION_ENABLED) {
+                const totalLatency = Date.now() - cycleStart;
                 const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                                `• Slot: ${slotStart}\n` +
+                                `• Side: ${side}\n` +
                                 `• Price: $${bestAsk}\n` +
+                                `• Latency: ${totalLatency}ms\n` +
                                 `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
                                 `• Window: Authorized (T-${secondsLeft}s)`;
                 sendTelegramAlert(entryMsg);
