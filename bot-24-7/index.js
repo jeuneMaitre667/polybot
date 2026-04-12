@@ -498,7 +498,7 @@ async function mainLoop() {
 
         const startExec = Date.now();
         const order = await clobClient.createOrder({
-            tokenId: tokenId, // v17.22.23: Fixed camelCase for SDK
+            tokenID: tokenId, // v17.27.2: Official documentation uses tokenID for TS SDK
             price: bestAsk + 0.005, // Buffer to ensure fill
             size: quantity,
             side: Side.BUY

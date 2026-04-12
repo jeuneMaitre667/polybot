@@ -34,22 +34,25 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    const { getCurrent5mEventSlug } = context;
-    let slug = null;
-    if (getCurrent5mEventSlug) {
-        slug = getCurrent5mEventSlug(asset);
-    } else {
-        slug = getSlotSlugForAsset(asset);
-    }
-
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin-Performance' : asset}`;
+    
     const startFetch = Date.now();
     try {
-        const url = `${GAMMA_EVENT_BY_SLUG_URL}/${slug}`;
-        console.log(`[${asset}] Fetching signals from: ${url}`);
-        const res = await axios.get(url, { timeout: 5000 });
+        console.log(`[${asset}] Discovering active markets from: ${discoveryUrl}`);
+        const res = await axios.get(discoveryUrl, { timeout: 5000 });
 
-        const event = res.data;
-        if (!event || !event.markets) return [];
+        const events = res.data;
+        if (!events || !Array.isArray(events) || events.length === 0) {
+            console.warn(`[${asset}] No active events found via discovery.`);
+            return { signals: [], slug: null, hasEvent: false };
+        }
+
+        // On cherche l'Ã©vÃ©nement dont le slug correspond au slot actuel
+        const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
+        const event = events.find(e => e.slug === targetSlug) || events[0]; // Fallback au plus rÃ©cent si slug pas encore indexÃ© mais event prÃ©sent
+        
+        const slug = event.slug;
+        if (!event.markets) return [];
 
         const signalsRaw = event.markets.map(m => {
             const outcomePrices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
