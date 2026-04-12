@@ -48,6 +48,7 @@ const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
 const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
 const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
 const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
+const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v17.35.0
 
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
 const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
@@ -461,23 +462,26 @@ async function mainLoop() {
         }
 
         // 4. Risk & Collateral
-        let tradeAmountUsd = RiskManager.calculateTradeSize(userBalance || 0); 
+        const baseBalance = IS_SIMULATION_ENABLED ? VIRTUAL_BALANCE : (userBalance || 0);
+        let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
         
         // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
         const safetyFactor = 0.98; // Leave a tiny bit for precision safety
-        const availableMax = Math.max(0, (userBalance || 0) * safetyFactor);
+        const availableMax = IS_SIMULATION_ENABLED ? VIRTUAL_BALANCE : Math.max(0, (userBalance || 0) * safetyFactor);
         
         if (tradeAmountUsd > availableMax) {
-            console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to low balance.`);
+            console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to balance limits.`);
             tradeAmountUsd = availableMax;
         }
 
         if (tradeAmountUsd < 1.0) {
-            console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${userBalance.toFixed(2)})`);
+            console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${baseBalance.toFixed(2)})`);
             return;
         }
 
-        await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
+        if (!IS_SIMULATION_ENABLED) {
+            await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
+        }
 
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
@@ -491,33 +495,31 @@ async function mainLoop() {
         lastExecutedSlot = slotStart;
 
         if (IS_SIMULATION_ENABLED) {
-            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk}`);
-            sendTelegramAlert(`🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n(Mode démo actif, aucun fonds engagé)`);
-            return;
+            console.log(`[Engine] 🧪 SIMULATION: Order would have been placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)})`);
+            sendTelegramAlert(`🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n(Mode démo actif, Capital Virtuel: $${VIRTUAL_BALANCE})`);
+            // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
+        } else {
+            const startExec = Date.now();
+            order = await clobClient.createOrder({
+                tokenID: tokenId,
+                price: bestAsk + 0.005, 
+                size: quantity,
+                side: Side.BUY
+            });
+            const latency = Date.now() - startExec;
+            console.log(`[Engine] ✅ Order Filled: ${order.orderID} | Latency: ${latency}ms`);
         }
 
-        const startExec = Date.now();
-        const order = await clobClient.createOrder({
-            tokenID: tokenId, // v17.27.2: Official documentation uses tokenID for TS SDK
-            price: bestAsk + 0.005, // Buffer to ensure fill
-            size: quantity,
-            side: Side.BUY
-        });
-        const latency = Date.now() - startExec;
-
-        if (order && order.orderID) {
-            console.log(`[Engine] ✅ Order Filled: ${order.orderID}`);
-            
-            const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                            `• Slot: ${slotStart}\n` +
-                            `• Price: $${bestAsk}\n` +
-                            `• Strike: $${mv.binanceStrike.toFixed(2)}\n` +
-                            `• Delta: ${mv.binanceDeltaPct.toFixed(3)}%\n` +
-                            `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
-                            `• Window: Authorized (T-${secondsLeft}s)\n` +
-                            `• Latency: ${latency}ms (Execution)`;
-            
-            sendTelegramAlert(entryMsg);
+        // --- COMMON STATE TRACKING (v17.35.0: Unifed for Real & Sim) ---
+        if (IS_SIMULATION_ENABLED || (order && order.orderID)) {
+            if (!IS_SIMULATION_ENABLED) {
+                const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
+                                `• Slot: ${slotStart}\n` +
+                                `• Price: $${bestAsk}\n` +
+                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
+                                `• Window: Authorized (T-${secondsLeft}s)`;
+                sendTelegramAlert(entryMsg);
+            }
 
             activePosition = {
                 tokenId,
@@ -528,12 +530,13 @@ async function mainLoop() {
                 side,
                 asset: 'BTC',
                 slug: currentSig.slug,
-                slotEnd: slotStart + 300000
+                slotEnd: slotStart + 300000,
+                isSimulated: IS_SIMULATION_ENABLED // v17.35.0 tag
             };
 
             addPosition(activePosition);
 
-            // v17.1.0: Launch Ultra-Fast SL Sentinel (Real-time WebSocket monitoring)
+            // v17.1.0: Launch Stop Loss Sentinel
             const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
             SLSentinel.startMonitoring(
                 tokenId, 
@@ -800,20 +803,24 @@ async function executeEmergencyExit(info) {
         const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
         const nonce = nonceRes.data.nonce;
 
-        // 2. Encode Sell Call (Sell is just another buy but of the opposite side? No, it's selling the token)
-        // For Polymarket CLOB, selling means placing a Side.SELL order.
-        // BUT for a "Clean" exit on CTF, we can also use 'merge' or just place an order.
-        // Here we use the CLOB Order because it's the fastest.
-        
+        // 2. Encode Sell Call
         const quantity = pos.amount || 1;
         
-        // Use a Marketable Limit Order: Price = 0.01 to ensure it fills against the BID
-        const orderRes = await clobClient.createOrder({
-            tokenId: info.tokenId, // v17.22.23: Fixed camelCase for SDK
-            price: 0.1, // Fixed price for better fills on SL
-            size: quantity,
-            side: Side.SELL
-        });
+        if (pos.isSimulated) {
+            console.log(`[Emergency] 🧪 SIMULATION EXIT: Selling ${quantity} shares of ${info.tokenId} at $${info.currentPrice}`);
+            const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
+                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                            `• Prix Sortie: $${info.currentPrice}\n` +
+                            `• Statut: simulation réussie`;
+            await sendTelegramAlert(exitMsg);
+            
+            activePosition = null;
+            saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+            SLSentinel.stopMonitoring();
+            return;
+        }
+
+        // 1. Get Nonce - v17.24.0: Added Timeout
 
         if (orderRes && orderRes.orderID) {
             console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
