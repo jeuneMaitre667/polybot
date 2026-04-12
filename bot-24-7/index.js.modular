@@ -358,6 +358,7 @@ async function reportingLoop() {
 
 async function mainLoop() {
     try {
+        const now = Date.now();
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
         
