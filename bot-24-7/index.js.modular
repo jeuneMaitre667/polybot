@@ -131,7 +131,7 @@ async function init() {
     
     // Core Operational Loops (1Hz)
     setInterval(mainLoop, 1000);
-    setInterval(reportingLoop, 3000);
+    setInterval(reportingLoop, 1000);
     setInterval(performanceLoop, 60000); // Check every minute for resolution/digest
     
     // Initial triggers
@@ -389,10 +389,30 @@ async function mainLoop() {
         const bDeltaPct = mv.bDeltaPct; // Local variable for logging
         const side = bDeltaPct > 0 ? 'YES' : 'NO';
         
-        // Re-fetch asks from memoryHealth for latest orderbook depth (ReportingLoop handles depth)
-        const bestAsk = side === 'YES' ? memoryHealth.dashboardMarketView?.bestAskUp : memoryHealth.dashboardMarketView?.bestAskDown;
-
+        // v17.22.13: FORCED REAL-TIME DEPTH (Eliminate 3s Health-Sync Lag)
+        // D'Ã¨s que le signal Binance est bon, on va chercher le prix REEL sur l'Orderbook
+        console.log(`[Engine] 🔍 Binance Signal Met (${bDeltaPct.toFixed(3)}%). Checking Polymarket Depth for ${side}...`);
         
+        // Fetch specific tokenId from signals
+        const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
+        const currentSig = signalData.signals.find(s => s.slug === signalData.slug) || signalData.signals[0];
+        
+        if (!currentSig) {
+            console.error("[Engine] No active signal found for slot!");
+            return;
+        }
+
+        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        
+        // Fetch Real-time Orderbook Ask
+        let bestAsk = 0;
+        const book = await clobClient.getOrderBook(tokenId).catch(() => null);
+        const asks = book?.asks || [];
+        if (asks.length > 0) {
+            const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+            if (prices.length > 0) bestAsk = Math.min(...prices);
+        }
+
         // v16.17.1: Dynamic Price Filter
         if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
             console.warn(`[Engine] Skip: Price outside range ($${bestAsk} for ${side})`);
@@ -421,18 +441,7 @@ async function mainLoop() {
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
         
-        // Fetch specific tokenId from signals
-        const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
-        
-        // v17.0.4: Find signal matching the CURRENT slot to avoid "Invalid token id" shift
-        const currentSig = signalData.signals.find(s => s.slug === signalData.slug) || signalData.signals[0];
-        
-        if (!currentSig) {
-            console.error("[Engine] No active signal found for slot!");
-            return;
-        }
-
-        const tokenId = side === 'YES' ? currentSig.tokenIdYes : currentSig.tokenIdNo;
+        // v17.22.13 Logic already fetched tokenId and currentSig above
         console.log(`[Engine] Target ID: ${tokenId} | Market: ${currentSig.slug}`);
 
         if (!tokenId || String(tokenId).length < 20) {

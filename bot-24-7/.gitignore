@@ -9,3 +9,7 @@ orders.log
 bot.log
 liquidity-history.json
 boundary-strikes.json
+binance-strikes.json
+health-v17.json
+*.log
+
