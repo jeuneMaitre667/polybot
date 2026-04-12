@@ -34,47 +34,48 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    // v17.29.10: Utilisation du series_slug exact auditÃ© sur Gamma
+    // v17.29.16: La recherche textuelle est obligatoire car l'API ignore le paramètre series_slug en URL
     const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?series_slug=${targetSeriesSlug}&active=true&closed=false`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin-Performance' : asset}`;
     
     const startFetch = Date.now();
     try {
-        console.log(`[${asset}] Discovering 5m series markets: ${discoveryUrl}`);
+        console.log(`[${asset}] Scanning for 5m markets in series: ${targetSeriesSlug}`);
         const res = await axios.get(discoveryUrl, { timeout: 5000 });
 
         const events = res.data;
         if (!events || !Array.isArray(events) || events.length === 0) {
-            console.warn(`[${asset}] No active events found for series ${targetSeriesSlug}.`);
+            console.warn(`[${asset}] No active events found via discovery.`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
-        // v17.29.10: Filtrage de sÃ©curitÃ© redondant (client-side)
+        // v17.29.16: Filtrage manuel robuste (seule méthode fiable confirmée par audit)
         const nowMs = Date.now();
-        const maxFutureMs = 12 * 60 * 1000; // 12 minutes max pour capturer le slot actuel + le suivant immÃ©diat
+        const maxFutureMs = 15 * 60 * 1000; 
 
         const validEvents = events.filter(e => {
-            // Uniquement la sÃ©rie récurrente 5m
+            // Uniquement la sÃ©rie récurrente 5m (vérification stricte du slug de série interne)
             if (e.seriesSlug !== targetSeriesSlug) return false;
             
-            // Verrou temporel strict (April 13, 2026 only, no June 2026)
+            // Verrou temporel strict (Finit dans moins de 15 minutes)
             const endMs = new Date(e.endDate).getTime();
             const timeDiff = endMs - nowMs;
             
-            // On veut un marchÃ© qui finit bientÃ´t (entre -5 min et +12 min)
-            return timeDiff > -300000 && timeDiff < maxFutureMs;
+            // On accepte les marchés qui finissent bientôt (entre maintenant et +15 min)
+            return timeDiff > 0 && timeDiff < maxFutureMs;
         });
 
         if (validEvents.length === 0) {
-            console.warn(`[${asset}] Security filter REJECTED all ${events.length} markets (out of time window).`);
+            console.warn(`[${asset}] Found ${events.length} results, but NONE matched the security filters (seriesSlug:${targetSeriesSlug} & window:15m).`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
+        // On prend soit le slug exact, soit le marché le plus imminant dans la série 5m
         const event = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
         const slug = event.slug;
-        console.log(`[${asset}] 🎯 TARGET VALIDATED: ${event.title} | Ends: ${event.endDate}`);
+        console.log(`[${asset}] 🎯 TARGET CONFIRMED: ${event.title} | Ends: ${event.endDate} | seriesSlug: ${event.seriesSlug}`);
         
         if (!event.markets) return [];
 
