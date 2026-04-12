@@ -17,10 +17,9 @@ module.exports = {
     },
     {
       name: "poly-ui",
-      script: "npm.cmd",
-      args: "run dev -- --port 5175 --host",
+      script: "./node_modules/vite/bin/vite.js",
+      args: "--port 5175 --host",
       cwd: "./",
-      interpreter: "none",
       watch: false,
     }
   ]
