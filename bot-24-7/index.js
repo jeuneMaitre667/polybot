@@ -482,8 +482,8 @@ async function mainLoop() {
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered: ${side} at ${bestAsk} | Size: $${tradeAmountUsd.toFixed(2)} | Balance: $${userBalance?.toFixed(2)}`);
         
-        // v17.22.15: Already validated tokenId above
-        console.log(`[Engine] 🛡️ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Side: ${side}`);
+        // v17.29.5: High visibility on target market expiration
+        console.log(`[Engine] 🛡️ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Ends: ${currentSig.m?.endDate} | Side: ${side}`);
 
         const quantity = Math.floor(tradeAmountUsd / bestAsk);
         

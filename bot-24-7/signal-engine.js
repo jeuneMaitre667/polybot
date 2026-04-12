@@ -34,41 +34,51 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    const seriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?series_slug=${seriesSlug}&active=true&closed=false`;
+    const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=Bitcoin-Performance`;
     
     const startFetch = Date.now();
     try {
-        console.log(`[${asset}] Discovering active 5m markets from: ${discoveryUrl}`);
+        console.log(`[${asset}] Scaning global events for 5m series: ${targetSeriesSlug}`);
         const res = await axios.get(discoveryUrl, { timeout: 5000 });
 
         const events = res.data;
         if (!events || !Array.isArray(events) || events.length === 0) {
-            console.warn(`[${asset}] No active 5m events found via discovery.`);
+            console.warn(`[${asset}] No active events found via discovery.`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
-        // v17.29.1: Verrou temporel strict (< 15 min du temps actuel) pour Ã©viter les marchÃ©s 2026
+        // v17.29.4: Filtrage MANUEL ultra-strict côté client
         const nowMs = Date.now();
         const maxFutureMs = 15 * 60 * 1000; 
 
-        // On cherche l'Ã©vÃ©nement dont le slug correspond au slot actuel OU le plus proche (correctement filtrÃ©)
-        const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
-        
         const validEvents = events.filter(e => {
+            // 1. Doit appartenir à la bonne série 5m
+            const isCorrectSeries = e.seriesSlug === targetSeriesSlug;
+            // 2. Ne doit pas être un marché de 2026 (endDate proche)
             const endMs = new Date(e.endDate).getTime();
-            return Math.abs(endMs - nowMs) < maxFutureMs;
+            const isNearFuture = (endMs > nowMs) && (endMs - nowMs < maxFutureMs);
+            
+            return isCorrectSeries && isNearFuture;
         });
 
         if (validEvents.length === 0) {
-            console.warn(`[${asset}] No valid 5m events found (all were too far in future or past).`);
-            return { signals: [], slug: null, hasEvent: false };
+            // Fallback: search by specific slot if expected
+            const fallbackSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
+            const urgentMatch = events.find(e => e.slug === fallbackSlug);
+            if (urgentMatch) {
+                validEvents.push(urgentMatch);
+            } else {
+                console.warn(`[${asset}] No valid 5m events found. (Found ${events.length} results, but none matched the 5m series and time window).`);
+                return { signals: [], slug: null, hasEvent: false };
+            }
         }
 
+        const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
         const event = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
         const slug = event.slug;
-        console.log(`[${asset}] Targeted active event: ${event.title} (${slug}) | Ends: ${event.endDate}`);
+        console.log(`[${asset}] 🎯 TARGET CONFIRMED: ${event.title} | Ends: ${event.endDate} | Slug: ${slug}`);
         
         if (!event.markets) return [];
 
