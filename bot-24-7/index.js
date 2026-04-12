@@ -811,28 +811,19 @@ async function executeRedeemOnChain(conditionId) {
  */
 async function executeEmergencyExit(info) {
     try {
-        console.log(`[Emergency] 🚨 EXECUTION: Selling ${info.tokenId}...`);
+        console.log(`[Emergency] 🚨 EXECUTION: Handling exit for ${info.tokenId}...`);
         
-        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
-        const apiKey = process.env.RELAYER_API_KEY;
-
         // Fetch current quantity from active position
         const positions = loadActivePositions();
         const pos = positions.find(p => p.tokenId === info.tokenId);
         if (!pos) throw new Error("Position data not found for exit.");
 
-        // 1. Get Nonce - v17.24.0: Added Timeout
-        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
-        const nonce = nonceRes.data.nonce;
-
-        // 2. Encode Sell Call
-        const quantity = pos.amount || 1;
-        
+        // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {
             const lossUsd = (pos.buyPrice - info.currentPrice) * pos.amount;
             const newBal = updateVirtualBalance(-lossUsd);
 
-            console.log(`[Emergency] 🧪 SIMULATION EXIT: Selling ${quantity} shares of ${info.tokenId} at $${info.currentPrice}`);
+            console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (PnL: ${(info.pnlPct * 100).toFixed(2)}%)`);
             const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                             `• Perte : -${lossUsd.toFixed(2)}$\n` +
@@ -845,6 +836,13 @@ async function executeEmergencyExit(info) {
             SLSentinel.stopMonitoring();
             return;
         }
+
+        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
+        const apiKey = process.env.RELAYER_API_KEY;
+
+        // 1. Get Nonce - v17.24.0: Added Timeout
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
+        const nonce = nonceRes.data.nonce;
 
         // 1. Get Nonce - v17.24.0: Added Timeout
 
