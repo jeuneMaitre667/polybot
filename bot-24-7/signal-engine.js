@@ -49,33 +49,36 @@ export async function fetchSignals(asset, context = {}) {
             return { signals: [], slug: null, hasEvent: false };
         }
 
-        // v17.29.16: Filtrage manuel robuste (seule méthode fiable confirmée par audit)
+        // v17.30.0: Filtrage laser multi-critères (Le "Viseur Sniper")
         const nowMs = Date.now();
         const maxFutureMs = 15 * 60 * 1000; 
 
         const validEvents = events.filter(e => {
-            // Uniquement la sÃ©rie récurrente 5m (vérification stricte du slug de série interne)
+            // 1. Uniquement la série officielle 5 minutes
             if (e.seriesSlug !== targetSeriesSlug) return false;
             
-            // Verrou temporel strict (Finit dans moins de 15 minutes)
+            // 2. Verrou temporel (Évite les marchés de 2026/2027)
             const endMs = new Date(e.endDate).getTime();
             const timeDiff = endMs - nowMs;
+            if (timeDiff <= 0 || timeDiff > maxFutureMs) return false;
             
-            // On accepte les marchés qui finissent bientôt (entre maintenant et +15 min)
-            return timeDiff > 0 && timeDiff < maxFutureMs;
+            // 3. Validation par titre (Sécurité visuelle)
+            if (!String(e.title).includes("5 minutes")) return false;
+            
+            return true;
         });
 
         if (validEvents.length === 0) {
-            console.warn(`[${asset}] Found ${events.length} results, but NONE matched the security filters (seriesSlug:${targetSeriesSlug} & window:15m).`);
+            console.warn(`[${asset}] 🛡️ SCAN RESULTS: ${events.length} events found, but ZERO matched the 5m Sniper filters. (Check if 2026 markets were excluded).`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
-        // On prend soit le slug exact, soit le marché le plus imminant dans la série 5m
+        // On prend le marché le plus imminant de la série validée
         const event = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
         const slug = event.slug;
-        console.log(`[${asset}] 🎯 TARGET CONFIRMED: ${event.title} | Ends: ${event.endDate} | seriesSlug: ${event.seriesSlug}`);
+        console.log(`[${asset}] 🎯 SNIPER LOCKED: ${event.title} | Slot End: ${event.endDate} | Slug: ${slug}`);
         
         if (!event.markets) return [];
 
