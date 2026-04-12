@@ -1,41 +1,5 @@
 [
   {
-    "tokenId": "87578208307967911376933956838412214356515895975467800734252924786944126780010",
-    "conditionId": "0x793ca397292c042c40afbda7a562e0389470414c8db67e6b41a3897d39dd82c9",
-    "buyPrice": 0.89,
-    "amount": 112,
-    "slotStart": 1776034200000,
-    "side": "YES",
-    "asset": "BTC",
-    "slug": "btc-updown-5m-1776034200",
-    "slotEnd": 1776034500000,
-    "isSimulated": true
-  },
-  {
-    "tokenId": "39340476077602769657494476092657266611141546608786911477228826948073601993877",
-    "conditionId": "0x778e618fdd8889083a6a479466b46f78abcb528938b545f1705b06104ab457bc",
-    "buyPrice": 0.97,
-    "amount": 10,
-    "slotStart": 1776035400000,
-    "side": "NO",
-    "asset": "BTC",
-    "slug": "btc-updown-5m-1776035400",
-    "slotEnd": 1776035700000,
-    "isSimulated": true
-  },
-  {
-    "tokenId": "87092976841110441403272062615034670930003993420676319004704004459343417805575",
-    "conditionId": "0x37395ac64a44c70dea5752456f554e4050c6f774db0fb382883cd228e778bbf9",
-    "buyPrice": 0.98,
-    "amount": 10,
-    "slotStart": 1776036600000,
-    "side": "NO",
-    "asset": "BTC",
-    "slug": "btc-updown-5m-1776036600",
-    "slotEnd": 1776036900000,
-    "isSimulated": true
-  },
-  {
     "tokenId": "15532831036461154169032449031884028393176047024176987484784028713632975460462",
     "conditionId": "0xda78be9c42374786e83fa67b10093b38bb232db1848aa7fa1601148f33b875e5",
     "buyPrice": 0.94,
