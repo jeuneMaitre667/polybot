@@ -34,9 +34,9 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    // v17.29.16: La recherche textuelle est obligatoire car l'API ignore le paramètre series_slug en URL
+    // v17.29.19: Recherche la plus large possible pour garantir l'inclusion des 5m dans les résultats
     const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin-Performance' : asset}`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events?active=true&closed=false&search=${asset === 'BTC' ? 'Bitcoin' : asset}`;
     
     const startFetch = Date.now();
     try {
