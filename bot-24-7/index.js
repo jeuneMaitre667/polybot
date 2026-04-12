@@ -648,52 +648,40 @@ async function performanceLoop() {
                         if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
                         if (isWin) {
-                                         `• Payout : +${(pos.amount).toFixed(2)}$\n` +
-                                         `• Profit Net : +${profitNet.toFixed(2)}$\n` +
-                                         `• Status : Victory Confirmed`;
+                            const payout = pos.amount; // 1$ per share
+                            const cost = pos.buyPrice * pos.amount;
+                            const profitNet = payout - cost;
+                            const newBal = updateVirtualBalance(payout);
                             
+                            const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
+                                           `• Entry: $${pos.buyPrice}\n` +
+                                           `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                           `• Capital: $${newBal.toFixed(2)}\n` +
+                                           `• Statut: simulation gagnante`;
+                            
+                            console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
                             await sendTelegramAlert(winMsg);
-                            
-                            // --- AUTOMATED REDEEM (v16.20.0) ---
-                            if (pos.isSimulated) {
-                                const newBal = updateVirtualBalance(profitNet);
-                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
-                                await sendTelegramAlert(`🧪 *VIRTUAL BALANCE UPDATE* 🧪\nCapital: $${newBal.toFixed(2)} (+${profitNet.toFixed(2)}$)`);
-                            } else if (pos.conditionId) {
-                                await executeRedeemOnChain(pos.conditionId);
-                            }
-
-                            const redeemLog = {
-                                at: new Date().toISOString(),
-                                event: 'resolution_redeem',
-                                outcome: 'win',
-                                conditionId: pos.tokenId,
-                                asset: pos.asset,
-                                side: pos.side
-                            };
-                            fs.appendFileSync(path.join(process.cwd(), 'orders.log'), JSON.stringify(redeemLog) + '\n');
                         } else {
-                            // C'est une perte sèche (Marché expiré sans SL touché)
                             if (pos.isSimulated) {
-                                const lossTotal = pos.buyPrice * pos.amount;
-                                const newBal = updateVirtualBalance(-lossTotal);
-                                console.log(`[VirtualRedeem] 💀 Simulated LOSS. New Balance: $${newBal.toFixed(2)}`);
-                                await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)} (-${lossTotal.toFixed(2)}$)`);
+                                const newBal = getVirtualBalance();
+                                console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${newBal.toFixed(2)}`);
+                                await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)}`);
                             }
                         }
-                        
+
                         lastResolvedCids.add(pos.tokenId);
                         positions.splice(i, 1);
-                        i--;
                         changed = true;
                     }
                 }
             }
         }
         
-        if (changed) saveActivePositions(positions);
+        if (changed) {
+            saveActivePositions(positions);
+        }
     } catch (err) {
-        console.error(`[Sentinel] Error Winner Watcher:`, err.message);
+        console.error(`[Sentinel] Resolution Error:`, err.message);
     }
 }
 
