@@ -621,9 +621,8 @@ async function performanceLoop() {
         const now = Date.now();
         let changed = false;
 
-        // v17.36.41: Robust Discovery-based Resolution
-        // Instead of querying each slug (flaky API), we scan the last closed events in the series
-        const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=10684&closed=true&limit=20`;
+        // v17.36.49: Use active=false (includes ended but not yet archived)
+        const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=10684&active=false&limit=20`;
         const res = await axios.get(discoveryUrl).catch(() => null);
         
         if (res && res.data && Array.isArray(res.data)) {
