@@ -26,6 +26,7 @@ import * as CollateralManager from './collateral-manager.js';
 import * as SLSentinel from './sl-sentinel.js';
 import * as Analytics from './analytics-engine.js';
 import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
+import { getVirtualBalance, updateVirtualBalance } from './src/core/virtual-wallet.js'; // v17.36.0
 import { 
     computeMiddayDigestStats, 
     getMidnightToNoonWindowMs, 
@@ -118,6 +119,11 @@ async function init() {
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
+
+    // v17.36.0: Initialize RiskManager with Virtual or Real Balance
+    const initialBal = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
+    RiskManager.initSession(initialBal);
+    console.log(`[Init] 🏆 Risk Strategy: ${IS_SIMULATION_ENABLED ? 'LAB (Virtual $'+initialBal+')' : 'LIVE (Real)'}`);
 
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
@@ -629,15 +635,23 @@ async function performanceLoop() {
                         if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
                         if (isWin) {
+                            const profitTotal = pos.amount; // En gros pos.amount * ($1 - $0) si on ignore les frais
+                            const profitNet = profitTotal - (pos.buyPrice * pos.amount);
+
                             const winMsg = `🏆 *SNIPER WIN : BTC ${pos.side}* 🏆\n\n` +
                                          `• Slot : ${new Date(pos.slotStart).toLocaleTimeString()}\n` +
                                          `• Payout : +${(pos.amount).toFixed(2)}$\n` +
+                                         `• Profit Net : +${profitNet.toFixed(2)}$\n` +
                                          `• Status : Victory Confirmed`;
                             
                             await sendTelegramAlert(winMsg);
                             
                             // --- AUTOMATED REDEEM (v16.20.0) ---
-                            if (pos.conditionId) {
+                            if (pos.isSimulated) {
+                                const newBal = updateVirtualBalance(profitNet);
+                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
+                                await sendTelegramAlert(`🧪 *VIRTUAL BALANCE UPDATE* 🧪\nCapital: $${newBal.toFixed(2)} (+${profitNet.toFixed(2)}$)`);
+                            } else if (pos.conditionId) {
                                 await executeRedeemOnChain(pos.conditionId);
                             }
 
@@ -650,6 +664,14 @@ async function performanceLoop() {
                                 side: pos.side
                             };
                             fs.appendFileSync(path.join(process.cwd(), 'orders.log'), JSON.stringify(redeemLog) + '\n');
+                        } else {
+                            // C'est une perte sèche (Marché expiré sans SL touché)
+                            if (pos.isSimulated) {
+                                const lossTotal = pos.buyPrice * pos.amount;
+                                const newBal = updateVirtualBalance(-lossTotal);
+                                console.log(`[VirtualRedeem] 💀 Simulated LOSS. New Balance: $${newBal.toFixed(2)}`);
+                                await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${newBal.toFixed(2)} (-${lossTotal.toFixed(2)}$)`);
+                            }
                         }
                         
                         lastResolvedCids.add(pos.tokenId);
@@ -807,10 +829,14 @@ async function executeEmergencyExit(info) {
         const quantity = pos.amount || 1;
         
         if (pos.isSimulated) {
+            const lossUsd = (pos.buyPrice - info.currentPrice) * pos.amount;
+            const newBal = updateVirtualBalance(-lossUsd);
+
             console.log(`[Emergency] 🧪 SIMULATION EXIT: Selling ${quantity} shares of ${info.tokenId} at $${info.currentPrice}`);
             const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                            `• Prix Sortie: $${info.currentPrice}\n` +
+                            `• Perte : -${lossUsd.toFixed(2)}$\n` +
+                            `• Capital actuel : $${newBal.toFixed(2)}\n` +
                             `• Statut: simulation réussie`;
             await sendTelegramAlert(exitMsg);
             

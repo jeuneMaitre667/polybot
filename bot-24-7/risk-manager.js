@@ -3,7 +3,7 @@
  * Logic: Compound reinvestment & Stop Loss
  */
 
-const INITIAL_BET_USD = parseFloat(process.env.ORDER_SIZE_USD || "2");
+const INITIAL_BET_USD = parseFloat(process.env.ORDER_SIZE_USD || "10");
 const MAX_BET_USD = parseFloat(process.env.MAX_STAKE_USD || "100");
 const SESSION_MAX_LOSS = parseFloat(process.env.MAX_LOSS || "0.10");
 
@@ -11,15 +11,16 @@ let sessionStartingBalance = null;
 
 /**
  * Calculates the next trade size based on compound strategy
- * @param {number} availableBalance - The current USDC/pUSD balance
+ * @param {number} availableBalance - The current USDC/virtual balance
  * @returns {number} The size of the next trade in USD
  */
 export function calculateTradeSize(availableBalance) {
-    if (sessionStartingBalance === null) {
+    if (sessionStartingBalance === null || sessionStartingBalance === 0) {
         sessionStartingBalance = availableBalance;
     }
 
     // Compound: reinvest profit
+    // current_stake = base_stake + accumulated_profit
     const sessionProfit = Math.max(0, availableBalance - sessionStartingBalance);
     const calculatedSize = INITIAL_BET_USD + sessionProfit;
 

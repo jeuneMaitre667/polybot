@@ -1,0 +1,14 @@
+[
+  {
+    "tokenId": "87578208307967911376933956838412214356515895975467800734252924786944126780010",
+    "conditionId": "0x793ca397292c042c40afbda7a562e0389470414c8db67e6b41a3897d39dd82c9",
+    "buyPrice": 0.89,
+    "amount": 112,
+    "slotStart": 1776034200000,
+    "side": "YES",
+    "asset": "BTC",
+    "slug": "btc-updown-5m-1776034200",
+    "slotEnd": 1776034500000,
+    "isSimulated": true
+  }
+]
