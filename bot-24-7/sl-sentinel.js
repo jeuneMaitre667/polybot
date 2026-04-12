@@ -124,11 +124,21 @@ function processOrderBook(book) {
     // To sell, we look at the BEST BID (what buyers are offering right now).
     const topBid = book.bids && book.bids.length > 0 ? book.bids[0] : null;
     let bestBid = topBid ? parseFloat(topBid.price) : null;
+    let bidSize = topBid ? parseFloat(topBid.size) : 0;
     
-    // v17.36.19: Noise Protection
-    // Ignore extreme outliers (dust bids) often received during initial pipe sync.
-    // If a market starts around 0.50, a bid of 0.005 is noise, not a real crash.
-    if (!bestBid || bestBid < 0.01) return;
+    // v17.36.21: Advanced Noise & Slippage Protection
+    if (!bestBid) return;
+
+    // 1. Minimum Liquidity Filter: Ignore bids with < 10 contracts (dust)
+    if (bidSize < 10) return;
+
+    // 2. Sanity check: If we just entered at 0.50+, and bid says 0.01, it's noise.
+    // A drop > 50% in the first few seconds of monitoring is likely a bad WebSocket dump.
+    const instantDrop = (activeSubscription.buyPrice - bestBid) / activeSubscription.buyPrice;
+    if (instantDrop > 0.50 && (bestBid < 0.10)) {
+        // console.log(`[SL Sentinel] 🛡️ Filtered extreme slippage noise: ${bestBid}`);
+        return;
+    }
 
     const pnlPct = (bestBid - activeSubscription.buyPrice) / activeSubscription.buyPrice;
     
