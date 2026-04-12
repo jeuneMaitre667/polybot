@@ -38,10 +38,8 @@ export function isConnected() {
     return ws && ws.readyState === WebSocket.OPEN;
 }
 
-// v17.6.0: Persistent Passive Connection
-setTimeout(() => {
-    if (!ws) initWebSocket();
-}, 2000);
+// v17.24.0: Passive connection disabled. 
+// Connection is now triggered only when startMonitoring is called.
 
 /**
  * Stop monitoring.
@@ -50,7 +48,14 @@ export function stopMonitoring() {
     if (activeSubscription) {
         console.log(`[SL Sentinel] 🛡️ Monitoring cleared for ${activeSubscription.tokenId}`);
         activeSubscription = null;
-        // We keep the WS open for future trades but unsubscribe if needed (optional for 5m)
+        
+        // v17.24.0: Close WS when not in use to avoid reconnection spam
+        if (ws) {
+            console.log(`[SL Sentinel] ⚡ Closing WebSocket (No active position).`);
+            ws.removeAllListeners();
+            ws.close();
+            ws = null;
+        }
     }
 }
 
@@ -83,8 +88,12 @@ function initWebSocket() {
     });
 
     ws.on('close', () => {
-        console.warn(`[SL Sentinel] ⚠️ WebSocket Closed. Reconnecting in 5s...`);
-        setTimeout(initWebSocket, 5000);
+        if (activeSubscription) {
+            console.warn(`[SL Sentinel] ⚠️ WebSocket Closed. Reconnecting in 5s...`);
+            setTimeout(initWebSocket, 5000);
+        } else {
+            console.log(`[SL Sentinel] WebSocket closed (Normal).`);
+        }
     });
 
     // Heartbeat

@@ -34,7 +34,7 @@ export const runBoundaryCapture = async () => {
                 const symbol = `${asset.toUpperCase()}USDC`;
                 
                 // On récupère le kline 5m pour avoir l' "Ouverture" exacte du graphique
-                const kRes = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${targetSlotStartMs}&limit=1`);
+                const kRes = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${targetSlotStartMs}&limit=1`, { timeout: 5000 });
                 
                 if (kRes.data && kRes.data[0]) {
                     const openPrice = parseFloat(kRes.data[0][1]); // Index 1 is Open Price
@@ -42,7 +42,7 @@ export const runBoundaryCapture = async () => {
                     console.log(`[Strike-Worker] 🔸 BINANCE USDC OPEN: ${openPrice.toFixed(2)} (${asset})`);
                 } else {
                     // Fallback Tick si kline pas encore prêt
-                    const bRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
+                    const bRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`, { timeout: 5000 });
                     const bPrice = parseFloat(bRes.data.price);
                     saveBinanceStrike(asset, bPrice, targetSlotStartMs);
                     console.log(`[Strike-Worker] ⚠️ BINANCE TICK (Kline Fail): ${bPrice.toFixed(2)}`);

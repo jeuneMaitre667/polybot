@@ -72,6 +72,7 @@ let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fe
 let maticBalance = null; 
 let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
+let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
 function updateHealth(data) {
@@ -137,7 +138,15 @@ async function init() {
     // Initial triggers
     mainLoop();
     reportingLoop();
-    performanceLoop();
+    
+    // v17.24.0: Stability Watchdog (Reset engine if it hangs for > 60s)
+    setInterval(() => {
+        const stallTime = Date.now() - lastPulseTime;
+        if (stallTime > 60000) {
+            console.error(`[Watchdog] 💀 SILENT HANG DETECTED (${Math.floor(stallTime/1000)}s). Restarting...`);
+            process.exit(1); // PM2 or Shell will restart it
+        }
+    }, 10000);
     
     // v16.16.0: Initialize Risk Baseline
     RiskManager.initSession(memoryHealth.totalUsd || 0);
@@ -150,8 +159,8 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const now = Date.now();
     const slotStart = Math.floor(now / 300000) * 300000;
     
-    // 1. Fetch Binance Spot (Current)
-    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`).catch(() => null);
+    // 1. Fetch Binance Spot (Current) - v17.24.0: Added Timeout
+    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`, { timeout: 5000 }).catch(() => null);
     const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // 2. Fetch or Backfill Strike
@@ -359,6 +368,8 @@ async function reportingLoop() {
 async function mainLoop() {
     try {
         const now = Date.now();
+        lastPulseTime = now; // v17.24.0: Activity Signal
+        
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
         
@@ -781,8 +792,8 @@ async function executeEmergencyExit(info) {
         const pos = positions.find(p => p.tokenId === info.tokenId);
         if (!pos) throw new Error("Position data not found for exit.");
 
-        // 1. Get Nonce
-        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        // 1. Get Nonce - v17.24.0: Added Timeout
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
         const nonce = nonceRes.data.nonce;
 
         // 2. Encode Sell Call (Sell is just another buy but of the opposite side? No, it's selling the token)
