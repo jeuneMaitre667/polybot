@@ -33,7 +33,7 @@ export function BinanceChartCard() {
   }, []);
 
   return (
-    <div className="bg-[#030712] border border-white/5 rounded-[2.5rem] overflow-hidden group shadow-2xl h-[500px] flex flex-col">
+    <div className="bg-[#030712] border border-white/5 rounded-[2.5rem] overflow-hidden group shadow-2xl h-full flex flex-col">
       <div className="flex items-center justify-between px-8 py-4 bg-white/[0.02] border-b border-white/5">
          <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center border border-orange-500/20">
