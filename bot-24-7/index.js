@@ -298,7 +298,7 @@ async function reportingLoop() {
         if (now - lastBalanceFetchTime > BALANCE_REFRESH_MS || userBalance === null) {
             try {
                 const rpcUrl = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC;
-                const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+                const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, 137);
                 const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
                 
                 const [usdcRaw, maticRaw] = await Promise.all([
