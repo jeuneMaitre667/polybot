@@ -6,9 +6,18 @@ import axios from 'axios';
 
 const MAX_CHUNK = 3900;
 
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
 export function telegramAlertsConfigured() {
   const t = process.env.ALERT_TELEGRAM_BOT_TOKEN?.trim();
   const c = process.env.ALERT_TELEGRAM_CHAT_ID?.trim();
+  console.log(`[Telegram] Checking Config. Token found: ${!!t}, ChatID found: ${!!c}`);
   return !!(t && c);
 }
 
@@ -47,8 +56,9 @@ function chunkText(text) {
  */
 export async function sendTelegramAlert(text) {
   if (!telegramAlertsConfigured() || !text) return;
-  const token = process.env.ALERT_TELEGRAM_BOT_TOKEN.trim();
-  const chatId = process.env.ALERT_TELEGRAM_CHAT_ID.trim();
+  const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+  const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+  console.log(`[Telegram] Attempting send. Token length: ${token.length}, ChatID: ${chatId}`);
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   for (const part of chunkText(text)) {
     try {
