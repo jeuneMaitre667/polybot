@@ -1,4 +1,5 @@
 {
-  "balance": 103.7,
-  "lastUpdate": "2026-04-13T16:53:29.405Z"
+  "balance": 93.70,
+  "lastUpdate": "2026-04-13T17:34:00Z",
+  "reason": "Correction v17.62.8 (suppression du double décompte simulation)"
 }

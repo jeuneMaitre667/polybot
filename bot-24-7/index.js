@@ -640,11 +640,10 @@ async function mainLoop() {
 
         if (IS_SIMULATION_ENABLED) {
             const totalLatency = Date.now() - cycleStart;
-            // v17.59.3: Fix async Balance and Secure types
-            const balanceResult = await updateVirtualBalance(-tradeAmountUsd);
-            const finalBalVal = parseFloat((typeof balanceResult === 'object' && balanceResult !== null) ? (balanceResult.balance ?? 0) : (balanceResult ?? 0));
+            // v17.62.8: REMOVED redundant updateVirtualBalance code here (was causing double-counting)
+            // Balance is now updated ONLY in the unified state tracking section below.
             
-            console.log(`[Engine] 🧪 SIMULATION: Order placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | New Bal: $${finalBalVal.toFixed(2)}`);
+            console.log(`[Engine] 🧪 SIMULATION: Order placed | Latency: ${totalLatency}ms`);
             
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Side: ${side} 🏹\n` +
@@ -662,18 +661,30 @@ async function mainLoop() {
             // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
         } else {
             const startExec = Date.now();
-            order = await clobClient.createOrder({
-                tokenID: tokenId,
-                price: bestAsk + 0.005, 
-                size: quantity,
-                side: Side.BUY
-            });
-            const latency = Date.now() - startExec;
-            console.log(`[Engine] ✅ Order Filled: ${order.orderID} | Latency: ${latency}ms`);
+            // v17.62.8: Declare 'order' locally to prevent global scope pollution
+            let order = null;
+            try {
+                order = await clobClient.createOrder({
+                    tokenID: tokenId,
+                    price: bestAsk + 0.005, 
+                    size: quantity,
+                    side: Side.BUY
+                });
+                const latency = Date.now() - startExec;
+                console.log(`[Engine] ✅ Order Filled: ${order.orderID || order.orderId} | Latency: ${latency}ms`);
+            } catch (err) {
+                console.error(`[Engine] ❌ RELAYER EXECUTION FAILED:`, err.message);
+                sendTelegramAlert(`🚨 *EXECUTION ERROR*\nTrade failed for ${side}: ${err.message}`);
+                return; // Stop here
+            }
+            
+            // Unify order object for common state tracking
+            currentOrder = order; 
         }
 
-        // --- COMMON STATE TRACKING (v17.35.0: Unifed for Real & Sim) ---
-        if (IS_SIMULATION_ENABLED || (order && order.orderID)) {
+        // --- COMMON STATE TRACKING (v17.62.8: Unified Persistent Logic) ---
+        const currentOrder = (typeof order !== 'undefined') ? order : null;
+        if (IS_SIMULATION_ENABLED || (currentOrder && (currentOrder.orderID || currentOrder.orderId))) {
             // v17.38.2: Non-blocking fetch of Official Strike (Background)
             fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
                 if (os && activePosition && activePosition.slotStart === slotStart) {
@@ -1063,6 +1074,27 @@ async function executeEmergencyExit(info) {
     }
 }
 
+
+
+/**
+ * fetchStrikeFromPolymarket(asset, slotStartMs)
+ * v17.62.8: Fetches the official strike price from the Gamma API.
+ */
+async function fetchStrikeFromPolymarket(asset, slotStartMs) {
+    try {
+        const slotSec = Math.floor(slotStartMs / 1000);
+        const url = `https://gamma-api.polymarket.com/events?slug=btc-updown-5m-${slotSec}`;
+        const res = await axios.get(url, { timeout: 5000 });
+        if (res.data && res.data[0] && res.data[0].markets) {
+            const m = res.data[0].markets[0];
+            const strike = m?.eventMetadata?.priceToBeat;
+            return strike ? parseFloat(strike) : null;
+        }
+    } catch (err) {
+        console.error(`[Lookup] Strike fetch failed for ${slotStartMs}:`, err.message);
+    }
+    return null;
+}
 
 init().then(async () => {
     // v17.52.0: Final Industrialization Step - NTP Software Sync
