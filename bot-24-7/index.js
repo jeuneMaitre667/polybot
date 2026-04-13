@@ -239,7 +239,7 @@ async function ensureClobClient() {
             );
             
             // v21.2.0: Derive API credentials (required for createAndPostOrder)
-            const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
+            const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr, undefined, httpAgent);
             let apiCreds;
             try {
                 apiCreds = await tempClient.deriveApiKey();
@@ -255,8 +255,8 @@ async function ensureClobClient() {
                 }
             }
 
-            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, apiCreds, sigType, funderAddr);
-            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials`);
+            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, apiCreds, sigType, funderAddr, undefined, httpAgent);
+            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (STRICT PROXY)`);
         }
         return true;
     } catch (err) {
@@ -1122,7 +1122,9 @@ async function executeRedeemOnChain(conditionId) {
         }
 
         // 1. Get Nonce from Relayer
-        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`);
+        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, {
+            proxy: process.env.PROXY_URL ? { host: new URL(process.env.PROXY_URL).hostname, port: new URL(process.env.PROXY_URL).port } : false
+        });
         const nonce = nonceRes.data.nonce;
         console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
 
