@@ -37,14 +37,14 @@ export async function fetchSignals(asset, context = {}) {
     // v17.31.0: Utilisation de l'ID de série stable (10684 pour BTC) pour une découverte sans faille
     const seriesId = asset === 'BTC' ? '10684' : '10685'; // 10685 supposé pour ETH, à vérifier.
     const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events?series_id=${seriesId}&active=true&closed=false`;
+    const discoveryUrl = `https://gamma-api.polymarket.com/events/keyset?series_id=${seriesId}&active=true&closed=false`;
     
     const startFetch = Date.now();
     try {
         console.log(`[${asset}] Scanning for 5m markets in series: ${targetSeriesSlug}`);
         const res = await axios.get(discoveryUrl, { timeout: 5000 });
 
-        const events = res.data;
+        const events = res.data?.events || res.data;
         if (!events || !Array.isArray(events) || events.length === 0) {
             console.warn(`[${asset}] No active events found via discovery.`);
             return { signals: [], slug: null, hasEvent: false };

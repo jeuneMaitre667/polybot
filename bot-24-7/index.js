@@ -814,7 +814,7 @@ async function performanceLoop() {
 
             // v17.44.2: Support multiple redeems per slot if accidentally duplicated
             if (pos.slotEnd && (now > pos.slotEnd + 2000)) { 
-                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}`;
+                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}&closed=true`;
                 const res = await axios.get(url).catch(() => null);
                 
                 if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
