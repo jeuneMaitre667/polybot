@@ -467,7 +467,7 @@ async function mainLoop() {
 
         if (hbSecondsLeft <= 90 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStartLocal) {
             lastHeartbeatSlot = slotStartLocal; // Lock immediately
-            console.log(`[Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
+            console.log(`[PID:${process.pid}] [Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
             
             const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0));
             const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
@@ -538,8 +538,8 @@ async function mainLoop() {
         // Fresh context check already done at top of loop for resolution
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
-            if (now % 30000 < 1000) { 
-                console.log(`[Engine] Pulse: Monitoring BTC (Delta: ${mv.bDeltaPct.toFixed(3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
+            if (secondsLeft % 30 === 0) {
+                console.log(`[PID:${process.pid}] [Engine] Pulse: Monitoring BTC (Delta: ${mv.bDeltaPct.toFixed(3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
             }
             return;
         }
