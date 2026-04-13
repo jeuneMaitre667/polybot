@@ -39,3 +39,5 @@ bot-24-7/boundary-strikes.json
 bot-24-7/last-order.json
 bot-24-7/sniper-compounding.json
 bot-24-7/temp_*.json
+
+bot-24-7/heartbeat.json
