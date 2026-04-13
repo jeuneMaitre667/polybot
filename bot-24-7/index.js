@@ -459,13 +459,39 @@ async function reportingLoop() {
 
 async function mainLoop() {
     try {
-        const cycleStart = timeKeeper.getNow();
+        // v17.61.0: INDEPENDENT REAL-TIME HEARTBEAT (Bypass NTP Lag)
+        const hbNow = Date.now();
+        const slotStartLocal = Math.floor(hbNow / 300000) * 300000;
+        const hbSecondsLeft = Math.floor((slotStartLocal + 300000 - hbNow) / 1000);
+        const displayTime = new Date(hbNow).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+        if (hbSecondsLeft <= 120 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStartLocal) {
+            lastHeartbeatSlot = slotStartLocal; // Lock immediately
+            console.log(`[Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
+            
+            const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0));
+            const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
+                          `• Window: OPEN ✅\n` +
+                          `• Capital: $${currentBal.toFixed(2)} 🏦\n` +
+                          `• Engine: READY ⚡`;
+            
+            const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+            const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+            const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+            axios.post(url, { chat_id: chatId, text: hbMsg, disable_web_page_preview: true }, { timeout: 10000 })
+                .then(() => console.log(`[Telegram] Indep-Heartbeat Success.`))
+                .catch(hErr => console.error('[Telegram] Indep-Heartbeat Failed:', hErr.message));
+        }
+
         const now = timeKeeper.getNow();
-        lastPulseTime = now; // v17.24.0: Activity Signal
-        
+        lastPulseTime = now;
+        const slotStart = Math.floor(now / 300000) * 300000;
+        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+
         // v17.51.0: Physical Heartbeat for PM2 Watchdog
         try {
-            fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ timestamp: now, version: 'v17.51.0' }));
+            fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ timestamp: now, version: 'v17.61.0' }));
         } catch (e) {
             console.error('[Heartbeat] Write failed:', e.message);
         }
@@ -478,39 +504,8 @@ async function mainLoop() {
         }
 
         // v17.22.17: Revert to START-time slot convention (Math.floor)
-        const slotStart = Math.floor(now / 300000) * 300000;
-        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-        const mv = marketState; 
-
-        // v17.60.7: REAL-TIME Heartbeat (Stable Fix)
-        const hbNow = Date.now();
-        const hbSecondsLeft = Math.floor((slotStart + 300000 - hbNow) / 1000);
-        const displayTime = new Date(hbNow).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-
-        if (hbSecondsLeft <= 120 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStart && mv) {
-            lastHeartbeatSlot = slotStart; // Lock immediately
-            
-            const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
-                          `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
-                          `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
-                          `• Window: AUTHORIZED ✅\n` +
-                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 🏦`;
-            
-            const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
-            const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
-            const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
-            axios.post(url, { 
-                chat_id: chatId, 
-                text: hbMsg, 
-                disable_web_page_preview: true 
-            }, { timeout: 15000 }).then(() => {
-                console.log(`[Telegram] Heartbeat Send Success (${displayTime})`);
-            }).catch(hErr => {
-                console.error('[Telegram] Heartbeat Send Failed:', hErr.message);
-            });
-        }
-        
+        // Variables slotStart et secondsLeft déjà définies au sommet du loop
+        // mv déjà défini au sommet du loop
         // v17.44.1: Persistent Slot Lock (v17.54.0 Expanded)
         if (lastExecutedSlot === slotStart) return;
         
