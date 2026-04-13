@@ -43,7 +43,7 @@ process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0);
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
 
 // --- CONFIG ---
-// --- STRATEGY PARAMETERS (v16.20.3: Env-Driven) ---
+// ---// v17.56.0: Removed fixed VIRTUAL_BALANCE constant in favor of dynamic getVirtualBalance()
 const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.08"); 
 const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
 const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
@@ -368,8 +368,10 @@ async function reportingLoop() {
                 const deltaPct = effectiveStrike > 0 ? (deltaUsd / effectiveStrike) * 100 : 0;
                 const deltaSign = deltaUsd >= 0 ? '+' : '';
                 
-                const upLabel = bestAskUp > 0.80 ? '🟢 UP' : '⚪ UP';
-                const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
+                // v17.57.0: Unified Actionable Signals (Prob + Delta consistency)
+                const isDeltaMet = Math.abs(deltaPct) >= SNIPER_DELTA_THRESHOLD_PCT;
+                const upLabel = (bestAskUp > 0.80 && isDeltaMet && deltaPct > 0) ? '🟢 UP' : '⚪ UP';
+                const downLabel = (bestAskDown > 0.80 && isDeltaMet && deltaPct < 0) ? '🔴 DOWN' : '⚪ DOWN';
 
                 const displayBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
                 
@@ -571,12 +573,12 @@ async function mainLoop() {
         }
 
         // 4. Risk & Collateral
-        const baseBalance = IS_SIMULATION_ENABLED ? VIRTUAL_BALANCE : (userBalance || 0);
+        const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
         let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
         
         // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
         const safetyFactor = 0.98; // Leave a tiny bit for precision safety
-        const availableMax = IS_SIMULATION_ENABLED ? VIRTUAL_BALANCE : Math.max(0, (userBalance || 0) * safetyFactor);
+        const availableMax = IS_SIMULATION_ENABLED ? getVirtualBalance() : Math.max(0, (userBalance || 0) * safetyFactor);
         
         if (tradeAmountUsd > availableMax) {
             console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to balance limits.`);
