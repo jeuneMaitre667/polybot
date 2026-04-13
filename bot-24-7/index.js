@@ -945,19 +945,26 @@ async function executeEmergencyExit(info) {
             const remainingValue = info.currentPrice * pos.amount;
             const newBal = await updateVirtualBalance(remainingValue);
 
-            console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (Recovery: +$${remainingValue.toFixed(2)})`);
-            const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
+            console.log(`[Emergency] SIMULATION EXIT: Price $${info.currentPrice} (Recovery: +$${remainingValue.toFixed(2)})`);
+            
+            // v17.53.0: CLEANUP FIRST, ALERT LATER (Robustness)
+            activePosition = null;
+            await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+            SLSentinel.stopMonitoring();
+
+            const exitMsg = `--- SORTIE SIMULEE (STOP LOSS) ---\n\n` +
                             `• Slot: ${pos.slotStart}\n` +
                             `• Entry: $${pos.buyPrice}\n` +
                             `• Exit: $${info.currentPrice}\n` +
-                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                            `• Récupéré : +${remainingValue.toFixed(2)}$\n` +
+                            `• Pnl: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                            `• Recupere : +${remainingValue.toFixed(2)}$\n` +
                             `• Capital actuel : $${newBal.toFixed(2)}`;
-            await sendTelegramAlert(exitMsg);
             
-            activePosition = null;
-            saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
-            SLSentinel.stopMonitoring();
+            try {
+                await sendTelegramAlert(exitMsg);
+            } catch (teleErr) {
+                console.error('[Emergency] Telegram Alert failed but exit was successful.');
+            }
             return;
         }
 
