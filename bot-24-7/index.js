@@ -52,7 +52,7 @@ const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
 const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v17.35.0
 
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
-const POSITION_LOG = path.join(process.cwd(), 'active-positions.json');
+const POSITION_LOG = path.join(__dirname, 'active-positions.json');
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
@@ -366,8 +366,18 @@ async function reportingLoop() {
 
                 const displayBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
                 
-                // v17.38.3: Double-Strike HUD Monitoring
-                const officialLabel = activePosition?.officialStrike ? `(Poly:${activePosition.officialStrike.toFixed(2)})` : '';
+                // v17.39.12: Continuous Double-Strike TÃ©lÃ©mÃ©try
+                // Prioritize active position strike, fallback to lookup, then signal's internal value
+                let polyStrike = activePosition?.officialStrike;
+                if (!polyStrike) {
+                    // Check local cache
+                    polyStrike = getStrike('BTC', currentSlotSec);
+                }
+                if (!polyStrike && sig?.m?.eventMetadata?.priceToBeat) {
+                    // v17.39.12: Direct extraction from fresh signal metadata
+                    polyStrike = Number(sig.m.eventMetadata.priceToBeat);
+                }
+                const officialLabel = polyStrike ? `(Poly:${polyStrike.toFixed(2)})` : '';
                 
                 console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${displayBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)}${officialLabel} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
             } catch (e) {
@@ -597,18 +607,7 @@ async function mainLoop() {
 
         // --- COMMON STATE TRACKING (v17.35.0: Unifed for Real & Sim) ---
         if (IS_SIMULATION_ENABLED || (order && order.orderID)) {
-            if (!IS_SIMULATION_ENABLED) {
-                const totalLatency = Date.now() - cycleStart;
-                const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                                `• Side: ${side}\n` +
-                                `• Price: $${bestAsk}\n` +
-                                `• Latency: ${totalLatency}ms\n` +
-                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
-                                `• Window: Authorized (T-${secondsLeft}s)`;
-                sendTelegramAlert(entryMsg);
-            }
-
-            // v17.38.2: Non-blocking fetch of Official Strike to avoid main loop lag
+            // v17.38.2: Non-blocking fetch of Official Strike (Background)
             fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
                 if (os && activePosition && activePosition.slotStart === slotStart) {
                     activePosition.officialStrike = os;
@@ -627,17 +626,33 @@ async function mainLoop() {
                 conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
                 strike: currentSig.strike, // Binance reference (Signal)
-                officialStrike: currentSig.strike, // Temp fallback until background fetch completes
+                officialStrike: currentSig.strike, // Temp fallback
                 amount: quantity,
                 slotStart,
                 side,
                 asset: 'BTC',
                 slug: currentSig.slug,
                 slotEnd: slotStart + 300000,
-                isSimulated: IS_SIMULATION_ENABLED // v17.35.0 tag
+                isSimulated: IS_SIMULATION_ENABLED
             };
 
+            // v17.42.3: SAVE POSITION FIRST (Transactional Safety)
             addPosition(activePosition);
+
+            if (IS_SIMULATION_ENABLED) {
+                const totalLatency = Date.now() - cycleStart;
+                const newBal = updateVirtualBalance(-tradeAmountUsd);
+                console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${newBal.toFixed(2)}`);
+                
+                const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
+                                    `• Price: $${bestAsk}\n• Latency: ${totalLatency}ms\n• Size: $${tradeAmountUsd.toFixed(2)}\n• Capital: $${newBal.toFixed(2)}`;
+                sendTelegramAlert(simEntryMsg);
+            } else {
+                const totalLatency = Date.now() - cycleStart;
+                const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
+                                `• Price: $${bestAsk}\n• Size: $${tradeAmountUsd.toFixed(2)}`;
+                sendTelegramAlert(entryMsg);
+            }
 
             // v17.1.0: Launch Stop Loss Sentinel
             const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
