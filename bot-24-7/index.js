@@ -688,41 +688,38 @@ async function mainLoop() {
         } catch (e) {}
 
         if (IS_SIMULATION_ENABLED) {
+            // ... (simulation logic same)
             const totalLatency = Date.now() - cycleStart;
-            // v17.62.8: REMOVED redundant updateVirtualBalance code here (was causing double-counting)
-            // Balance is now updated ONLY in the unified state tracking section below.
-            
             console.log(`[Engine] 🧪 SIMULATION: Order placed | Latency: ${totalLatency}ms`);
-            
-            // v17.62.9: Reference current virtual balance for display
             const currentSimBal = getVirtualBalance();
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Side: ${side} 🏹\n` +
                                 `• Price: $${bestAsk} 💵\n` +
-                                `• Latency: ${totalLatency}ms ⚡\n` +
-                                `• Delta: ${bDeltaPct.toFixed(3)}% 📊\n` +
                                 `• Size: -$${tradeAmountUsd.toFixed(2)} 💸\n` +
                                 `• Capital: $${currentSimBal.toFixed(2)} 🏦`;
-            
-            try {
-                await sendTelegramAlert(simEntryMsg);
-            } catch (teleErr) {
-                console.error('[Engine] Telegram Alert failed but simulation trade was successful.');
-            }
-            // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
+            try { await sendTelegramAlert(simEntryMsg); } catch (e) {}
         } else {
             const startExec = Date.now();
-            // v17.62.8: Declare 'order' locally to prevent global scope pollution
             let order = null;
             try {
-                // v17.90.0: Strict String formatting for Ethers v5/Polymarket SDK compatibility
+                // v17.95.0: Triple-check input validity
+                const safePrice = Number(bestAsk) + 0.005;
+                const safeQty = Math.floor(Number(quantity));
+
+                if (!isFinite(safePrice) || !isFinite(safeQty) || safeQty <= 0) {
+                    throw new Error(`Invalid Order Data: Price=${safePrice}, Qty=${safeQty}`);
+                }
+
                 const orderData = {
                     tokenID: tokenId,
-                    price: (bestAsk + 0.005).toString(), // Slippage buffer
-                    size: quantity.toString(),
+                    price: safePrice.toFixed(6), // Strictly 6 decimals
+                    size: safeQty.toString(), // Integer for quantity
                     side: Side.BUY
                 };
+
+                console.log(`[Engine] 📡 SDK EXECUTION: Sending ${JSON.stringify(orderData)}`);
                 order = await clobClient.createOrder(orderData);
+                
                 const latency = Date.now() - startExec;
                 console.log(`[Engine] ✅ Order Filled: ${order.orderID || order.orderId} | Latency: ${latency}ms`);
             } catch (err) {
@@ -1092,14 +1089,23 @@ async function executeEmergencyExit(info) {
 
         console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
         ensureClobClient(); // Safety first
-        // v17.90.0: Precision order formatting for Ethers v5 BigNumber compatibility
+        
+        // v17.95.0: Triple-check input validity for emergency exit
+        const safePrice = Number(info.currentPrice) * 0.98;
+        const safeQty = Math.floor(Number(pos.amount));
+
+        if (!isFinite(safePrice) || !isFinite(safeQty) || safeQty <= 0) {
+            throw new Error(`Invalid Emergency Data: Price=${safePrice}, Qty=${safeQty}`);
+        }
+
         const orderData = {
             tokenID: pos.tokenId,
-            price: (info.currentPrice * 0.98).toString(),
-            size: pos.amount.toString(),
+            price: safePrice.toFixed(6),
+            size: safeQty.toString(),
             side: Side.SELL
         };
 
+        console.log(`[Emergency] 🚨 SDK EXECUTION: Sending ${JSON.stringify(orderData)}`);
         const orderRes = await clobClient.createOrder(orderData);
 
         if (orderRes && orderRes.orderID) {
