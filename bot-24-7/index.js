@@ -479,6 +479,26 @@ async function mainLoop() {
 
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
+        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+        const mv = marketState; 
+
+        // v17.60.1: Telegram Heartbeat (T-90s Status Update)
+        // Moved to TOP of loop to bypass slot LOCKS
+        if (secondsLeft <= 90 && secondsLeft > 0 && lastHeartbeatSlot !== slotStart && mv) {
+            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(timeKeeper.getNow())}*\n\n` +
+                          `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
+                          `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
+                          `• Window Status: AUTHORIZED ✅\n` +
+                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 💰`;
+            
+            try {
+                await sendTelegramAlert(hbMsg);
+                lastHeartbeatSlot = slotStart;
+                console.log(`[Telegram] Heartbeat sent for slot ${slotStart} (T-${secondsLeft}s)`);
+            } catch (hErr) {
+                console.error('[Telegram] Heartbeat failed:', hErr.message);
+            }
+        }
         
         // v17.44.1: Persistent Slot Lock (v17.54.0 Expanded)
         if (lastExecutedSlot === slotStart) return;
@@ -501,23 +521,6 @@ async function mainLoop() {
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-
-        // v17.60.0: Telegram Heartbeat (T-90s Status Update)
-        if (secondsLeft <= 90 && secondsLeft > 0 && lastHeartbeatSlot !== slotStart) {
-            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(timeKeeper.getNow())}*\n\n` +
-                          `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
-                          `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
-                          `• Windows Status: AUTHORIZED ✅\n` +
-                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 💰`;
-            
-            try {
-                await sendTelegramAlert(hbMsg);
-                lastHeartbeatSlot = slotStart;
-                console.log(`[Telegram] Heartbeat sent for slot ${slotStart} (T-${secondsLeft}s)`);
-            } catch (hErr) {
-                console.error('[Telegram] Heartbeat failed:', hErr.message);
-            }
-        }
 
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
             if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
