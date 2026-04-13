@@ -197,13 +197,12 @@ function ensureClobClient() {
         }
 
         if (!clobClient) {
-            // v17.85.0: Ethers v5 style provider check for failover
-            const rpc = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC;
-            
-            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
-                funderAddress: process.env.CLOB_FUNDER_ADDRESS
-            });
-            console.log(`[Self-Healing] 🛠️ ClobClient restored via ${rpc === PRIMARY_RPC ? 'Primary' : 'Failover'}`);
+            // v17.90.0: Correct SDK Signature (host, chain, signer, creds, sigType, funderAddress)
+            const sigType = parseInt(process.env.CLOB_SIGNATURE_TYPE || "EOA");
+            const funderAddr = process.env.CLOB_FUNDER_ADDRESS;
+
+            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
+            console.log(`[Self-Healing] 🛠️ ClobClient restored via Standard SDK Signature`);
         }
         return true;
     } catch (err) {
@@ -716,12 +715,14 @@ async function mainLoop() {
             // v17.62.8: Declare 'order' locally to prevent global scope pollution
             let order = null;
             try {
-                order = await clobClient.createOrder({
+                // v17.90.0: Strict String formatting for Ethers v5/Polymarket SDK compatibility
+                const orderData = {
                     tokenID: tokenId,
-                    price: bestAsk + 0.005, 
-                    size: quantity,
+                    price: (bestAsk + 0.005).toString(), // Slippage buffer
+                    size: quantity.toString(),
                     side: Side.BUY
-                });
+                };
+                order = await clobClient.createOrder(orderData);
                 const latency = Date.now() - startExec;
                 console.log(`[Engine] ✅ Order Filled: ${order.orderID || order.orderId} | Latency: ${latency}ms`);
             } catch (err) {
@@ -1091,12 +1092,15 @@ async function executeEmergencyExit(info) {
 
         console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
         ensureClobClient(); // Safety first
-        const orderRes = await clobClient.createOrder({
+        // v17.90.0: Precision order formatting for Ethers v5 BigNumber compatibility
+        const orderData = {
             tokenID: pos.tokenId,
-            price: info.currentPrice * 0.98, // Aggressive but stable exit
-            size: pos.amount,
+            price: (info.currentPrice * 0.98).toString(),
+            size: pos.amount.toString(),
             side: Side.SELL
-        });
+        };
+
+        const orderRes = await clobClient.createOrder(orderData);
 
         if (orderRes && orderRes.orderID) {
             console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
