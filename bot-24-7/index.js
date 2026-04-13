@@ -495,10 +495,22 @@ async function mainLoop() {
                           `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 🏦`;
             
             try {
-                await sendTelegramAlert(hbMsg);
+                // v17.60.4: Direct Bypass - Ligne directe Telegram
+                const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+                const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+                const url = `https://api.telegram.org/bot${token}/sendMessage`;
+                
+                await axios.post(url, { 
+                    chat_id: chatId, 
+                    text: hbMsg, 
+                    parse_mode: 'Markdown',
+                    disable_web_page_preview: true 
+                }, { timeout: 10000 });
+                
                 lastHeartbeatSlot = slotStart;
+                console.log(`[Telegram] Direct Bypass: Heartbeat sent successfully.`);
             } catch (hErr) {
-                console.error('[Telegram] Heartbeat failed:', hErr.message);
+                console.error('[Telegram] Direct Heartbeat failed:', hErr.message);
             }
         }
         
