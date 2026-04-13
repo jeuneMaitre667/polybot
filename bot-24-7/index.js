@@ -78,6 +78,7 @@ let maticBalance = null;
 let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
+let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 
 function updateHealth(data) {
@@ -155,12 +156,12 @@ async function checkFastResolution(currentPrice) {
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                 
                 console.log(`[FastResolution] 🏆 Compound Boost: +$${profitNet.toFixed(2)} | Capital Released: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🟢 *FAST COMPOUND* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${finalBal.toFixed(2)}\n• Source: ${strikeSource}`);
+                await sendTelegramAlert(`🟢 *FAST COMPOUND* 💰\n\n• Profit: +$${profitNet.toFixed(2)} 💹\n• Solde actuel: $${finalBal.toFixed(2)} 💵\n• Source: ${strikeSource} ⚙️`);
             } else {
                 const result = await getVirtualBalance();
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                 console.log(`[FastResolution] 🔴 Capital Fixed. Balance: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🔴 *FAST LOSS* 💀\nCapital restant: $${finalBal.toFixed(2)}\nSource: ${strikeSource}`);
+                await sendTelegramAlert(`🛑 *FAST LOSS* 💀\n• Solde fixe: $${finalBal.toFixed(2)} 💵\n• Source: ${strikeSource} ⚙️`);
             }
             
             lastResolvedCids.add(pos.tokenId);
@@ -500,6 +501,24 @@ async function mainLoop() {
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+
+        // v17.60.0: Telegram Heartbeat (T-90s Status Update)
+        if (secondsLeft <= 90 && secondsLeft > 0 && lastHeartbeatSlot !== slotStart) {
+            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(timeKeeper.getNow())}*\n\n` +
+                          `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
+                          `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
+                          `• Windows Status: AUTHORIZED ✅\n` +
+                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 💰`;
+            
+            try {
+                await sendTelegramAlert(hbMsg);
+                lastHeartbeatSlot = slotStart;
+                console.log(`[Telegram] Heartbeat sent for slot ${slotStart} (T-${secondsLeft}s)`);
+            } catch (hErr) {
+                console.error('[Telegram] Heartbeat failed:', hErr.message);
+            }
+        }
+
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
             if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
                 console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);
@@ -619,13 +638,13 @@ async function mainLoop() {
             
             console.log(`[Engine] 🧪 SIMULATION: Order placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | New Bal: $${finalBalVal.toFixed(2)}`);
             
-            const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
-                                `• Side: ${side}\n` +
-                                `• Price: $${bestAsk}\n` +
-                                `• Latency: ${totalLatency}ms\n` +
-                                `• Delta: ${bDeltaPct.toFixed(3)}%\n` +
-                                `• Size: -$${tradeAmountUsd.toFixed(2)}\n` +
-                                `• Capital: $${finalBalVal.toFixed(2)}`;
+            const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🎯\n\n` +
+                                `• Side: ${side} 🏹\n` +
+                                `• Price: $${bestAsk} 💵\n` +
+                                `• Latency: ${totalLatency}ms ⚡\n` +
+                                `• Delta: ${bDeltaPct.toFixed(3)}% 📊\n` +
+                                `• Size: -$${tradeAmountUsd.toFixed(2)} 💸\n` +
+                                `• Capital: $${finalBalVal.toFixed(2)} 🏦`;
             
             try {
                 await sendTelegramAlert(simEntryMsg);
@@ -815,7 +834,7 @@ async function performanceLoop() {
                                     const result = await getVirtualBalance();
                                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                                     console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${finalBal.toFixed(2)}`);
-                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${finalBal.toFixed(2)}`);
+                                    await sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde final: $${finalBal.toFixed(2)} 💵`);
                                 }
                             }
 
