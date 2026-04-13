@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://polymarket-dashboard.local/schemas/btc-pm-augment.v1.schema.json",
+  "title": "BTC + Polymarket backtest augment (v1)",
+  "description": "Document produit par scripts/backtest_btc_pm/pipeline.py — fusionné dans chaque ligne via mergeBtcPmAugment (champ btcPmAugment). L’UI tableau 15m ne consomme pas ces champs par défaut (debug / export / analyses).",
+  "type": "object",
+  "required": ["schemaVersion", "items"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "inputCachePath": { "type": "string" }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/augmentItem" }
+    }
+  },
+  "$defs": {
+    "sourceStatus": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "error", "skipped"] },
+        "errorMessage": { "type": ["string", "null"] },
+        "detail": { "type": "object" }
+      }
+    },
+    "augmentItem": {
+      "type": "object",
+      "required": ["slotEndSec", "sources"],
+      "properties": {
+        "slotEndSec": { "type": "integer" },
+        "conditionId": { "type": ["string", "null"] },
+        "eventSlug": { "type": ["string", "null"] },
+        "sources": {
+          "type": "object",
+          "properties": {
+            "binanceBtc": { "$ref": "#/$defs/sourceStatus" },
+            "polymarketClob": { "$ref": "#/$defs/sourceStatus" }
+          }
+        },
+        "btc": {
+          "type": "object",
+          "properties": {
+            "slotOpenPriceUsd": { "type": ["number", "null"] },
+            "signalRuleId": { "type": "string" },
+            "signalTriggeredAtSec": { "type": ["integer", "null"] },
+            "signalDetails": { "type": "object" }
+          }
+        },
+        "pm": {
+          "type": "object",
+          "properties": {
+            "entrySide": { "type": ["string", "null"], "enum": ["Up", "Down", null] },
+            "entryPriceP": { "type": ["number", "null"] },
+            "entryAtSec": { "type": ["integer", "null"] },
+            "seriesUsed": { "type": "string" }
+          }
+        },
+        "sl": {
+          "type": "object",
+          "properties": {
+            "triggerPriceP": { "type": ["number", "null"] },
+            "touched": { "type": ["boolean", "null"] },
+            "touchedAtSec": { "type": ["integer", "null"] },
+            "detectionMode": { "type": "string", "enum": ["mid", "bid_proxy"] },
+            "bidProxyOffsetP": { "type": ["number", "null"] },
+            "observedPriceAtSlP": { "type": ["number", "null"] }
+          }
+        },
+        "flags": {
+          "type": "object",
+          "properties": {
+            "usableForPnl": { "type": "boolean" },
+            "partialData": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

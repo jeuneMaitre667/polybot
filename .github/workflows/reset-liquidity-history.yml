@@ -1,0 +1,65 @@
+name: Reset liquidity history on Lightsail
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Quel bot cibler ?"
+        required: true
+        default: "hourly"
+        type: choice
+        options:
+          - hourly
+          - 15m
+          - both
+
+jobs:
+  reset-hourly:
+    if: ${{ inputs.target == 'hourly' || inputs.target == 'both' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reset liquidity-history (hourly)
+        env:
+          SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$SSH_HOST" ]; then
+            echo "::error::LIGHTSAIL_SSH_KEY ou LIGHTSAIL_HOST manquant."
+            exit 1
+          fi
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+          ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 ubuntu@$SSH_HOST "\
+            TS=\$(date +%Y%m%d-%H%M%S); \
+            cp ~/bot-24-7/liquidity-history.json ~/bot-24-7/liquidity-history.pre-reset-\$TS.json; \
+            echo '[]' > ~/bot-24-7/liquidity-history.json; \
+            pm2 restart polymarket-bot; \
+            sleep 3; \
+            pm2 status polymarket-bot; \
+            wc -c ~/bot-24-7/liquidity-history.json"
+          rm -f key.pem
+
+  reset-15m:
+    if: ${{ inputs.target == '15m' || inputs.target == 'both' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reset liquidity-history (15m)
+        env:
+          SSH_KEY_15M: ${{ secrets.LIGHTSAIL_SSH_KEY_15M }}
+          SSH_HOST_15M: ${{ secrets.LIGHTSAIL_HOST_15M }}
+        run: |
+          if [ -z "$SSH_KEY_15M" ] || [ -z "$SSH_HOST_15M" ]; then
+            echo "::error::LIGHTSAIL_SSH_KEY_15M ou LIGHTSAIL_HOST_15M manquant."
+            exit 1
+          fi
+          echo "$SSH_KEY_15M" > key15m.pem
+          chmod 600 key15m.pem
+          ssh -i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 ubuntu@$SSH_HOST_15M "\
+            TS=\$(date +%Y%m%d-%H%M%S); \
+            cp ~/bot-24-7/liquidity-history.json ~/bot-24-7/liquidity-history.pre-reset-\$TS.json; \
+            echo '[]' > ~/bot-24-7/liquidity-history.json; \
+            pm2 restart polymarket-bot; \
+            sleep 3; \
+            pm2 status polymarket-bot; \
+            wc -c ~/bot-24-7/liquidity-history.json"
+          rm -f key15m.pem

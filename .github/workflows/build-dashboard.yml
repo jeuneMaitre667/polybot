@@ -1,0 +1,29 @@
+# Vérifie que le dashboard compile (Vite). À pousser sur ton hébergement statique (Vercel, S3, etc.) après build.
+name: Build dashboard
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'index.html'
+      - 'vite.config.*'
+      - 'tailwind.config.*'
+      - 'postcss.config.*'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-dashboard.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22 LTS — corrige MISSING_EXPORT avec Vite 8 + Rolldown sur ubuntu-latest.
+          node-version: '22'
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm run build

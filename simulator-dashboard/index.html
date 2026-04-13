@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simulateur Bot Polymarket - Indépendant</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Simulateur Bot (Dashboard séparé)</h1>
+      <p>Simulation déterministe + Monte Carlo sur plusieurs jours.</p>
+    </header>
+
+    <main>
+      <section class="card live-card">
+        <div class="live-header">
+          <h2>🛡️ Live Monitor 2026 (v5.3.0)</h2>
+          <div class="live-controls">
+            <input id="botIp" type="text" placeholder="IP du Serveur (ex: 63.34.0.38)" value="63.34.0.38" />
+            <button id="liveBtn">📡 Connecter Live</button>
+          </div>
+        </div>
+        
+        <div class="live-grid">
+          <div class="gauge-container">
+            <label>Quota API Cloudflare</label>
+            <div class="gauge-bg">
+              <div id="rateLimitGauge" class="gauge-fill" style="width: 100%;"></div>
+            </div>
+            <div id="rateLimitText" class="gauge-text">Chargement...</div>
+          </div>
+          
+          <div class="status-indicator">
+            <label>État du Blindage</label>
+            <div id="killSwitchStatus" class="status-box ok">OPÉRATIONNEL</div>
+          </div>
+
+          <div class="status-indicator">
+              <label>Maintenance Polymarket</label>
+              <div id="maintStatus" class="status-box ok">NORMAL</div>
+          </div>
+        </div>
+
+        <div class="live-grid sources-grid">
+            <div class="source-box" id="srcBinance">
+                <span class="src-name">Binance</span>
+                <span class="src-price">--</span>
+                <span class="src-dot"></span>
+            </div>
+            <div class="source-box" id="srcOkx">
+                <span class="src-name">OKX</span>
+                <span class="src-price">--</span>
+                <span class="src-dot"></span>
+            </div>
+            <div class="source-box" id="srcHyper">
+                <span class="src-name">Hyperliquid</span>
+                <span class="src-price">--</span>
+                <span class="src-dot"></span>
+            </div>
+        </div>
+
+        <div id="liveAlert" class="alert alert-red hidden">
+            ⚠️ ATTENTION : Seuil Rate-Limit (< 20%) atteint. Throttling actif.
+        </div>
+        <div id="maintAlert" class="alert alert-yellow hidden">
+            🚧 MAINTENANCE : Polymarket redémarre (425). Le bot est en pause de sécurité (120s).
+        </div>
+
+        <div class="live-trades">
+          <h3>Derniers Événements "Blindage"</h3>
+          <ul id="liveTradeLog">
+            <li>Connectez-vous pour voir les données en direct...</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Paramètres</h2>
+        <div class="grid">
+          <label>Capital de départ (€)
+            <input id="startBalance" type="number" min="1" step="0.01" value="100" />
+          </label>
+          <label>Mise max par trade (€)
+            <input id="maxStake" type="number" min="1" step="0.01" value="100" />
+          </label>
+          <label>Jours simulés
+            <input id="days" type="number" min="1" step="1" value="22" />
+          </label>
+          <label>Trades par jour
+            <input id="tradesPerDay" type="number" min="1" step="1" value="5" />
+          </label>
+          <label>Win rate (%)
+            <input id="winRatePct" type="number" min="0" max="100" step="0.01" value="95" />
+          </label>
+          <label>Prix d'entrée (cents)
+            <input id="entryCents" type="number" min="1" max="99" step="0.01" value="95" />
+          </label>
+          <label>Prix de sortie gain TP (cents)
+            <input id="tpExitCents" type="number" min="1" max="99.99" step="0.01" value="100" />
+          </label>
+          <label>Prix de sortie perte SL (cents)
+            <input id="slExitCents" type="number" min="0.1" max="99" step="0.01" value="72" />
+          </label>
+          <label>Frais aller/retour (% stake)
+            <input id="feePct" type="number" min="0" max="10" step="0.001" value="0" />
+          </label>
+          <label>Slippage gain moyen (cents)
+            <input id="tpSlipCents" type="number" min="0" max="20" step="0.01" value="0" />
+          </label>
+          <label>Slippage perte moyen (cents)
+            <input id="slSlipCents" type="number" min="0" max="20" step="0.01" value="0" />
+          </label>
+          <label>Monte Carlo - runs
+            <input id="mcRuns" type="number" min="100" max="20000" step="100" value="5000" />
+          </label>
+          <label>Volatilité WR journalière (points %)
+            <input id="dailyWrVolPctPoints" type="number" min="0" max="50" step="0.01" value="2" />
+          </label>
+          <label>WR minimum journalier (%)
+            <input id="dailyWrFloorPct" type="number" min="0" max="100" step="0.01" value="70" />
+          </label>
+          <label>WR maximum journalier (%)
+            <input id="dailyWrCapPct" type="number" min="0" max="100" step="0.01" value="100" />
+          </label>
+          <label>% des pertes en SL anormal
+            <input id="abnormalLossProbPct" type="number" min="0" max="100" step="0.01" value="10" />
+          </label>
+          <label>SL anormal (prix de sortie, cents)
+            <input id="abnormalSlExitCents" type="number" min="0.1" max="99" step="0.01" value="60" />
+          </label>
+          <label>Objectif journalier (% du capital jour)
+            <input id="dailyTargetPct" type="number" min="0" max="50" step="0.01" value="0" />
+          </label>
+          <label>Stop journalier (% du capital jour)
+            <input id="dailyStopPct" type="number" min="0" max="50" step="0.01" value="0" />
+          </label>
+        </div>
+
+        <h3>Comparaison multi-stratégies</h3>
+        <div class="grid">
+          <label>Nom stratégie A
+            <input id="s1Name" type="text" value="Base" />
+          </label>
+          <label>Nom stratégie B
+            <input id="s2Name" type="text" value="Plus prudente" />
+          </label>
+          <label>Nom stratégie C
+            <input id="s3Name" type="text" value="Plus agressive" />
+          </label>
+          <label>WR B (%)
+            <input id="s2WinRatePct" type="number" min="0" max="100" step="0.01" value="93" />
+          </label>
+          <label>SL B (cents)
+            <input id="s2SlExitCents" type="number" min="0.1" max="99" step="0.01" value="75" />
+          </label>
+          <label>TP B (cents)
+            <input id="s2TpExitCents" type="number" min="1" max="99.99" step="0.01" value="99" />
+          </label>
+          <label>WR C (%)
+            <input id="s3WinRatePct" type="number" min="0" max="100" step="0.01" value="96" />
+          </label>
+          <label>SL C (cents)
+            <input id="s3SlExitCents" type="number" min="0.1" max="99" step="0.01" value="68" />
+          </label>
+          <label>TP C (cents)
+            <input id="s3TpExitCents" type="number" min="1" max="99.99" step="0.01" value="100" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="runBtn">Lancer la simulation</button>
+          <button id="exportBtn" class="secondary">Exporter JSON</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Résultats déterministes</h2>
+        <div id="deterministicStats" class="stats"></div>
+      </section>
+
+      <section class="card">
+        <h2>Monte Carlo</h2>
+        <div id="mcStats" class="stats"></div>
+        <canvas id="histogram" width="900" height="260"></canvas>
+      </section>
+
+      <section class="card">
+        <h2>Comparaison visuelle des stratégies</h2>
+        <canvas id="compareChart" width="900" height="280"></canvas>
+      </section>
+
+      <section class="card" style="display:none;">
+        <h2>Détail résumé</h2>
+        <pre id="summary"></pre>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>

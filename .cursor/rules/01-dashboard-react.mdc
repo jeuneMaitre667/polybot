@@ -1,0 +1,13 @@
+---
+description: Règles pour le dashboard React (src/)
+globs: src/**/*.{jsx,js,css}
+alwaysApply: false
+---
+
+# Dashboard React
+
+- **Composants** : fonctionnels, hooks pour la logique réutilisable (ex. `useBotStatus`, `useBitcoinUpDownSignals`).
+- **Styles** : Tailwind uniquement. Composants UI réutilisables dans `src/components/ui/` (shadcn, .tsx).
+- **Wallet** : tout ce qui touche au wallet passe par `WalletContext` ; connexion via **Phantom** en priorité (puis MetaMask ou autre `window.ethereum` en secours), réseau Polygon, signer pour les ordres CLOB.
+- **API bot** : statut via `VITE_BOT_STATUS_URL` (ex. `http://IP:3001`). Ne pas exposer la clé .pem ni les secrets serveur dans le front.
+- **Noms** : composants PascalCase, hooks `use*`, fichiers cohérents avec le nom du composant (ex. `BotStatus.jsx`).

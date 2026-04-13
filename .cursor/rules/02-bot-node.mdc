@@ -1,0 +1,13 @@
+---
+description: Règles pour le bot 24/7 (bot-24-7/)
+globs: bot-24-7/**/*
+alwaysApply: false
+---
+
+# Bot Node.js 24/7
+
+- **Module** : ESM uniquement (`import`/`export`). Node 18+.
+- **Config** : tout via `.env` (PRIVATE_KEY, USE_MARKET_ORDER, POLL_INTERVAL_SEC, etc.). Pas de valeurs sensibles en dur.
+- **Fichiers écrits** : `balance.json` et `last-order.json` dans le dossier du script (`path.resolve(__dirname)`), pas `process.cwd()`, pour que PM2 écrive toujours dans `~/bot-24-7`.
+- **Scripts shell** : exécutables sur Lightsail (ubuntu). Pour appeler un script depuis un autre : `exec bash "chemin/script.sh"` pour éviter les soucis de droits d’exécution.
+- **Status-server** : même `BOT_DIR` (dossier du script) pour lire `balance.json` / `last-order.json` et `.env` (exposition `useMarketOrder`, `pollIntervalSec`).

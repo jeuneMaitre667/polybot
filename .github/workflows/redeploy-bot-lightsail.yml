@@ -1,0 +1,70 @@
+# Push sur main/master : déploiement **15m uniquement** (bot horaire désactivé / non utilisé).
+# Bot horaire : uniquement via Actions → Run workflow → cible « hourly » ou « both ».
+# Prérequis secrets :
+#   15m : LIGHTSAIL_SSH_KEY_15M, LIGHTSAIL_HOST_15M
+#   Horaire (manuel) : LIGHTSAIL_SSH_KEY, LIGHTSAIL_HOST
+
+name: Redeploy bot on Lightsail
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'bot-24-7/**'
+      - '.github/workflows/redeploy-bot-lightsail.yml'
+  workflow_dispatch: # Lancer à la main : Actions → Redeploy bot on Lightsail → Run workflow
+    inputs:
+      target:
+        description: 'Quel bot redéployer ? (push = 15m seulement)'
+        required: true
+        default: '15m'
+        type: choice
+        options:
+          - 15m
+          - hourly
+          - both
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy bot horaire via SSH
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'hourly') }}
+        env:
+          SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$SSH_HOST" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY ou LIGHTSAIL_HOST manquant. Configure les secrets du repo."
+            exit 0
+          fi
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+          SSH_OPTS="-i key.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6"
+          scp $SSH_OPTS bot-24-7/ci-redeploy-remote.sh "ubuntu@${SSH_HOST}:/tmp/ci-redeploy-remote.sh"
+          timeout 3600 ssh $SSH_OPTS "ubuntu@${SSH_HOST}" "chmod +x /tmp/ci-redeploy-remote.sh && bash /tmp/ci-redeploy-remote.sh"
+          rm -f key.pem
+
+      - name: Deploy bot 15m via SSH
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == '15m')) }}
+        env:
+          SSH_KEY_15M: ${{ secrets.LIGHTSAIL_SSH_KEY_15M }}
+          SSH_HOST_15M: ${{ secrets.LIGHTSAIL_HOST_15M }}
+        run: |
+          if [ -z "$SSH_HOST_15M" ]; then
+            echo "LIGHTSAIL_HOST_15M non configuré — skip déploiement bot 15m."
+            exit 0
+          fi
+          if [ -z "$SSH_KEY_15M" ]; then
+            echo "::warning::LIGHTSAIL_SSH_KEY_15M manquant — skip déploiement bot 15m."
+            exit 0
+          fi
+          echo "$SSH_KEY_15M" > key15m.pem
+          chmod 600 key15m.pem
+          SSH_OPTS="-i key15m.pem -o StrictHostKeyChecking=accept-new -o ConnectTimeout=120 -o ServerAliveInterval=25 -o ServerAliveCountMax=6"
+          scp $SSH_OPTS bot-24-7/ci-redeploy-remote.sh "ubuntu@${SSH_HOST_15M}:/tmp/ci-redeploy-remote.sh"
+          timeout 3600 ssh $SSH_OPTS "ubuntu@${SSH_HOST_15M}" "chmod +x /tmp/ci-redeploy-remote.sh && bash /tmp/ci-redeploy-remote.sh"
+          rm -f key15m.pem

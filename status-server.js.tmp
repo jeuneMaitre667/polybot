@@ -1,0 +1,1215 @@
+/**
+ * Petit serveur HTTP sur Lightsail : expose le statut PM2 et les derniers logs du bot.
+ * Redéploiement : déclenché par push sur main (workflow Redeploy bot on Lightsail).
+ * À lancer avec PM2 : pm2 start status-server.js --name bot-status-server
+ * Ouvrir le port 3001 dans le pare-feu Lightsail (Réseau de l'instance).
+ *
+ * Variables d'env : BOT_STATUS_PORT=3001, BOT_STATUS_SECRET=optionnel (pour ?token=...)
+ */
+import http from 'http';
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Même dossier que le bot (où se trouvent balance.json et last-order.json). */
+const BOT_DIR = "/home/ubuntu/bot-24-7";
+
+const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
+const SECRET = process.env.BOT_STATUS_SECRET || '';
+const includeActiveWindowLiquidity = process.env.INCLUDE_ACTIVE_WINDOW_LIQUIDITY === 'true';
+
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+function json(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function getPm2List() {
+  // Cache pour éviter que des échecs transitoires de `pm2 jlist` (timeout / charge CPU)
+  // fassent passer brutalement le dashboard en `status:"error"` (offline côté UI).
+  if (!getPm2List._cache) {
+    getPm2List._cache = { at: 0, value: null };
+  }
+
+  try {
+    const out = execSync('pm2 jlist 2>nul || exit 0', { encoding: 'utf8', timeout: 5000 });
+    const list = JSON.parse(out);
+    const bot = Array.isArray(list) ? list.find((p) => p.name === 'polymarket-bot') : null;
+    const value = {
+      status: bot?.pm2_env?.status === 'online' ? 'online' : 'offline',
+      uptime: bot?.pm2_env?.pm_uptime ?? null,
+      pid: bot?.pid ?? null,
+    };
+    getPm2List._cache = { at: Date.now(), value };
+    return value;
+  } catch (e) {
+    // v2026 : Fallback if PM2 is missing in PATH
+    const health = readJsonFile(path.join(BOT_DIR, 'health.json'));
+    const isFresh = health && health.at && (Date.now() - new Date(health.at).getTime() < 30000);
+    
+    return { 
+      status: isFresh ? 'online' : 'offline', 
+      mode: 'manual',
+      error: 'PM2 not found - Manual mode' 
+    };
+  }
+}
+
+function getLogs(lines = 40) {
+  try {
+    const out = execSync(`pm2 logs polymarket-bot --nostream --lines ${lines} 2>nul || exit 0`, { encoding: 'utf8', timeout: 5000 });
+    return String(out).trim();
+  } catch (e) {
+    // v2026 : Direct file fallback
+    const logPath = path.join(BOT_DIR, 'bot.log');
+    if (fs.existsSync(logPath)) {
+        return readFileTailUtf8(logPath, 4000); // approx 40 lines
+    }
+    return `Erreur logs: ${e.message}`;
+  }
+}
+
+function readJsonFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Derniers `maxBytes` du fichier (UTF-8). Évite de charger tout `bot.log` / gros `orders.log` (bloque le thread HTTP). */
+function readFileTailUtf8(filePath, maxBytes) {
+  try {
+    const st = fs.statSync(filePath);
+    const size = st.size;
+    if (size === 0) return '';
+    const len = Math.min(maxBytes, size);
+    const start = size - len;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, start);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
+function getLastOrder() {
+  return readJsonFile(path.join(BOT_DIR, 'last-order.json'));
+}
+
+function getBalanceFromFile() {
+  const o = readJsonFile(path.join(BOT_DIR, 'balance.json'));
+  return o && typeof o.balance === 'number' ? o.balance : null;
+}
+
+/** Lit balance-history.json (tableau { balance, at }[]) et retourne les N derniers points (7 jours max). */
+function getBalanceHistory(maxPoints = 500) {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'balance-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return arr.filter((p) => p && p.at && new Date(p.at).getTime() >= cutoff).slice(-maxPoints);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Ligne orders.log à compter comme « événement trade » côté dashboard (aligné avec l’historique Polymarket).
+ * Exclut les tentatives stop-loss rejetées (appendOrderLog avec stopLossExitAttemptFailed) : pas de trade effectif,
+ * mais une ligne par retry → gonflait fortement ordersLast24h vs la Data API.
+ */
+function ordersLogLineIsCountableTrade(o) {
+  if (!o || typeof o !== 'object') return false;
+  if (o.stopLossExitAttemptFailed === true) return false;
+  return true;
+}
+
+/**
+ * Compte les ordres dans orders.log sur les 24 dernières heures + stats remplissage (fillRatio, compléments FAK).
+ */
+function getStats24h() {
+  const ordersPath = path.join(BOT_DIR, 'orders.log');
+  const ORDERS_LOG_MAX_READ = 12 * 1024 * 1024;
+  
+  let ordersLast24h = 0;
+  let won = 0;
+  let totalWithResult = 0;
+  let fillRatioCount = 0;
+  let fillRatioSum = 0;
+  
+  const byAsset = {
+    BTC: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 },
+    ETH: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 },
+    SOL: { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 }
+  };
+
+  try {
+    let raw;
+    const st = fs.statSync(ordersPath);
+    if (st.size <= ORDERS_LOG_MAX_READ) {
+      raw = fs.readFileSync(ordersPath, 'utf8');
+    } else {
+      raw = readFileTailUtf8(ordersPath, ORDERS_LOG_MAX_READ);
+      const parts = raw.split('\n');
+      parts.shift();
+      raw = parts.join('\n');
+    }
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const lines = raw.trim().split('\n').filter(Boolean);
+    
+    for (const line of lines) {
+      try {
+        const o = JSON.parse(line);
+        const at = o.at ? new Date(o.at).getTime() : 0;
+        const countThis = ordersLogLineIsCountableTrade(o);
+        const asset = o.underlying || 'BTC';
+        
+        if (!byAsset[asset]) {
+          byAsset[asset] = { ordersLast24h: 0, won: 0, totalWithResult: 0, fillRatioSum: 0, fillRatioCount: 0 };
+        }
+
+        if (at >= cutoff) {
+          if (countThis) {
+            ordersLast24h++;
+            byAsset[asset].ordersLast24h++;
+          }
+          
+          const fr = o.fillRatio;
+          if (countThis && fr != null && Number.isFinite(Number(fr))) {
+            const n = Number(fr);
+            fillRatioCount++;
+            fillRatioSum += n;
+            byAsset[asset].fillRatioCount++;
+            byAsset[asset].fillRatioSum += n;
+          }
+        }
+        
+        if (typeof o.won === 'boolean') {
+          totalWithResult++;
+          byAsset[asset].totalWithResult++;
+          if (o.won) {
+            won++;
+            byAsset[asset].won++;
+          }
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  // Finalize statistics per asset
+  const assetReport = {};
+  for (const [asset, stats] of Object.entries(byAsset)) {
+    if (stats.ordersLast24h > 0 || stats.totalWithResult > 0) {
+      assetReport[asset] = {
+        ordersLast24h: stats.ordersLast24h,
+        winRate: stats.totalWithResult > 0 ? Math.round((stats.won / stats.totalWithResult) * 1000) / 1000 : null,
+        avgFillRatio: stats.fillRatioCount > 0 ? Math.round((stats.fillRatioSum / stats.fillRatioCount) * 10000) / 10000 : null
+      };
+    }
+  }
+
+  return {
+    ordersLast24h,
+    winRate: totalWithResult > 0 ? Math.round((won / totalWithResult) * 1000) / 1000 : null,
+    fillExecutionStats24h: {
+      fillRatioCount,
+      avgFillRatio: fillRatioCount > 0 ? Math.round((fillRatioSum / fillRatioCount) * 10000) / 10000 : null
+    },
+    byAsset: assetReport
+  };
+}
+
+/** Lit health.json (écrit par le bot : WS, dernier ordre, geoblock, kill switch). */
+function getHealth() {
+  const o = readJsonFile(path.join(BOT_DIR, 'health.json'));
+  if (!o || typeof o !== 'object') return null;
+  return {
+    wsConnected: !!o.wsConnected,
+    wsLastChangeAt: o.wsLastChangeAt ?? null,
+    wsLastConnectedAt: o.wsLastConnectedAt ?? null,
+    wsLastBidAskAt: o.wsLastBidAskAt ?? null,
+    lastOrderAt: o.lastOrderAt ?? null,
+    lastOrderSource: o.lastOrderSource ?? null,
+    geoblockOk: o.geoblockOk,
+    // v4.1.4 Visual Quant Engine
+    parkinsonVol: o.parkinsonVol ?? null,
+    realizedVol60m: o.realizedVol60m ?? null,
+    strikeLocked: !!o.strikeLocked,
+    currentSlot: o.currentSlot ?? null,
+    lastNetEdge: o.lastNetEdge ?? null,
+    killSwitchActive: !!o.killSwitchActive,
+    polymarketDegraded: !!o.polymarketDegraded,
+    degradedReason: o.degradedReason ?? null,
+    degradedUntil: o.degradedUntil ?? null,
+    staleWsData: !!o.staleWsData,
+    staleWsDataAt: o.staleWsDataAt ?? null,
+    executionDelayed: !!o.executionDelayed,
+    executionDelayedAt: o.executionDelayedAt ?? null,
+    lastSkipReason: o.lastSkipReason ?? null,
+    lastSkipSource: o.lastSkipSource ?? null,
+    lastSkipAt: o.lastSkipAt ?? null,
+    lastSkipDetails: o.lastSkipDetails ?? null,
+    lastTimingForbiddenSkip: o.lastTimingForbiddenSkip ?? null,
+    lastRateLimitInfo: o.lastRateLimitInfo ?? null, // v5.3.0 (Blindage 2026)
+    last425ErrorAt: o.last425ErrorAt ?? null,
+    isMaintenance: !!o.isMaintenance,
+    perpSources: o.perpSources ?? null,
+    pythSources: o.pythSources ?? null, // v5.6.3 (Alchemy Visibility)
+    uptimeStart: o.uptimeStart ?? null, // v5.6.3 (Bot Uptime)
+    kellyFraction: o.kellyFraction ?? null, // v5.6.3 (Risk)
+    availableCapital: o.availableCapital ?? null, // v5.6.3 (Bankroll)
+    at: o.at ?? null,
+    timestamp: o.timestamp ?? null,
+    assetStates: o.assetStates ?? null,
+    secondsLeftInSlot: o.secondsLeftInSlot ?? 0,
+    sniperHUD: o.sniperHUD ?? null,
+    sniperFilterAudit: o.sniperFilterAudit ?? null,
+    performance: o.performance ?? null,
+    equityHistory: o.equityHistory ?? [],
+    balance: o.balance ?? null,
+    totalUsd: o.totalUsd ?? null,
+  };
+}
+
+const LIQUIDITY_SERIES_CAP = 800;
+
+function emptyLiquidityStats() {
+  return {
+    avg: null,
+    min: null,
+    max: null,
+    median: null,
+    p95: null,
+    lastUsd: null,
+    count: 0,
+    lastAt: null,
+  };
+}
+
+/** Agrège des entrées { at, liquidityUsd, takeSide? } en stats scalaires. */
+function summarizeLiquidityEntries(entries) {
+  const empty = emptyLiquidityStats();
+  const valid = entries.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  if (valid.length === 0) return { ...empty };
+  const values = valid.map((e) => Number(e.liquidityUsd));
+  let lastEntry = null;
+  for (const e of valid) {
+    if (!lastEntry || e.at > lastEntry.at) lastEntry = e;
+  }
+  const lastAt = lastEntry?.at ?? null;
+  const lastUsd = lastEntry != null ? Math.round(Number(lastEntry.liquidityUsd) * 100) / 100 : null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 1
+      ? sorted[mid]
+      : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100;
+  const p95Idx = Math.max(0, Math.floor(0.95 * (sorted.length - 1)));
+  const p95 = sorted[p95Idx];
+  return {
+    avg: Math.round((sum / values.length) * 100) / 100,
+    min: Math.round(Math.min(...values) * 100) / 100,
+    max: Math.round(Math.max(...values) * 100) / 100,
+    median: Math.round(median * 100) / 100,
+    p95: Math.round(p95 * 100) / 100,
+    lastUsd,
+    count: values.length,
+    lastAt,
+  };
+}
+
+function filterLiquidityByMs(arr, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  return arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+}
+
+function liquiditySeriesFromFiltered(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  valid.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  const slice = valid.length > LIQUIDITY_SERIES_CAP ? valid.slice(-LIQUIDITY_SERIES_CAP) : valid;
+  return slice.map((e) => ({
+    at: e.at,
+    liquidityUsd: Math.round(Number(e.liquidityUsd) * 100) / 100,
+    takeSide: e.takeSide === 'Up' || e.takeSide === 'Down' ? e.takeSide : null,
+    signalPriceP:
+      Number.isFinite(Number(e?.signalPriceP)) && Number(e?.signalPriceP) > 0
+        ? Math.round(Number(e.signalPriceP) * 1000000) / 1000000
+        : null,
+  }));
+}
+
+function liquidityBySignalFromFiltered(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    const p = Number(e?.signalPriceP);
+    return e?.at && Number.isFinite(n) && n > 0 && Number.isFinite(p) && p >= 0.97 && p <= 0.98;
+  });
+  const byBucket = new Map(); // key: 97.0..98.0 (0.1%)
+  for (const e of valid) {
+    const pPct = Number(e.signalPriceP) * 100;
+    const bucketPct = Math.round(pPct * 10) / 10;
+    const key = bucketPct.toFixed(1);
+    if (!byBucket.has(key)) byBucket.set(key, []);
+    byBucket.get(key).push(e);
+  }
+  return Array.from(byBucket.entries())
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([key, entries]) => {
+      const up = entries.filter((e) => e.takeSide === 'Up');
+      const down = entries.filter((e) => e.takeSide === 'Down');
+      return {
+        signalLabel: `${key}%`,
+        signalPct: Number(key),
+        all: summarizeLiquidityEntries(entries),
+        Up: summarizeLiquidityEntries(up),
+        Down: summarizeLiquidityEntries(down),
+      };
+    });
+}
+
+function buildLiquidityWindow(filtered) {
+  const valid = filtered.filter((e) => {
+    const n = Number(e?.liquidityUsd);
+    return e?.at && Number.isFinite(n) && n > 0;
+  });
+  const up = valid.filter((e) => e.takeSide === 'Up');
+  const down = valid.filter((e) => e.takeSide === 'Down');
+  return {
+    all: summarizeLiquidityEntries(valid),
+    Up: summarizeLiquidityEntries(up),
+    Down: summarizeLiquidityEntries(down),
+  };
+}
+
+/**
+ * Rapport liquidité : fenêtres 24h / 3j, par côté, + séries pour graphique.
+ * @returns {{ windows: { '24h': object, '72h': object }, series: { '24h': array, '72h': array }, bySignal: { '24h': array, '72h': array } }}
+ */
+function getLiquidityReport() {
+  const emptyWin = { all: emptyLiquidityStats(), Up: emptyLiquidityStats(), Down: emptyLiquidityStats() };
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'liquidity-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return {
+        windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
+        series: { '24h': [], '72h': [] },
+        bySignal: { '24h': [], '72h': [] },
+      };
+    }
+    const filteredSources = includeActiveWindowLiquidity
+      ? arr
+      : arr.filter((e) => String(e?.source || '').toLowerCase() !== 'active_window');
+    const f24 = filterLiquidityByMs(filteredSources, 24 * 60 * 60 * 1000);
+    const f72 = filterLiquidityByMs(filteredSources, 3 * 24 * 60 * 60 * 1000);
+    // bySignal : toutes les sources dans la fenêtre (y compris active_window si signalPriceP),
+    // sinon les seuls relevés avec niveau de signal sont exclus quand INCLUDE_ACTIVE_WINDOW_LIQUIDITY=false.
+    const f24BySignal = filterLiquidityByMs(arr, 24 * 60 * 60 * 1000);
+    const f72BySignal = filterLiquidityByMs(arr, 3 * 24 * 60 * 60 * 1000);
+    return {
+      windows: {
+        '24h': buildLiquidityWindow(f24),
+        '72h': buildLiquidityWindow(f72),
+      },
+      series: {
+        '24h': liquiditySeriesFromFiltered(f24),
+        '72h': liquiditySeriesFromFiltered(f72),
+      },
+      bySignal: {
+        '24h': liquidityBySignalFromFiltered(f24BySignal),
+        '72h': liquidityBySignalFromFiltered(f72BySignal),
+      },
+    };
+  } catch {
+    return {
+      windows: { '24h': { ...emptyWin }, '72h': { ...emptyWin } },
+      series: { '24h': [], '72h': [] },
+      bySignal: { '24h': [], '72h': [] },
+    };
+  }
+}
+
+/** Rétrocompat : stats globales 3 j (tous relevés). */
+function getLiquidityStats() {
+  try {
+    return getLiquidityReport().windows['72h'].all;
+  } catch {
+    return emptyLiquidityStats();
+  }
+}
+
+function summarizeLatency(values, lastAt) {
+  if (!values?.length) return { avgMs: null, p95Ms: null, count: 0, lastAt };
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  const p95 = sorted[Math.max(0, Math.floor(0.95 * (sorted.length - 1)))];
+  return {
+    avgMs: Math.round(sum / sorted.length),
+    p95Ms: Math.round(p95),
+    count: sorted.length,
+    lastAt,
+  };
+}
+
+/** Lit trade-latency-history.json et retourne stats globales + par source (ws/poll) sur les 24 dernières heures. */
+function getTradeLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return {
+        all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+        poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+        preSignCacheHits: 0,
+        preSignCacheTotal: 0,
+        preSignCacheHitRate: null,
+      };
+    }
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const all = [];
+    const ws = [];
+    const poll = [];
+    let preSignCacheHits = 0;
+    let preSignCacheTotal = 0;
+    let lastWsAtMs = null;
+    let lastWsLatencyMs = null;
+    let lastPollAtMs = null;
+    let lastPollLatencyMs = null;
+    for (const e of filtered) {
+      const n = Number(e?.latencyMs);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      all.push(n);
+      const src = String(e?.source || '').toLowerCase();
+      const atMs = e?.at ? new Date(e.at).getTime() : null;
+      if (src === 'ws') {
+        ws.push(n);
+        if (Number.isFinite(atMs) && (lastWsAtMs == null || atMs > lastWsAtMs)) {
+          lastWsAtMs = atMs;
+          lastWsLatencyMs = n;
+        }
+      }
+      if (src === 'poll') {
+        poll.push(n);
+        if (Number.isFinite(atMs) && (lastPollAtMs == null || atMs > lastPollAtMs)) {
+          lastPollAtMs = atMs;
+          lastPollLatencyMs = n;
+        }
+      }
+      if (e && typeof e.preSignCacheHit === 'boolean') {
+        preSignCacheTotal += 1;
+        if (e.preSignCacheHit) preSignCacheHits += 1;
+      }
+    }
+    return {
+      all: summarizeLatency(all, lastAt),
+      ws: {
+        ...summarizeLatency(ws, lastAt),
+        lastLatencyMs: lastWsLatencyMs,
+        lastLatencyAt: lastWsAtMs != null ? new Date(lastWsAtMs).toISOString() : null,
+      },
+      poll: {
+        ...summarizeLatency(poll, lastAt),
+        lastLatencyMs: lastPollLatencyMs,
+        lastLatencyAt: lastPollAtMs != null ? new Date(lastPollAtMs).toISOString() : null,
+      },
+      preSignCacheHits,
+      preSignCacheTotal,
+      preSignCacheHitRate: preSignCacheTotal > 0 ? Math.round((100 * preSignCacheHits) / preSignCacheTotal) : null,
+    };
+  } catch {
+    return {
+      all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      ws: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+      poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null, lastLatencyMs: null, lastLatencyAt: null },
+      preSignCacheHits: 0,
+      preSignCacheTotal: 0,
+      preSignCacheHitRate: null,
+    };
+  }
+}
+
+function summarizeTimingObjects(entries, getMs, lastAt) {
+  const values = [];
+  for (const e of entries) {
+    const n = Number(getMs(e));
+    if (Number.isFinite(n) && n >= 0) values.push(n);
+  }
+  return summarizeLatency(values.filter((n) => n > 0), lastAt);
+}
+
+/** Sous-mesures de latence trade (bestAsk/creds/balance/book/placeOrder) sur 24h, global + ws/poll. */
+function getTradeLatencyBreakdownStats24h() {
+  const empty = {
+    all: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+    ws: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+    poll: { bestAsk: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, creds: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, balance: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, book: { avgMs: null, p95Ms: null, count: 0, lastAt: null }, placeOrder: { avgMs: null, p95Ms: null, count: 0, lastAt: null } },
+  };
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'trade-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return empty;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const ws = filtered.filter((e) => String(e?.source || '').toLowerCase() === 'ws');
+    const poll = filtered.filter((e) => String(e?.source || '').toLowerCase() === 'poll');
+    const mk = (entries) => ({
+      bestAsk: summarizeTimingObjects(entries, (e) => e?.timingsMs?.bestAsk, lastAt),
+      creds: summarizeTimingObjects(entries, (e) => e?.timingsMs?.creds, lastAt),
+      balance: summarizeTimingObjects(entries, (e) => e?.timingsMs?.balance, lastAt),
+      book: summarizeTimingObjects(entries, (e) => e?.timingsMs?.book, lastAt),
+      placeOrder: summarizeTimingObjects(entries, (e) => e?.timingsMs?.placeOrder, lastAt),
+    });
+    return { all: mk(filtered), ws: mk(ws), poll: mk(poll) };
+  } catch {
+    return empty;
+  }
+}
+
+function getCycleLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'cycle-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const values = filtered.map((e) => Number(e.cycleMs)).filter((n) => Number.isFinite(n) && n > 0);
+    return summarizeLatency(values, lastAt);
+  } catch {
+    return { avgMs: null, p95Ms: null, count: 0, lastAt: null };
+  }
+}
+
+function getSignalDecisionLatencyStats24h() {
+  try {
+    const raw = fs.readFileSync(path.join(BOT_DIR, 'signal-decision-latency-history.json'), 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return {
+        all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+        byStrategy: {},
+        reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
+      };
+    }
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = arr.filter((e) => e.at && new Date(e.at).getTime() >= cutoff);
+    const lastAt = filtered.length > 0
+      ? filtered.reduce((latest, e) => (e.at > latest ? e.at : latest), filtered[0].at)
+      : null;
+    const all = [];
+    const poll = [];
+    const byStrategy = {};
+    const reasonCounts = { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 };
+    for (const e of filtered) {
+      const n = Number(e?.decisionMs);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      all.push(n);
+      const src = String(e?.source || '').toLowerCase();
+      if (src === 'poll') poll.push(n);
+      const strategy = String(e?.fetchSignalsStrategy || '').trim() || 'unknown';
+      if (!byStrategy[strategy]) byStrategy[strategy] = [];
+      byStrategy[strategy].push(n);
+      const reason = String(e?.reason || '').toLowerCase();
+      if (reason === 'no_signal') reasonCounts.no_signal++;
+      else if (reason === 'liquidity_ok') reasonCounts.liquidity_ok++;
+      else if (reason === 'liquidity_null') reasonCounts.liquidity_null++;
+      else reasonCounts.other++;
+    }
+    const byStrategySummary = {};
+    for (const [strategy, values] of Object.entries(byStrategy)) {
+      byStrategySummary[strategy] = summarizeLatency(values, lastAt);
+    }
+    return { all: summarizeLatency(all, lastAt), poll: summarizeLatency(poll, lastAt), byStrategy: byStrategySummary, reasonCounts };
+  } catch {
+    return {
+      all: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      poll: { avgMs: null, p95Ms: null, count: 0, lastAt: null },
+      byStrategy: {},
+      reasonCounts: { no_signal: 0, liquidity_ok: 0, liquidity_null: 0, other: 0 },
+    };
+  }
+}
+
+/** Lit .env du bot (aligné sur index.js du bot). */
+function getBotConfig() {
+  const envPath = path.join(BOT_DIR, '.env');
+  const defaults = {
+    useMarketOrder: true,
+    pollIntervalSec: 1,
+    useWebSocket: true,
+    marketMode: '5m',
+    signalPriceSource: 'gamma',
+    minSignalP: null,
+    maxSignalP: null,
+    stopLossTriggerPriceP: null,
+    entryForbiddenFirstMin: null,
+    entryForbiddenLastMin: null,
+  };
+  try {
+    const raw = fs.readFileSync(envPath, 'utf8');
+    let useMarketOrder = true;
+    let pollIntervalSec = 1;
+    let useWebSocket = true;
+    let marketModeRaw = '5m';
+    let signalPriceSourceLine = '';
+    let minSignalP = null;
+    let maxSignalP = null;
+    let stopLossTriggerPriceP = null;
+    let entryForbiddenFirstMin = null;
+    let entryForbiddenLastMin = null;
+    for (const line of raw.split('\n')) {
+      const t = line.replace(/#.*/, '').trim();
+      if (t.startsWith('USE_MARKET_ORDER=')) {
+        useMarketOrder = t.slice('USE_MARKET_ORDER='.length).trim().toLowerCase() !== 'false';
+      }
+      if (t.startsWith('POLL_INTERVAL_SEC=')) {
+        const n = parseInt(t.slice('POLL_INTERVAL_SEC='.length).trim(), 10);
+        if (Number.isFinite(n)) pollIntervalSec = n;
+      }
+      if (t.startsWith('USE_WEBSOCKET=')) {
+        useWebSocket = t.slice('USE_WEBSOCKET='.length).trim().toLowerCase() !== 'false';
+      }
+      if (t.startsWith('MARKET_MODE=')) {
+        marketModeRaw = t.slice('MARKET_MODE='.length).trim().toLowerCase() || '5m';
+      }
+      if (t.startsWith('SIGNAL_PRICE_SOURCE=')) {
+        signalPriceSourceLine = t.slice('SIGNAL_PRICE_SOURCE='.length).trim().toLowerCase();
+      }
+      if (t.startsWith('MIN_SIGNAL_P=')) {
+        const v = parseFloat(t.slice('MIN_SIGNAL_P='.length).trim());
+        if (Number.isFinite(v)) minSignalP = v;
+      }
+      if (t.startsWith('MAX_SIGNAL_P=')) {
+        const v = parseFloat(t.slice('MAX_SIGNAL_P='.length).trim());
+        if (Number.isFinite(v)) maxSignalP = v;
+      }
+      if (t.startsWith('STOP_LOSS_TRIGGER_PRICE_P=')) {
+        const v = parseFloat(t.slice('STOP_LOSS_TRIGGER_PRICE_P='.length).trim());
+        if (Number.isFinite(v)) stopLossTriggerPriceP = v;
+      }
+      if (t.startsWith('ENTRY_FORBIDDEN_FIRST_MIN=')) {
+        const v = parseInt(t.slice('ENTRY_FORBIDDEN_FIRST_MIN='.length).trim(), 10);
+        if (Number.isFinite(v)) entryForbiddenFirstMin = v;
+      }
+      if (t.startsWith('ENTRY_FORBIDDEN_LAST_MIN=')) {
+        const v = parseInt(t.slice('ENTRY_FORBIDDEN_LAST_MIN='.length).trim(), 10);
+        if (Number.isFinite(v)) entryForbiddenLastMin = v;
+      }
+    }
+    const marketMode = marketModeRaw || '5m';
+    const signalPriceSource =
+      signalPriceSourceLine === 'gamma' || signalPriceSourceLine === 'clob'
+        ? signalPriceSourceLine
+        : 'clob';
+    return {
+      useMarketOrder,
+      pollIntervalSec,
+      useWebSocket,
+      marketMode,
+      signalPriceSource,
+      minSignalP,
+      maxSignalP,
+      stopLossTriggerPriceP,
+      entryForbiddenFirstMin,
+      entryForbiddenLastMin,
+    };
+  } catch {
+    return { ...defaults };
+  }
+}
+
+function getHealthAlerts(health, config) {
+  const alerts = [];
+  const now = Date.now();
+  const wsAlertAfterSec = Number(process.env.WS_ALERT_AFTER_SEC) || 120;
+  const staleWsAfterSec = Number(process.env.WS_STALE_ALERT_AFTER_SEC) || 8;
+  const noBookAfterSec = Number(process.env.WS_NO_BOOK_ALERT_AFTER_SEC) || 45;
+  if (config?.useWebSocket && health) {
+    const lastChangeMs = health.wsLastChangeAt ? new Date(health.wsLastChangeAt).getTime() : null;
+    if (health.wsConnected === false && lastChangeMs && Number.isFinite(lastChangeMs)) {
+      const disconnectedForSec = Math.max(0, Math.floor((now - lastChangeMs) / 1000));
+      if (disconnectedForSec >= wsAlertAfterSec) {
+        alerts.push({ kind: 'ws_disconnected', severity: 'warn', disconnectedForSec, thresholdSec: wsAlertAfterSec });
+      }
+    }
+    const lastBidAskMs = health.wsLastBidAskAt ? new Date(health.wsLastBidAskAt).getTime() : null;
+    if (health.wsConnected === true && lastBidAskMs && Number.isFinite(lastBidAskMs)) {
+      const staleForSec = Math.max(0, Math.floor((now - lastBidAskMs) / 1000));
+      if (staleForSec >= staleWsAfterSec) {
+        alerts.push({ kind: 'stale_ws_data', severity: 'warn', staleForSec, thresholdSec: staleWsAfterSec });
+      }
+    }
+    const connectedAtMs = health.wsLastConnectedAt ? new Date(health.wsLastConnectedAt).getTime() : null;
+    if (
+      health.wsConnected === true &&
+      !health.wsLastBidAskAt &&
+      connectedAtMs &&
+      Number.isFinite(connectedAtMs) &&
+      now - connectedAtMs >= noBookAfterSec * 1000
+    ) {
+      alerts.push({
+        kind: 'ws_no_best_bid_ask_yet',
+        severity: 'warn',
+        sinceConnectedSec: Math.max(0, Math.floor((now - connectedAtMs) / 1000)),
+        thresholdSec: noBookAfterSec,
+      });
+    }
+  }
+  if (health?.killSwitchActive) {
+    alerts.push({ kind: 'kill_switch', severity: 'error' });
+  }
+  if (health?.geoblockOk === false) {
+    alerts.push({ kind: 'geoblock', severity: 'error' });
+  }
+  if (health?.polymarketDegraded) {
+    alerts.push({
+      kind: 'polymarket_degraded',
+      severity: 'error',
+      reason: health?.degradedReason ?? null,
+      until: health?.degradedUntil ?? null,
+    });
+  }
+  if (health?.staleWsData) {
+    alerts.push({ kind: 'stale_ws_data', severity: 'warn', at: health?.staleWsDataAt ?? null });
+  }
+  if (health?.executionDelayed) {
+    alerts.push({ kind: 'execution_delayed', severity: 'warn', at: health?.executionDelayedAt ?? null });
+  }
+  return alerts;
+}
+
+/**
+ * Aligne l’API avec health.json : quand le dernier skip timing est plus récent que la dernière ligne
+ * `signal_in_range_but_no_order` dans bot.log (throttle / rotation logs), on préfixe une entrée synthétique.
+ * Sinon on enrichit la ligne log si même fenêtre temporelle mais sans timingBlock.
+ */
+function mergeHealthTimingIntoNoOrderRecent(out, health, limit) {
+  const cap = Array.isArray(out) ? out.slice(0, limit) : [];
+  if (!health || health.lastSkipReason !== 'timing_forbidden' || !health.lastSkipAt) return cap;
+  const d = health.lastSkipDetails;
+  if (!d || typeof d !== 'object') return cap;
+  const synMs = new Date(health.lastSkipAt).getTime();
+  if (!Number.isFinite(synMs)) return cap;
+  const bestAskP = Number.isFinite(Number(d.bestAskP)) ? Math.round(Number(d.bestAskP) * 1e6) / 1e6 : null;
+  const synthetic = {
+    kind: 'no_order',
+    ts: health.lastSkipAt,
+    source: health.lastSkipSource ?? null,
+    reason: 'timing_forbidden',
+    takeSide: d.takeSide === 'Up' || d.takeSide === 'Down' ? d.takeSide : null,
+    bestAskP,
+    bestBidP: null,
+    stopLossTriggerPriceP: null,
+    conditionId: d.conditionId ?? null,
+    tokenId: d.tokenId != null ? String(d.tokenId).slice(0, 32) : null,
+    remainingMs: Number.isFinite(Number(d.remainingMs)) ? Math.round(Number(d.remainingMs)) : null,
+    amountUsd: null,
+    error: null,
+    timingBlock: d.timingBlock != null ? String(d.timingBlock).slice(0, 40) : null,
+    timingOffsetSec: Number.isFinite(Number(d.timingOffsetSec)) ? Math.round(Number(d.timingOffsetSec)) : null,
+    fromHealthSnapshot: true,
+  };
+  const first = cap[0];
+  const firstMs = first?.ts ? new Date(first.ts).getTime() : null;
+  if (firstMs == null || !Number.isFinite(firstMs)) {
+    return [synthetic, ...cap].slice(0, limit);
+  }
+  if (synMs > firstMs + 500) {
+    return [synthetic, ...cap].slice(0, limit);
+  }
+  if (
+    first &&
+    first.reason === 'timing_forbidden' &&
+    !first.timingBlock &&
+    synthetic.timingBlock &&
+    (Math.abs(synMs - firstMs) < 10 * 60 * 1000 ||
+      (d.conditionId &&
+        first.conditionId &&
+        String(d.conditionId).toLowerCase() === String(first.conditionId).toLowerCase()))
+  ) {
+    cap[0] = {
+      ...first,
+      timingBlock: synthetic.timingBlock,
+      timingOffsetSec: synthetic.timingOffsetSec,
+      takeSide: first.takeSide ?? synthetic.takeSide,
+      bestAskP: first.bestAskP ?? synthetic.bestAskP,
+      fromHealthEnriched: true,
+    };
+  }
+  return cap.slice(0, limit);
+}
+
+/** SL « watch » : quelques lignes dédiées pour ne pas être noyées sous le spam no-order (ex. already_placed). */
+const WATCH_SL_EVENTS_MAX = 3;
+const WATCH_NO_ORDER_EVENTS_MAX = 12;
+
+function watchEventTsMs(e) {
+  if (!e?.ts) return 0;
+  const ms = new Date(e.ts).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function watchEventDedupeKey(e) {
+  return `${e?.kind ?? ''}|${e?.ts ?? ''}|${e?.reason ?? ''}|${String(e?.conditionId ?? '')}`;
+}
+
+function mergeWatchSlAndNoOrderChronological(slOut, noMerged, limit) {
+  const pool = [...slOut, ...noMerged];
+  pool.sort((a, b) => watchEventTsMs(b) - watchEventTsMs(a));
+  let combined = pool.slice(0, limit);
+  /** Le SL le plus récent (slOut[0]) est collecté en premier dans le fichier → le plus récent dans le temps. */
+  const headSl = slOut.length ? slOut[0] : null;
+  if (headSl) {
+    const hid = watchEventDedupeKey(headSl);
+    if (!combined.some((e) => watchEventDedupeKey(e) === hid)) {
+      combined = [headSl, ...combined.filter((e) => watchEventDedupeKey(e) !== hid)].slice(0, limit);
+    }
+  }
+  return combined;
+}
+
+function getSignalInRangeNoOrderRecent(limit = 40) {
+  const filePath = path.join(BOT_DIR, 'bot.log');
+  const ordersPath = path.join(BOT_DIR, 'orders.log');
+  /** bot.log et orders.log peuvent peser des Mo — lire seulement la fin. */
+  const TAIL_BYTES = 4 * 1024 * 1024;
+  
+  const slOut = [];
+  const noOut = [];
+
+  try {
+    // 1. Lecture orders.log pour les trades réussis (pour combler l'historique ou doubler le flux bot.log)
+    try {
+      let rawOrders;
+      const stO = fs.statSync(ordersPath);
+      if (stO.size <= TAIL_BYTES) rawOrders = fs.readFileSync(ordersPath, 'utf8');
+      else {
+        rawOrders = readFileTailUtf8(ordersPath, TAIL_BYTES);
+        const parts = rawOrders.split('\n');
+        parts.shift();
+        rawOrders = parts.join('\n');
+      }
+      const orderLines = rawOrders.trim().split('\n').filter(Boolean);
+      for (let i = orderLines.length - 1; i >= 0; i--) {
+        if (noOut.length >= WATCH_NO_ORDER_EVENTS_MAX) break;
+        try {
+          const row = JSON.parse(orderLines[i]);
+          if (row.at) {
+            noOut.push({
+              kind: 'no_order',
+              ts: row.at,
+              source: row.source || 'ws',
+              reason: 'order_placed',
+              takeSide: row.takeSide || null,
+              bestAskP: Number.isFinite(Number(row.averageFillPriceP)) ? Math.round(Number(row.averageFillPriceP) * 1e6) / 1e6 : null,
+              bestBidP: null,
+              conditionId: row.conditionId || null,
+              tokenId: row.tokenId || null,
+              amountUsd: Number.isFinite(Number(row.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+              orderID: row.orderID || null,
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // 2. Lecture bot.log pour les signaux in range / SL
+    let raw;
+    try {
+      const st = fs.statSync(filePath);
+      if (st.size <= TAIL_BYTES) raw = fs.readFileSync(filePath, 'utf8');
+      else {
+        raw = readFileTailUtf8(filePath, TAIL_BYTES);
+        const parts = raw.split('\n');
+        parts.shift();
+        raw = parts.join('\n');
+      }
+    } catch {
+      raw = '';
+    }
+
+    if (raw) {
+      const lines = raw.trim().split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (slOut.length >= WATCH_SL_EVENTS_MAX && noOut.length >= WATCH_NO_ORDER_EVENTS_MAX * 2) break;
+        try {
+          const row = JSON.parse(lines[i]);
+          const msg = row?.message;
+          if (msg === 'stop_loss_touched_watch' && slOut.length < WATCH_SL_EVENTS_MAX) {
+            slOut.push({
+              kind: 'stop_loss_watch',
+              ts: row?.ts ?? null,
+              source: row?.source ?? null,
+              reason: row?.reason ?? null,
+              takeSide: row?.takeSide ?? null,
+              bestAskP: null,
+              bestBidP: Number.isFinite(Number(row?.bestBidP)) ? Math.round(Number(row.bestBidP) * 1e6) / 1e6 : null,
+              stopLossTriggerPriceP: Number.isFinite(Number(row?.stopLossTriggerPriceP))
+                ? Math.round(Number(row.stopLossTriggerPriceP) * 1e6) / 1e6
+                : null,
+              conditionId: row?.conditionId ?? null,
+              tokenId: row?.tokenId != null ? String(row.tokenId).slice(0, 64) : null,
+              entryPriceP: Number.isFinite(Number(row?.entryPriceP))
+                ? Math.round(Number(row.entryPriceP) * 1e6) / 1e6
+                : null,
+              drawdownPct: Number.isFinite(Number(row?.drawdownPct)) ? Math.round(Number(row.drawdownPct) * 100) / 100 : null,
+              remainingMs: null,
+              amountUsd: null,
+              error: null,
+              timingBlock: null,
+              timingOffsetSec: null,
+            });
+          } else if (msg === 'signal_in_range_but_no_order' && noOut.length < WATCH_NO_ORDER_EVENTS_MAX * 4) {
+            const reason = row?.reason ?? null;
+            // Optionnel : on peut limiter le bruit du "already_placed_for_slot" qui spamme une fois le trade pris.
+            if (reason === 'already_placed_for_slot' && noOut.filter(x => x.reason === 'already_placed_for_slot').length >= 3) {
+              continue; 
+            }
+            noOut.push({
+              kind: 'no_order',
+              ts: row?.ts ?? null,
+              source: row?.source ?? null,
+              reason: reason,
+              takeSide: row?.takeSide ?? null,
+              bestAskP: Number.isFinite(Number(row?.bestAskP)) ? Math.round(Number(row.bestAskP) * 1e6) / 1e6 : null,
+              bestBidP: null,
+              stopLossTriggerPriceP: null,
+              conditionId: row?.conditionId ?? null,
+              tokenId: row?.tokenId ?? null,
+              remainingMs: Number.isFinite(Number(row?.remainingMs)) ? Math.round(Number(row.remainingMs)) : null,
+              amountUsd: Number.isFinite(Number(row?.amountUsd)) ? Math.round(Number(row.amountUsd) * 100) / 100 : null,
+              error: row?.error ?? null,
+              timingBlock: row?.timingBlock != null ? String(row.timingBlock).slice(0, 40) : null,
+              timingOffsetSec: Number.isFinite(Number(row?.timingOffsetSec))
+                ? Math.round(Number(row.timingOffsetSec))
+                : null,
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
+    const noMerged = mergeHealthTimingIntoNoOrderRecent(noOut, getHealth(), WATCH_NO_ORDER_EVENTS_MAX * 2);
+    /** Ordre chronologique (plus récent en premier) dédoublonné sommairement par (ts, reason, conditionId) */
+    const unique = new Map();
+    for (const e of noMerged) {
+      const k = `${e.ts}|${e.reason}|${e.conditionId}`;
+      if (!unique.has(k)) unique.set(k, e);
+    }
+    const finalNo = Array.from(unique.values()).sort((a,b) => watchEventTsMs(b) - watchEventTsMs(a));
+    
+    return mergeWatchSlAndNoOrderChronological(slOut, finalNo, limit);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Lit les dernières lignes du journal de décision pour le flux d'arbitrage.
+ */
+function getDecisionFeed(limit = 50) {
+  const filePath = path.join(BOT_DIR, 'decisions.log');
+  const TAIL_BYTES = 100 * 1024; // 100 KB suffisent pour 50 lignes JSON
+  try {
+    const raw = readFileTailUtf8(filePath, TAIL_BYTES);
+    if (!raw) return [];
+    return raw
+      .trim()
+      .split('\n')
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .reverse()
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+const server = http.createServer((req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (req.method !== 'GET') {
+    json(res, { error: 'Method not allowed' }, 405);
+    return;
+  }
+
+  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const token = url.searchParams.get('token');
+  const debugRequested = url.searchParams.get('debug') === '1';
+  if (SECRET && token !== SECRET) {
+    json(res, { error: 'Unauthorized' }, 401);
+    return;
+  }
+
+  if (url.pathname === '/' || url.pathname === '/api/health') {
+    return json(res, { ok: true, service: 'bot-status' });
+  }
+
+  if (url.pathname === '/api/bot-status') {
+    /** Rend la main à la boucle d’événements entre blocs sync — sinon /api/health reste bloqué pendant toute la construction du JSON. */
+    const tick = () => new Promise((r) => setImmediate(r));
+    (async () => {
+      try {
+        await tick();
+        const pm2 = getPm2List();
+        await tick();
+        const lastOrder = getLastOrder();
+        await tick();
+        const balanceUsd = getBalanceFromFile();
+        await tick();
+        const balanceHistory = getBalanceHistory();
+        await tick();
+        const config = getBotConfig();
+        await tick();
+        const stats = getStats24h();
+        await tick();
+        const liquidityReport = getLiquidityReport();
+        await tick();
+        const liquidityStats = liquidityReport.windows['72h'].all;
+        const liquidityStats24h = liquidityReport.windows['24h'].all;
+        await tick();
+        const tradeLatencyStats = getTradeLatencyStats24h();
+        await tick();
+        const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
+        await tick();
+        const cycleLatencyStats = getCycleLatencyStats24h();
+        await tick();
+        const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+        await tick();
+        const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
+        await tick();
+        const decisionFeed = getDecisionFeed();
+        const lastDecision = decisionFeed[0] || null;
+        await tick();
+        const health = getHealth();
+        const alerts = getHealthAlerts(health, config);
+        const payload = {
+          status: pm2.status,
+          uptime: pm2.uptime,
+          pid: pm2.pid,
+          balanceUsd,
+          lastOrder,
+          balanceHistory,
+          useMarketOrder: config.useMarketOrder,
+          pollIntervalSec: config.pollIntervalSec,
+          useWebSocket: config.useWebSocket,
+          marketMode: config.marketMode,
+          signalPriceSource: config.signalPriceSource,
+          minSignalP: config.minSignalP,
+          maxSignalP: config.maxSignalP,
+          stopLossTriggerPriceP: config.stopLossTriggerPriceP,
+          entryForbiddenFirstMin: config.entryForbiddenFirstMin,
+          entryForbiddenLastMin: config.entryForbiddenLastMin,
+          ordersLast24h: stats.ordersLast24h,
+          winRate: stats.winRate,
+          fillExecutionStats24h: stats.fillExecutionStats24h,
+          health,
+          alerts,
+          liquidityStats,
+          liquidityStats24h,
+          liquidityReport,
+          tradeLatencyStats,
+          tradeLatencyBreakdownStats,
+          cycleLatencyStats,
+          signalDecisionLatencyStats,
+          signalInRangeNoOrderRecent,
+          decisionFeed,
+          liveArbitrage: lastDecision ? {
+            btc: lastDecision.btc,
+            strike: lastDecision.strike,
+            fair: lastDecision.fair,
+            poly: lastDecision.poly,
+            gap: lastDecision.gap,
+            vol: lastDecision.vol,
+            secondsLeft: lastDecision.secondsLeft,
+            priceSource: lastDecision.priceSource ?? null,
+            pythBtc: lastDecision.pythBtc ?? null,
+            pythDelta: lastDecision.pythDelta ?? null,
+            strikeSource: lastDecision.strikeSource ?? null,
+          } : null,
+          // v2026 : Industrial Sniper Mapping
+          secondsLeftInSlot: health?.secondsLeftInSlot ?? 0,
+          sniperFilterAudit: health?.sniperFilterAudit ?? null,
+          performance: health?.performance ?? null,
+          equityHistory: health?.equityHistory ?? [],
+          assetStates: health?.assetStates ?? null,
+          sniperHUD: health?.sniperHUD ?? null,
+          balance: health?.balance ?? balanceUsd,
+          totalUsd: health?.totalUsd ?? balanceUsd,
+          timestamp: health?.timestamp || Date.now(),
+          at: new Date().toISOString(),
+        };
+        if (debugRequested) {
+          const balancePath = path.join(BOT_DIR, 'balance.json');
+          const lastOrderPath = path.join(BOT_DIR, 'last-order.json');
+          const liquidityPath = path.join(BOT_DIR, 'liquidity-history.json');
+          payload._debug = {
+            balanceFileExists: fs.existsSync(balancePath),
+            lastOrderFileExists: fs.existsSync(lastOrderPath),
+            liquidityHistoryFileExists: fs.existsSync(liquidityPath),
+            healthFileExists: fs.existsSync(path.join(BOT_DIR, 'health.json')),
+            tradeLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'trade-latency-history.json')),
+            cycleLatencyHistoryFileExists: fs.existsSync(path.join(BOT_DIR, 'cycle-latency-history.json')),
+            signalDecisionLatencyHistoryFileExists: fs.existsSync(
+              path.join(BOT_DIR, 'signal-decision-latency-history.json'),
+            ),
+            botDir: BOT_DIR,
+          };
+        }
+        json(res, payload);
+      } catch (e) {
+        json(res, { error: String(e?.message || e) }, 500);
+      }
+    })();
+    return;
+  }
+
+  json(res, { error: 'Not found' }, 404);
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Bot status server: http://0.0.0.0:${PORT}`);
+});

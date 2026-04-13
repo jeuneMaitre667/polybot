@@ -1,0 +1,25 @@
+{
+  "name": "polymarket-bot-24-7",
+  "version": "1.0.0",
+  "description": "Script Node 24/7 pour le bot Bitcoin Up or Down (Polymarket)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "deps:outdated": "npm outdated",
+    "audit:report": "npm audit --omit=dev",
+    "sentinel": "node sentinel-v2.js"
+  },
+  "dependencies": {
+    "@polymarket/builder-relayer-client": "^0.0.8",
+    "@polymarket/builder-signing-sdk": "0.0.8",
+    "@polymarket/clob-client": "^5.8.0",
+    "axios": "^1.13.6",
+    "dotenv": "^16.4.5",
+    "ethers": "^5.8.0",
+    "https-proxy-agent": "^9.0.0",
+    "viem": "^2.47.6",
+    "ws": "^8.18.0"
+  }
+}

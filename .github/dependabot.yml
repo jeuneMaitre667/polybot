@@ -1,0 +1,20 @@
+# PRs hebdomadaires pour suivre @polymarket/* et le reste ; à merger après tests (redeploy / bot).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /bot-24-7
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 6
+    groups:
+      polymarket:
+        patterns:
+          - "@polymarket/*"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 8

@@ -1,0 +1,565 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
+import {
+  countAskLevelsInBand,
+  getBestAskPriceFromRawAsks,
+  getBestAskPriceLenientFromRawAsks,
+  getBestBidPriceFromRawBids,
+  liquidityUsdFromAsks,
+  ORDER_BOOK_MARKET_WORST_P,
+  ORDER_BOOK_SIGNAL_MAX_P,
+  ORDER_BOOK_SIGNAL_MIN_P,
+} from '@/lib/orderBookLiquidity.js';
+import { parseUpDownTokenIdsFromMarket, resolveGammaMarketForBtcUpDown } from '@/lib/gammaPolymarket.js';
+import {
+  format15mSlotEndFr,
+  getCurrent15mUtcBoundarySec,
+  getPrevious15mResolvedSlugStartSec,
+  getResolvedWinnerFromGammaMarket,
+} from '@/lib/btc15mLastSlotWinner.js';
+
+const GAMMA_EVENT_BY_SLUG_URL = import.meta.env.DEV ? '/api/events/slug' : 'https://gamma-api.polymarket.com/events/slug';
+const GAMMA_MARKET_BY_SLUG_URL = import.meta.env.DEV ? '/api/markets/slug' : 'https://gamma-api.polymarket.com/markets/slug';
+const CLOB_BOOK_URL = import.meta.env.DEV ? '/apiClob/book' : 'https://clob.polymarket.com/book';
+const CLOB_BOOK_DIRECT = 'https://clob.polymarket.com/book';
+const CLOB_PRICE_URL = import.meta.env.DEV ? '/apiClob/price' : 'https://clob.polymarket.com/price';
+const CLOB_PRICE_DIRECT = 'https://clob.polymarket.com/price';
+const BITCOIN_UP_DOWN_15M = 'btc-updown-15m';
+const SLOT_SEC = 15 * 60;
+/** Rafraîchissement léger : carnet créneau actuel + gagnant dernier créneau (sans rescanner les N créneaux). */
+const ORDERBOOK_SNAPSHOT_POLL_MS = 1000;
+
+/**
+ * Fin UTC **exclusive** du créneau ouvert (= début slug + 900 s). Le slug Polymarket est
+ * `btc-updown-15m-{eventStart}` avec `eventStart = floor(now/900)*900`.
+ */
+function getCurrent15mSlotEndSec() {
+  return getCurrent15mUtcBoundarySec() + SLOT_SEC;
+}
+
+/** Timestamps de fin de chaque créneau : actuel puis plus anciens. */
+function get15mSlotEndSecs(count) {
+  const end0 = getCurrent15mSlotEndSec();
+  const n = Math.max(1, Math.min(96, count));
+  const ends = [];
+  for (let i = 0; i < n; i++) {
+    ends.push(end0 - i * SLOT_SEC);
+  }
+  return ends;
+}
+
+/**
+ * Résout Up/Down pour un créneau : `slotWindowEndSec` = fin de fenêtre (s Unix) ; slug = start = end − 900 s.
+ * 1) GET markets/slug/{slug} en premier (marché canonique = même slug que l’URL Polymarket) ;
+ * 2) sinon event/slug + marchés triés (slug exact du créneau avant les autres) — évite un sous-marché
+ *    avec tokens CLOB « valides » pour /price (souvent ~mid) mais carnet /book vide.
+ */
+async function fetchTokenIdsForSlotEnd(slotWindowEndSec) {
+  const slugStart = slotWindowEndSec - SLOT_SEC;
+  const slug = `${BITCOIN_UP_DOWN_15M}-${slugStart}`;
+  const slugLower = slug.toLowerCase();
+
+  try {
+    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 12000 });
+    const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, null, m);
+    const out = parseUpDownTokenIdsFromMarket(mm);
+    if (out.tokenIdUp || out.tokenIdDown) return out;
+  } catch {
+    /* 404 / réseau */
+  }
+
+  try {
+    const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, { timeout: 12000 });
+    const rawMarkets = ev?.markets;
+    if (Array.isArray(rawMarkets) && rawMarkets.length > 0) {
+      const markets = [...rawMarkets].sort((a, b) => {
+        const ma = String(a?.slug ?? '').toLowerCase() === slugLower ? 0 : 1;
+        const mb = String(b?.slug ?? '').toLowerCase() === slugLower ? 0 : 1;
+        return ma - mb;
+      });
+      for (const m of markets) {
+        const mm = await resolveGammaMarketForBtcUpDown(axios, GAMMA_MARKET_BY_SLUG_URL, ev, m);
+        const out = parseUpDownTokenIdsFromMarket(mm);
+        if (out.tokenIdUp || out.tokenIdDown) return out;
+      }
+    }
+  } catch {
+    /* 404 / réseau */
+  }
+
+  return { tokenIdUp: null, tokenIdDown: null };
+}
+
+/**
+ * Le CLOB ne garde pas de carnet pour les marchés résolus → 404 en boucle si on interroge d’anciens créneaux.
+ * N’appeler /book que tant que le créneau n’est pas terminé (fin UTC strictement dans le futur).
+ */
+function slotEndSecIsStillOpen(endSec) {
+  if (endSec == null || !Number.isFinite(endSec)) return false;
+  return Math.floor(Date.now() / 1000) < endSec;
+}
+
+function computeSlotBookMetrics(asksUp, asksDown) {
+  const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+  const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+  return {
+    liquidityBandUpUsd: liqUp,
+    liquidityBandDownUsd: liqDown,
+    miseMaxUsd: Math.max(liqUp, liqDown),
+    // **Lenient d’abord** (même logique que « Best ask live » / onglet Acheter Polymarket) : le strict
+    // exige taille > 0 ; si les vrais asks ont la taille sous un champ non parsé, on gardait des niveaux
+    // « bruit » ~49¢/50¢ avec taille lisible au lieu de 38¢/63¢.
+    bestAskUpP:
+      getBestAskPriceLenientFromRawAsks(asksUp) ?? getBestAskPriceFromRawAsks(asksUp),
+    bestAskDownP:
+      getBestAskPriceLenientFromRawAsks(asksDown) ?? getBestAskPriceFromRawAsks(asksDown),
+    levelsBandUp: countAskLevelsInBand(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
+    levelsBandDown: countAskLevelsInBand(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P),
+    liquidityToWorstUpUsd: liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_MARKET_WORST_P),
+    liquidityToWorstDownUsd: liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_MARKET_WORST_P),
+  };
+}
+
+/** GET /book : asks + bids (même requête) pour best ask / best bid (SL bot). */
+async function fetchBookAsksBids(tokenId, slotEndSecForBook = null) {
+  const empty = () => ({ asks: [], bids: [] });
+  if (!tokenId) return empty();
+  if (slotEndSecForBook != null && !slotEndSecIsStillOpen(slotEndSecForBook)) return empty();
+  try {
+    const { data } = await axios.get(CLOB_BOOK_URL, {
+      params: { token_id: tokenId },
+      timeout: 12000,
+    });
+    const asks = data?.asks ?? [];
+    const bids = data?.bids ?? [];
+    return {
+      asks: Array.isArray(asks) ? asks : [],
+      bids: Array.isArray(bids) ? bids : [],
+    };
+  } catch {
+    if (
+      import.meta.env.DEV &&
+      String(CLOB_BOOK_URL).startsWith('/') &&
+      typeof window === 'undefined'
+    ) {
+      try {
+        const { data } = await axios.get(CLOB_BOOK_DIRECT, {
+          params: { token_id: tokenId },
+          timeout: 12000,
+        });
+        const asks = data?.asks ?? [];
+        const bids = data?.bids ?? [];
+        return {
+          asks: Array.isArray(asks) ? asks : [],
+          bids: Array.isArray(bids) ? bids : [],
+        };
+      } catch {
+        return empty();
+      }
+    }
+    return empty();
+  }
+}
+
+async function fetchBestAskLive(tokenId) {
+  if (!tokenId) return null;
+  async function atBase(baseUrl) {
+    try {
+      const { data } = await axios.get(baseUrl, {
+        params: { token_id: tokenId, side: 'BUY' },
+        timeout: 8000,
+      });
+      const p = parseFloat(data?.price);
+      return Number.isFinite(p) ? p : null;
+    } catch {
+      return null;
+    }
+  }
+  let p = await atBase(CLOB_PRICE_URL);
+  if (p == null && import.meta.env.DEV && String(CLOB_PRICE_URL).startsWith('/')) {
+    p = await atBase(CLOB_PRICE_DIRECT);
+  }
+  return p;
+}
+
+/**
+ * Même logique que `useBitcoinUpDownSignals` : **carnet d’abord** (meilleur prix ask visible),
+ * puis GET `/price?side=BUY` si carnet vide — `/price` seul peut rester proche du mid (~47¢/52¢)
+ * alors que l’UI « Acheter » suit le carnet (~38¢/63¢).
+ */
+async function bestAskFromBookThenPrice(asks, tokenId) {
+  const fromBook = getBestAskPriceLenientFromRawAsks(asks);
+  if (fromBook != null) return fromBook;
+  return fetchBestAskLive(tokenId);
+}
+
+/** Dernier créneau **terminé** (pas l’actuel) : gagnant Up/Down via Gamma outcomePrices. */
+async function fetchPreviousSlotWinnerFromGamma() {
+  const boundarySec = getCurrent15mUtcBoundarySec();
+  const slugStartPrev = getPrevious15mResolvedSlugStartSec();
+  const slug = `${BITCOIN_UP_DOWN_15M}-${slugStartPrev}`;
+  let winner = null;
+  try {
+    const { data: m } = await axios.get(`${GAMMA_MARKET_BY_SLUG_URL}/${encodeURIComponent(slug)}`, {
+      timeout: 10000,
+    });
+    winner = getResolvedWinnerFromGammaMarket(m);
+  } catch {
+    /* marché introuvable ou proxy */
+  }
+  if (winner == null) {
+    try {
+      const { data: ev } = await axios.get(`${GAMMA_EVENT_BY_SLUG_URL}/${encodeURIComponent(slug)}`, {
+        timeout: 10000,
+      });
+      const markets = ev?.markets;
+      if (Array.isArray(markets)) {
+        for (const m of markets) {
+          winner = getResolvedWinnerFromGammaMarket(m, ev);
+          if (winner) break;
+        }
+      }
+    } catch {
+      /* */
+    }
+  }
+  /** Libellé « dernier créneau » : borne entre deux slots (= fin du créneau résolu). */
+  return { winner, slotEndSec: boundarySec, slug };
+}
+
+function medianSorted(arr) {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/**
+ * Moyenne de la « mise max » carnet sur N créneaux 15m :
+ * max(liquidité Up, Down) dans la bande signal (`ORDER_BOOK_SIGNAL_*`, aligné bot / `orderBookLiquidity`).
+ *
+ * Quand `enabled`, le **carnet du créneau ouvert** et le **gagnant du dernier créneau** sont aussi
+ * rafraîchis automatiquement toutes les ~1 s (sans refaire le scan complet des N créneaux).
+ *
+ * @param {{ enabled?: boolean, slotCount?: number, staggerMs?: number }} opts
+ */
+export function use15mMiseMaxBookAvg({ enabled = true, slotCount = 36, staggerMs = 45 } = {}) {
+  const [avgUsd, setAvgUsd] = useState(null);
+  const [minUsd, setMinUsd] = useState(null);
+  const [maxUsd, setMaxUsd] = useState(null);
+  const [medianUsd, setMedianUsd] = useState(null);
+  const [sampleSize, setSampleSize] = useState(0);
+  const [slotsAttempted, setSlotsAttempted] = useState(0);
+  const [currentSlotMiseMaxUsd, setCurrentSlotMiseMaxUsd] = useState(null);
+  /** Série temporelle : un point par créneau où Gamma+CLOB ont répondu (même si mise = 0). */
+  const [seriesBySlot, setSeriesBySlot] = useState([]);
+  /** @deprecated Utiliser currentSlotBookAsksUp / Down — carnet dominant (bande signal). */
+  const [currentSlotBookAsks, setCurrentSlotBookAsks] = useState([]);
+  /** Asks CLOB créneau actuel : Up et Down (profondeur type Polymarket). */
+  const [currentSlotBookAsksUp, setCurrentSlotBookAsksUp] = useState([]);
+  const [currentSlotBookAsksDown, setCurrentSlotBookAsksDown] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastAt, setLastAt] = useState(null);
+  /** Fin du créneau 15m courant (slug UTC), pour horloge / état marché. */
+  const [currentSlotEndSec, setCurrentSlotEndSec] = useState(null);
+  /** true tant que now < currentSlotEndSec (CLOB encore « actif » pour ce créneau). */
+  const [slotMarketOpen, setSlotMarketOpen] = useState(false);
+  const [liquidityBandUpUsd, setLiquidityBandUpUsd] = useState(null);
+  const [liquidityBandDownUsd, setLiquidityBandDownUsd] = useState(null);
+  const [bestAskUpP, setBestAskUpP] = useState(null);
+  const [bestAskDownP, setBestAskDownP] = useState(null);
+  const [bestAskLiveUpP, setBestAskLiveUpP] = useState(null);
+  const [bestAskLiveDownP, setBestAskLiveDownP] = useState(null);
+  /** Best bid carnet (créneau courant) — même sens que le bot pour le SL. */
+  const [bestBidLiveUpP, setBestBidLiveUpP] = useState(null);
+  const [bestBidLiveDownP, setBestBidLiveDownP] = useState(null);
+  const [levelsBandUp, setLevelsBandUp] = useState(0);
+  const [levelsBandDown, setLevelsBandDown] = useState(0);
+  const [liquidityToWorstUpUsd, setLiquidityToWorstUpUsd] = useState(null);
+  const [liquidityToWorstDownUsd, setLiquidityToWorstDownUsd] = useState(null);
+  /** Dernier créneau résolu : { winner: 'Up'|'Down'|null, slotEndSec, label } */
+  const [lastResolved15mSlot, setLastResolved15mSlot] = useState(null);
+  const mounted = useRef(true);
+  const snapshotInFlight = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  /**
+   * Mise à jour « live » du carnet (créneau ouvert) et du bandeau (dernier clos) — rapide, pour polling.
+   * Ne recalcule pas moyenne / min / max / série sur N créneaux.
+   */
+  const refreshOrderBookSnapshot = useCallback(async () => {
+    if (!enabled || !mounted.current || snapshotInFlight.current) return;
+    snapshotInFlight.current = true;
+    try {
+      const end0 = getCurrent15mSlotEndSec();
+      const [prev, { tokenIdUp, tokenIdDown }] = await Promise.all([
+        fetchPreviousSlotWinnerFromGamma(),
+        fetchTokenIdsForSlotEnd(end0),
+      ]);
+      if (mounted.current) {
+        setLastResolved15mSlot({
+          winner: prev.winner,
+          slotEndSec: prev.slotEndSec,
+          label: format15mSlotEndFr(prev.slotEndSec),
+        });
+      }
+      if (!mounted.current) return;
+      setCurrentSlotEndSec(end0);
+      setSlotMarketOpen(slotEndSecIsStillOpen(end0));
+      if (!tokenIdUp && !tokenIdDown) {
+        setCurrentSlotMiseMaxUsd(null);
+        setCurrentSlotBookAsks([]);
+        setCurrentSlotBookAsksUp([]);
+        setCurrentSlotBookAsksDown([]);
+        setLiquidityBandUpUsd(0);
+        setLiquidityBandDownUsd(0);
+        setBestAskUpP(null);
+        setBestAskDownP(null);
+        setBestAskLiveUpP(null);
+        setBestAskLiveDownP(null);
+        setBestBidLiveUpP(null);
+        setBestBidLiveDownP(null);
+        setLevelsBandUp(0);
+        setLevelsBandDown(0);
+        setLiquidityToWorstUpUsd(0);
+        setLiquidityToWorstDownUsd(0);
+        return;
+      }
+      const [bookUp, bookDown] = await Promise.all([
+        fetchBookAsksBids(tokenIdUp, end0),
+        fetchBookAsksBids(tokenIdDown, end0),
+      ]);
+      const asksUp = bookUp.asks;
+      const asksDown = bookDown.asks;
+      const [liveAskUp, liveAskDown] = await Promise.all([
+        bestAskFromBookThenPrice(asksUp, tokenIdUp),
+        bestAskFromBookThenPrice(asksDown, tokenIdDown),
+      ]);
+      if (!mounted.current) return;
+      const m = computeSlotBookMetrics(asksUp, asksDown);
+      const dominantAsks = m.liquidityBandUpUsd >= m.liquidityBandDownUsd ? asksUp : asksDown;
+      setCurrentSlotMiseMaxUsd(m.miseMaxUsd);
+      setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
+      setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
+      setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+      setLiquidityBandUpUsd(m.liquidityBandUpUsd);
+      setLiquidityBandDownUsd(m.liquidityBandDownUsd);
+      setBestAskUpP(m.bestAskUpP);
+      setBestAskDownP(m.bestAskDownP);
+      setBestAskLiveUpP(liveAskUp);
+      setBestAskLiveDownP(liveAskDown);
+      setBestBidLiveUpP(getBestBidPriceFromRawBids(bookUp.bids));
+      setBestBidLiveDownP(getBestBidPriceFromRawBids(bookDown.bids));
+      setLevelsBandUp(m.levelsBandUp);
+      setLevelsBandDown(m.levelsBandDown);
+      setLiquidityToWorstUpUsd(m.liquidityToWorstUpUsd);
+      setLiquidityToWorstDownUsd(m.liquidityToWorstDownUsd);
+      setLastAt(new Date().toISOString());
+    } catch {
+      /* conserver le dernier affichage */
+    } finally {
+      snapshotInFlight.current = false;
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const id = setInterval(() => {
+      refreshOrderBookSnapshot();
+    }, ORDERBOOK_SNAPSHOT_POLL_MS);
+    return () => clearInterval(id);
+  }, [enabled, refreshOrderBookSnapshot]);
+
+  const refresh = useCallback(async () => {
+    if (!enabled) {
+      setAvgUsd(null);
+      setMinUsd(null);
+      setMaxUsd(null);
+      setMedianUsd(null);
+      setSampleSize(0);
+      setSlotsAttempted(0);
+      setCurrentSlotMiseMaxUsd(null);
+      setSeriesBySlot([]);
+      setCurrentSlotBookAsks([]);
+      setCurrentSlotBookAsksUp([]);
+      setCurrentSlotBookAsksDown([]);
+      setLastResolved15mSlot(null);
+      setCurrentSlotEndSec(null);
+      setSlotMarketOpen(false);
+      setLiquidityBandUpUsd(null);
+      setLiquidityBandDownUsd(null);
+      setBestAskUpP(null);
+      setBestAskDownP(null);
+      setBestAskLiveUpP(null);
+      setBestAskLiveDownP(null);
+      setBestBidLiveUpP(null);
+      setBestBidLiveDownP(null);
+      setLevelsBandUp(0);
+      setLevelsBandDown(0);
+      setLiquidityToWorstUpUsd(null);
+      setLiquidityToWorstDownUsd(null);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSeriesBySlot([]);
+    setCurrentSlotBookAsks([]);
+    setCurrentSlotBookAsksUp([]);
+    setCurrentSlotBookAsksDown([]);
+    const slotEnds = get15mSlotEndSecs(slotCount);
+    const values = [];
+    const seriesPoints = [];
+    let firstSlotMise = null;
+    let attempted = 0;
+
+    try {
+      const prevSlot = await fetchPreviousSlotWinnerFromGamma();
+      if (mounted.current) {
+        setLastResolved15mSlot({
+          winner: prevSlot.winner,
+          slotEndSec: prevSlot.slotEndSec,
+          label: format15mSlotEndFr(prevSlot.slotEndSec),
+        });
+      }
+
+      for (let i = 0; i < slotEnds.length; i++) {
+        if (!mounted.current) break;
+        const endSec = slotEnds[i];
+        attempted += 1;
+        const { tokenIdUp, tokenIdDown } = await fetchTokenIdsForSlotEnd(endSec);
+        if (!tokenIdUp && !tokenIdDown) {
+          if (staggerMs > 0) await new Promise((r) => setTimeout(r, staggerMs));
+          continue;
+        }
+        const [bookUp, bookDown] = await Promise.all([
+          fetchBookAsksBids(tokenIdUp, endSec),
+          fetchBookAsksBids(tokenIdDown, endSec),
+        ]);
+        const asksUp = bookUp.asks;
+        const asksDown = bookDown.asks;
+        const liqUp = liquidityUsdFromAsks(asksUp, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+        const liqDown = liquidityUsdFromAsks(asksDown, ORDER_BOOK_SIGNAL_MIN_P, ORDER_BOOK_SIGNAL_MAX_P);
+        const mise = Math.max(liqUp, liqDown);
+        values.push(mise);
+        // Pour le graphique : un point par créneau où Gamma+CLOB a répondu.
+        seriesPoints.push({ slotEndSec: endSec, miseMaxUsd: mise });
+        if (i === 0) {
+          firstSlotMise = mise;
+          const [liveAskUp, liveAskDown] = await Promise.all([
+            bestAskFromBookThenPrice(asksUp, tokenIdUp),
+            bestAskFromBookThenPrice(asksDown, tokenIdDown),
+          ]);
+          const dominantAsks = liqUp >= liqDown ? asksUp : asksDown;
+          setCurrentSlotBookAsks(Array.isArray(dominantAsks) ? dominantAsks : []);
+          setCurrentSlotBookAsksUp(Array.isArray(asksUp) ? asksUp : []);
+          setCurrentSlotBookAsksDown(Array.isArray(asksDown) ? asksDown : []);
+          const mm = computeSlotBookMetrics(asksUp, asksDown);
+          setCurrentSlotEndSec(endSec);
+          setSlotMarketOpen(slotEndSecIsStillOpen(endSec));
+          setLiquidityBandUpUsd(mm.liquidityBandUpUsd);
+          setLiquidityBandDownUsd(mm.liquidityBandDownUsd);
+          setBestAskUpP(mm.bestAskUpP);
+          setBestAskDownP(mm.bestAskDownP);
+          setBestAskLiveUpP(liveAskUp);
+          setBestAskLiveDownP(liveAskDown);
+          setBestBidLiveUpP(getBestBidPriceFromRawBids(bookUp.bids));
+          setBestBidLiveDownP(getBestBidPriceFromRawBids(bookDown.bids));
+          setLevelsBandUp(mm.levelsBandUp);
+          setLevelsBandDown(mm.levelsBandDown);
+          setLiquidityToWorstUpUsd(mm.liquidityToWorstUpUsd);
+          setLiquidityToWorstDownUsd(mm.liquidityToWorstDownUsd);
+        }
+        if (staggerMs > 0 && i < slotEnds.length - 1) await new Promise((r) => setTimeout(r, staggerMs));
+      }
+
+      if (!mounted.current) return;
+
+      setSlotsAttempted(attempted);
+      setCurrentSlotMiseMaxUsd(firstSlotMise);
+      setSeriesBySlot(seriesPoints);
+
+      if (values.length === 0) {
+        setAvgUsd(null);
+        setMinUsd(null);
+        setMaxUsd(null);
+        setMedianUsd(null);
+        setSampleSize(0);
+        setError(
+          'Aucun marché 15m trouvé (Gamma) ou carnets vides. En local : vérifie le proxy Vite (/api, /apiClob).'
+        );
+      } else {
+        const sum = values.reduce((a, b) => a + b, 0);
+        setAvgUsd(Math.round((sum / values.length) * 100) / 100);
+        setMinUsd(Math.min(...values));
+        setMaxUsd(Math.max(...values));
+        setMedianUsd(medianSorted(values));
+        setSampleSize(values.length);
+        setError(null);
+      }
+      setLastAt(new Date().toISOString());
+    } catch (e) {
+      if (!mounted.current) return;
+      setError(e?.message || 'Erreur chargement carnets 15m');
+      setAvgUsd(null);
+      setMinUsd(null);
+      setMaxUsd(null);
+      setMedianUsd(null);
+      setSampleSize(0);
+      setSeriesBySlot([]);
+      setCurrentSlotBookAsks([]);
+      setCurrentSlotBookAsksUp([]);
+      setCurrentSlotBookAsksDown([]);
+      setBestAskLiveUpP(null);
+      setBestAskLiveDownP(null);
+      setBestBidLiveUpP(null);
+      setBestBidLiveDownP(null);
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [enabled, slotCount, staggerMs]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return {
+    avgUsd,
+    minUsd,
+    maxUsd,
+    medianUsd,
+    sampleSize,
+    slotsAttempted,
+    currentSlotMiseMaxUsd,
+    seriesBySlot,
+    currentSlotBookAsks,
+    currentSlotBookAsksUp,
+    currentSlotBookAsksDown,
+    loading,
+    error,
+    lastAt,
+    lastResolved15mSlot,
+    refresh,
+    currentSlotEndSec,
+    slotMarketOpen,
+    liquidityBandUpUsd,
+    liquidityBandDownUsd,
+    bestAskUpP,
+    bestAskDownP,
+    bestAskLiveUpP,
+    bestAskLiveDownP,
+    bestBidLiveUpP,
+    bestBidLiveDownP,
+    levelsBandUp,
+    levelsBandDown,
+    liquidityToWorstUpUsd,
+    liquidityToWorstDownUsd,
+  };
+}
