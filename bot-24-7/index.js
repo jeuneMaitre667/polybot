@@ -458,6 +458,7 @@ async function reportingLoop() {
 }
 
 async function mainLoop() {
+    const cycleStart = Date.now();
     try {
         // v17.61.0: INDEPENDENT REAL-TIME HEARTBEAT (Bypass NTP Lag)
         const hbNow = Date.now();
