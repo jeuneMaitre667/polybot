@@ -613,10 +613,11 @@ async function mainLoop() {
 
         if (IS_SIMULATION_ENABLED) {
             const totalLatency = Date.now() - cycleStart;
-            // v17.36.75: Subtract stake from balance at entry for realism
-            const newBal = updateVirtualBalance(-tradeAmountUsd);
+            // v17.59.3: Fix async Balance and Secure types
+            const balanceResult = await updateVirtualBalance(-tradeAmountUsd);
+            const finalBalVal = parseFloat((typeof balanceResult === 'object' && balanceResult !== null) ? (balanceResult.balance ?? 0) : (balanceResult ?? 0));
             
-            console.log(`[Engine] 🧪 SIMULATION: Order placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | New Bal: $${newBal.toFixed(2)}`);
+            console.log(`[Engine] 🧪 SIMULATION: Order placed: ${quantity} shares at ${bestAsk} ($${tradeAmountUsd.toFixed(2)}) | New Bal: $${finalBalVal.toFixed(2)}`);
             
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
                                 `• Side: ${side}\n` +
@@ -624,8 +625,13 @@ async function mainLoop() {
                                 `• Latency: ${totalLatency}ms\n` +
                                 `• Delta: ${bDeltaPct.toFixed(3)}%\n` +
                                 `• Size: -$${tradeAmountUsd.toFixed(2)}\n` +
-                                `• Capital: $${newBal.toFixed(2)}`;
-            sendTelegramAlert(simEntryMsg);
+                                `• Capital: $${finalBalVal.toFixed(2)}`;
+            
+            try {
+                await sendTelegramAlert(simEntryMsg);
+            } catch (teleErr) {
+                console.error('[Engine] Telegram Alert failed but simulation trade was successful.');
+            }
             // v17.35.0: CONTINUER la logique pour l'enregistrement et le Stop Loss
         } else {
             const startExec = Date.now();
