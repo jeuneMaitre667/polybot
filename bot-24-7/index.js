@@ -454,10 +454,17 @@ async function mainLoop() {
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
         
-        // 1. Slot Lock (1 trigger max per 5m slot - Anti-Spam Fix v16.20.4)
+        // v17.44.1: Air-Gap Slot Lock (Memory + Persistence)
         if (lastExecutedSlot === slotStart) return;
-        if (activePosition && activePosition.slotStart === slotStart) {
-            lastExecutedSlot = slotStart; // Safety sync
+        
+        // v17.44.1: Guard level 2 - Physical check on disk before even analyzing signals
+        const persistentPositions = loadActivePositions();
+        const alreadyDone = persistentPositions.some(p => p.slotStart === slotStart);
+        if (alreadyDone) {
+            if (lastExecutedSlot !== slotStart) {
+                console.log(`[Engine] 🛡️ Slot Lock Active: Slot ${slotStart} already present on disk. Blocking duplicate entry.`);
+                lastExecutedSlot = slotStart; // Sync memory
+            }
             return;
         }
 
@@ -729,10 +736,10 @@ async function performanceLoop() {
 
         for (let i = positions.length - 1; i >= 0; i--) {
             const pos = positions[i];
-            
-            // Si le marché est fini depuis > 1min
-            if (pos.slotEnd && (now > pos.slotEnd + 60000)) {
-                // v17.36.65: Targeted query by Slug (Direct & Accurate)
+            if (pos.resolved || pos.redeemed) continue;
+
+            // v17.44.2: Support multiple redeems per slot if accidentally duplicated
+            if (pos.slotEnd && (now > pos.slotEnd + 2000)) { 
                 const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}`;
                 const res = await axios.get(url).catch(() => null);
                 
