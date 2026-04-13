@@ -180,6 +180,31 @@ async function checkFastResolution(currentPrice) {
     }
 }
 
+/**
+ * v17.75.0: Self-Healing Wallet Validator
+ * Ensures the CLOB client is fully initialized with a valid wallet address.
+ */
+function ensureClobClient() {
+    try {
+        if (!wallet || !wallet.address) {
+            const pk = process.env.PRIVATE_KEY;
+            if (!pk) throw new Error("PRIVATE_KEY missing for self-healing");
+            wallet = new ethers.Wallet(pk);
+        }
+
+        if (!clobClient) {
+            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
+                funderAddress: process.env.CLOB_FUNDER_ADDRESS
+            });
+            console.log(`[Self-Healing] 🛠️ ClobClient restored for: ${wallet.address}`);
+        }
+        return true;
+    } catch (err) {
+        console.error(`[Self-Healing] ❌ FAILED to restore wallet:`, err.message);
+        return false;
+    }
+}
+
 // --- INITIALIZATION ---
 async function init() {
     console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
@@ -195,10 +220,8 @@ async function init() {
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
 
-    wallet = new ethers.Wallet(privateKey);
-    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
-        funderAddress: process.env.CLOB_FUNDER_ADDRESS
-    });
+    const success = ensureClobClient();
+    if (!success) throw new Error("CRITICAL: Failed to initialize wallet client");
     
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
 
@@ -608,6 +631,13 @@ async function mainLoop() {
         // v16.17.1: Dynamic Price Filter
         if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
             console.warn(`[Engine] Skip: Price outside range ($${bestAsk} for ${side})`);
+            return;
+        }
+
+        // v17.75.0: Final Wallet Integrity Check relative to current tir
+        if (!ensureClobClient()) {
+            console.error("[Engine] ❌ SKIP: Wallet not ready despite self-healing attempt.");
+            sendTelegramAlert("🚨 *WALLET ERROR*: Sniper skipped trade due to client amnesia.");
             return;
         }
 
@@ -1048,7 +1078,14 @@ async function executeEmergencyExit(info) {
         const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
         const nonce = nonceRes.data.nonce;
 
-        // 1. Get Nonce - v17.24.0: Added Timeout
+        console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
+        ensureClobClient(); // Safety first
+        const orderRes = await clobClient.createOrder({
+            tokenID: pos.tokenId,
+            price: info.currentPrice * 0.98, // Aggressive but stable exit
+            size: pos.amount,
+            side: Side.SELL
+        });
 
         if (orderRes && orderRes.orderID) {
             console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
