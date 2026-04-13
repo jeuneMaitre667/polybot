@@ -9,7 +9,11 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
+import https from 'https';
+import http from 'http';
+import { gotScraping } from 'got-scraping';
 import axios from 'axios';
+import { getStealthProfile, getJitter, logStealthMode } from './stealth-config.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // --- CONFIG & UTILS ---
@@ -39,6 +43,8 @@ import {
 } from './middayDigest.js';
 import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP Sync
 
+const fmt = (val, dec = 2) => (val !== null && val !== undefined && !isNaN(val)) ? Number(val).toFixed(dec) : "0.00";
+
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
@@ -47,7 +53,7 @@ process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.err
 // ---// v17.56.0: Removed fixed VIRTUAL_BALANCE constant in favor of dynamic getVirtualBalance()
 const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.08"); 
 const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
-const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
+const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "10");
 const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
 const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
 const IS_SIMULATION_ENABLED = (process.env.SIMULATION_TRADE_ENABLED || '').trim() === 'true';
@@ -209,20 +215,29 @@ async function ensureClobClient() {
             }
 
             const funderAddr = (process.env.CLOB_FUNDER_ADDRESS || wallet.address).trim();
-            const proxyUrl = process.env.PROXY_URL;
-
-            if (proxyUrl) {
-                console.log(`[Audit] 🌐 Using Proxy for CLOB: ${proxyUrl.split('@')[1] || proxyUrl}`);
-                const agent = new HttpsProxyAgent(proxyUrl);
-                axios.defaults.httpsAgent = agent;
-                axios.defaults.proxy = false; // Bypass axios built-in proxy logic to use agent
-            }
             
             console.log(`[Audit] 🛡️ Initializing CLOB Client:`);
             console.log(`[Audit] • Signer EOA: ${wallet.address}`);
             console.log(`[Audit] • Funder: ${funderAddr}`);
             console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
 
+            // v22.0.2: Pass proxy agent specifically to the CLOB client if defined
+            let httpAgent = null;
+            if (process.env.PROXY_URL) {
+                httpAgent = new HttpsProxyAgent(process.env.PROXY_URL);
+            }
+
+            clobClient = new ClobClient(
+                process.env.CLOB_API_URL || 'https://clob.polymarket.com',
+                137,
+                wallet,
+                undefined,
+                process.env.CLOB_API_KEY,
+                process.env.CLOB_API_SECRET,
+                process.env.CLOB_API_PASSPHRASE,
+                httpAgent
+            );
+            
             // v21.2.0: Derive API credentials (required for createAndPostOrder)
             const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
             let apiCreds;
@@ -311,9 +326,13 @@ async function init() {
     startStrikeWorker();
     
     // Core Operational Loops (1Hz)
-    setInterval(mainLoop, 1000);
+    // v22.0.0: Ghost Protocol Start
+    console.log(`[Ghost] 👻 Protocol Active | Initializing Stealth Engine...`);
+    
+    // Start the loops with organic timing
+    setTimeout(scheduledMainLoop, getJitter(1000, 200));
     setInterval(reportingLoop, 1000);
-    setInterval(performanceLoop, 60000); // Check every minute for resolution/digest
+    setInterval(performanceLoop, 60000);
     
     // Initial triggers
     mainLoop();
@@ -340,7 +359,10 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const slotStart = Math.floor(now / 300000) * 300000;
     
     // 1. Fetch Binance Spot (Current) - v17.24.0: Added Timeout
-    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`, { timeout: 5000 }).catch(() => null);
+    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`, { 
+        timeout: 5000,
+        proxy: process.env.PROXY_URL ? { host: new URL(process.env.PROXY_URL).hostname, port: new URL(process.env.PROXY_URL).port } : false
+    }).catch(() => null);
     const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // 2. Fetch or Backfill Strike
@@ -427,23 +449,42 @@ async function reportingLoop() {
                 let priceUp = 0;
                 let priceDown = 0;
 
-                // 1. Fetch Real UP Ask
+                const stealthOpts = getStealthProfile();
+                if (process.env.PROXY_URL) {
+                    stealthOpts.proxyUrl = process.env.PROXY_URL;
+                }
+                
+                // 1. Fetch Real UP Ask via Stealth Got
                 if (sig.tokenIdYes) {
-                    const bookYes = await clobClient.getOrderBook(sig.tokenIdYes).catch(() => null);
-                    const asks = bookYes?.asks || [];
-                    if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
-                        if (prices.length > 0) priceUp = Math.min(...prices);
+                    const bookUrl = `https://clob.polymarket.com/book?token_id=${sig.tokenIdYes}`;
+                    const res = await gotScraping.get(bookUrl, {
+                        ...stealthOpts,
+                        retry: { limit: 2 }
+                    }).catch(() => null);
+                    if (res) {
+                        const book = res.body;
+                        const asks = book?.asks || [];
+                        if (asks.length > 0) {
+                            const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                            if (prices.length > 0) priceUp = Math.min(...prices);
+                        }
                     }
                 }
 
-                // 2. Fetch Real DOWN Ask
+                // 2. Fetch Real DOWN Ask via Stealth Got
                 if (sig.tokenIdNo) {
-                    const bookNo = await clobClient.getOrderBook(sig.tokenIdNo).catch(() => null);
-                    const asks = bookNo?.asks || [];
-                    if (asks.length > 0) {
-                        const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
-                        if (prices.length > 0) priceDown = Math.min(...prices);
+                    const bookUrl = `https://clob.polymarket.com/book?token_id=${sig.tokenIdNo}`;
+                    const res = await gotScraping.get(bookUrl, {
+                        ...stealthOpts,
+                        retry: { limit: 2 }
+                    }).catch(() => null);
+                    if (res) {
+                        const book = res.body;
+                        const asks = book?.asks || [];
+                        if (asks.length > 0) {
+                            const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
+                            if (prices.length > 0) priceDown = Math.min(...prices);
+                        }
                     }
                 }
 
@@ -462,7 +503,8 @@ async function reportingLoop() {
                     if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice)) {
                         console.warn(`[Risk] 🚨 Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
                         
-                        const pnl = ((currentPrice - activePosition.buyPrice) / activePosition.buyPrice * 100).toFixed(2);
+                        const pnlVal = ((currentPrice - activePosition.buyPrice) / activePosition.buyPrice * 100);
+                        const pnl = fmt(pnlVal, 2);
                         const slMsg = `🚨 *STOP LOSS TRIGGERED* 🚨\n\n` +
                                      `• Slot: ${activePosition.slotStart}\n` +
                                      `• Side: ${activePosition.side}\n` +
@@ -512,9 +554,11 @@ async function reportingLoop() {
                     // v17.39.12: Direct extraction from fresh signal metadata
                     polyStrike = Number(sig.m.eventMetadata.priceToBeat);
                 }
-                const officialLabel = polyStrike ? `(Poly:${polyStrike.toFixed(2)})` : '';
+                // v21.6.0: Safe Reporting (Null-Safety guard)
                 
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${displayBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)}${officialLabel} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+                const officialLabel = polyStrike ? `(Poly:${fmt(polyStrike, 2)})` : '';
+                
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${fmt(bestAskUp * 100, 1)}% | ${downLabel}:${fmt(bestAskDown * 100, 1)}% | Bal:$${fmt(displayBalance, 2)} | Open:${fmt(effectiveStrike, 2)}${officialLabel} | Spot:${fmt(bSpot, 2)} | Δ:${deltaSign}$${fmt(deltaUsd, 2)} (${deltaSign}${fmt(deltaPct, 3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
@@ -577,6 +621,21 @@ async function reportingLoop() {
         });
     } catch (e) {
         console.error('[Reporting] v16.3.1 Loop Error:', e.message);
+    }
+}
+
+/**
+ * v22.0.0: Ghost Protocol Wrapper
+ * Ensures each loop has a unique, random delay to evade pattern detection.
+ */
+async function scheduledMainLoop() {
+    try {
+        await mainLoop();
+    } catch (err) {
+        console.error(`[Ghost] Main loop catch:`, err.message);
+    } finally {
+        const jitter = getJitter(1000, 400);
+        setTimeout(scheduledMainLoop, jitter);
     }
 }
 
@@ -664,7 +723,7 @@ async function mainLoop() {
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
             if (secondsLeft % 30 === 0) {
-                console.log(`[PID:${process.pid}] [Engine] Pulse: Monitoring BTC (Delta: ${mv.bDeltaPct.toFixed(3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
+                console.log(`[PID:${process.pid}] [Engine] Pulse: Monitoring BTC (Delta: ${fmt(mv.bDeltaPct, 3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
             }
             return;
         }
@@ -674,7 +733,7 @@ async function mainLoop() {
         
         // v17.22.13: FORCED REAL-TIME DEPTH (Eliminate 3s Health-Sync Lag)
         // D'Ã¨s que le signal Binance est bon, on va chercher le prix REEL sur l'Orderbook
-        console.log(`[Engine] 🔍 Binance Signal Met (${bDeltaPct.toFixed(3)}%). Checking Polymarket Depth for ${side}...`);
+        console.log(`[Engine] 🔍 Binance Signal Met (${fmt(bDeltaPct, 3)}%). Checking Polymarket Depth for ${side}...`);
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
@@ -725,22 +784,6 @@ async function mainLoop() {
             return;
         }
 
-        // --- NEW: TAKER AGGRESSION & DYNAMIC FEES (v21.4.0) ---
-        // 1. Crossing the spread (+0.02$) for instant execution
-        const safePrice = Math.min(0.99, Number(bestAsk) + 0.02);
-
-        // 2. Dynamic Fee Calculation (Polymarket v2026 Formula)
-        // Fee = Theta * qty * price * (1 - price) | Theta Crypto approx 0.036 (1.8% peak)
-        // Effective price per unit = price * (1 + 0.036 * (1 - price))
-        const theta = 0.036;
-        const effectivePrice = safePrice * (1 + (theta * (1 - safePrice)));
-        const safeQty = Math.floor(tradeAmountUsd / effectivePrice);
-
-        if (safeQty <= 0) {
-            console.warn(`[Engine] Skip: Amount too low after fees to purchase even 1 contract.`);
-            return;
-        }
-
         // v17.75.0: Final Wallet Integrity Check relative to current tir
         if (!(await ensureClobClient())) {
             console.error("[Engine] ❌ SKIP: Wallet not ready despite self-healing attempt.");
@@ -764,6 +807,26 @@ async function mainLoop() {
         if (tradeAmountUsd < 1.0) {
             console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${baseBalance.toFixed(2)})`);
             return;
+        }
+
+        // --- NEW: TAKER AGGRESSION & DYNAMIC FEES (v21.4.0.1) ---
+        // 1. Crossing the spread (+0.02$) for instant execution
+        const safePrice = Math.min(0.99, Number(bestAsk) + 0.02);
+
+        // 2. Dynamic Fee Calculation (Polymarket v2026 Formula)
+        // Fee = Theta * qty * price * (1 - price) | Theta Crypto approx 0.036 (1.8% peak)
+        // Effective price per unit = price * (1 + 0.036 * (1 - price))
+        const theta = 0.036;
+        const effectivePrice = safePrice * (1 + (theta * (1 - safePrice)));
+        const safeQty = Math.floor(tradeAmountUsd / effectivePrice);
+
+        if (safeQty <= 0) {
+            console.warn(`[Engine] Skip: Amount too low after fees to purchase even 1 contract.`);
+            return;
+        }
+
+        if (!IS_SIMULATION_ENABLED) {
+            await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
         }
 
         if (!IS_SIMULATION_ENABLED) {

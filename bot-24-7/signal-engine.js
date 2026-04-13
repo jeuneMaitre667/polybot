@@ -1,4 +1,6 @@
+import { gotScraping } from 'got-scraping';
 import axios from 'axios';
+import { getStealthProfile, logStealthMode } from './stealth-config.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -41,10 +43,20 @@ export async function fetchSignals(asset, context = {}) {
     
     const startFetch = Date.now();
     try {
-        console.log(`[${asset}] Scanning for 5m markets in series: ${targetSeriesSlug}`);
-        const res = await axios.get(discoveryUrl, { timeout: 5000 });
+        const stealthOpts = getStealthProfile();
+        if (process.env.PROXY_URL) {
+            stealthOpts.proxyUrl = process.env.PROXY_URL;
+        }
+        logStealthMode(asset);
+        
+        // v22.0.3: Explicitly wait for full body to avoid partial parse 401 side effects
+        const resGot = await gotScraping.get(discoveryUrl, {
+            ...stealthOpts,
+            retry: { limit: 2 }
+        });
 
-        const events = res.data?.events || res.data;
+        const resData = resGot.body;
+        const events = resData?.events || resData;
         if (!events || !Array.isArray(events) || events.length === 0) {
             console.warn(`[${asset}] No active events found via discovery.`);
             return { signals: [], slug: null, hasEvent: false };
@@ -73,83 +85,65 @@ export async function fetchSignals(asset, context = {}) {
         }
 
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
-        // On prend le marché le plus imminant de la série validée
-        const event = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
+        const primaryEvent = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
-        const slug = event.slug;
-        console.log(`[${asset}] 🎯 SNIPER LOCKED: ${event.title} | Slot End: ${event.endDate} | Slug: ${slug}`);
+        console.log(`[${asset}] 📡 Discovery: ${validEvents.length} imminent markets found. Primary target: ${primaryEvent.slug}`);
         
-        if (!event.markets) return [];
+        // v21.5.0: Aggregate signals from ALL valid imminent events
+        // This allows the bot to "see" the next slot for sniping while still reporting the current slot in the pipeline.
+        const allSignals = [];
+        for (const event of validEvents) {
+            if (!event.markets) continue;
+            
+            const eventSignals = event.markets.map(m => {
+                const outcomePrices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
+                const yesPrice = parseFloat(outcomePrices[0]);
+                const noPrice = parseFloat(outcomePrices[1]);
+                const takeSide = m.groupItemTitle || "Yes";
+                
+                let tokenIdYes = null;
+                let tokenIdNo = null;
+                if (m.clobTokenIds) {
+                    try {
+                        const ids = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+                        if (Array.isArray(ids)) {
+                            tokenIdYes = ids[0];
+                            tokenIdNo = ids[1] || null;
+                        }
+                    } catch (e) {}
+                }
+                if (!tokenIdYes) tokenIdYes = m.clobTokenId || m.conditionId;
 
-        const signalsRaw = event.markets.map(m => {
-            const outcomePrices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
-            const yesPrice = parseFloat(outcomePrices[0]);
-            const noPrice = parseFloat(outcomePrices[1]);
-            
-            // On cherche le "Yes" (Upper) ou "No" (Lower)
-            // Note: m.groupItemTitle contient souvent "Yes" ou "No"
-            const takeSide = m.groupItemTitle || "Yes";
-            
-            // v5.4.1: Handle clobTokenIds (Yes/No pair) for 5m markets
-            let tokenIdYes = null;
-            let tokenIdNo = null;
-            
-            if (m.clobTokenIds) {
-                try {
-                    const ids = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-                    if (Array.isArray(ids)) {
-                        tokenIdYes = ids[0];
-                        tokenIdNo = ids[1] || null;
-                    }
-                } catch (e) {}
-            }
-            
-            // Fallback for older market formats
-            if (!tokenIdYes) tokenIdYes = m.clobTokenId || m.conditionId;
-
-            console.log(`[${asset}] Signal detect: ${takeSide} @ ${m.outcomePrices} -> Yes:${tokenIdYes} | No:${tokenIdNo}`);
-
-            return {
-                asset,
-                slug,
-                conditionId: m.conditionId,
-                tokenIdToBuy: tokenIdYes, // Maintain backward compatibility
-                tokenIdYes,
-                tokenIdNo,
-                strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), slug) || extractStrikeFromQuestion(m.question || m.groupItemTitle),
-                takeSide,
-                priceUp: yesPrice,
-                priceDown: noPrice,
-                m
-            };
-        });
+                return {
+                    asset,
+                    slug: event.slug, // Crucial: identify which market this signal belongs to
+                    conditionId: m.conditionId,
+                    tokenIdToBuy: tokenIdYes,
+                    tokenIdYes,
+                    tokenIdNo,
+                    strike: lookupBoundaryStrike(asset, m.startDate, parseFloat(m.line), event.slug) || extractStrikeFromQuestion(m.question || m.groupItemTitle),
+                    takeSide,
+                    priceUp: yesPrice,
+                    priceDown: noPrice,
+                    m
+                };
+            });
+            allSignals.push(...eventSignals);
+        }
 
         const profile = { totalMs: Date.now() - startFetch };
         
-        // v2026 Docs Alignment: Filter by market status and fee availability
-        const signals = signalsRaw.filter(s => {
+        const signals = allSignals.filter(s => {
             if (!s.tokenIdToBuy) return false;
-            
-            // On vÃ©rifie les flags d'activitÃ© de Polymarket (m est l'objet market brut de Gamma)
             const isActive = s.m.active === true;
             const isClosed = s.m.closed === true;
-            const feesEnabled = s.m.feesEnabled === true;
-
-            if (!isActive || isClosed) {
-                // Console log for debug (will show in dashboard or bot log)
-                console.warn(`[${asset}] Signal REJECTED: Market is not active or already closed.`);
-                return false;
-            }
-
-            // v2026 : Fees might be missing on high-frequency 5m markets.
-            if (s.m.active === false) return false;
-
+            if (!isActive || isClosed) return false;
             return true;
         });
         
         const result = {
             signals,
-            slug,
+            slug: primaryEvent.slug, // Used for the default pipeline display
             hasEvent: true,
             _fetchSignalsProfile: profile
         };
@@ -166,7 +160,8 @@ export function getSlotSlugForAsset(asset) {
     const now = Date.now();
     const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
     
-    // v17.22.17: Revert to START-time slot convention (Math.floor)
+    // v17.36.0: Return the CURRENT active slot for pipeline reporting (Math.floor).
+    // The sniper logic in index.js will still iterate over all future events for trading.
     const slotSec = Math.floor(now / 300000) * 300; 
     return `${prefix}-${slotSec}`;
 }
