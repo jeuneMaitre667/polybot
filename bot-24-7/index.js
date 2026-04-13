@@ -139,26 +139,28 @@ async function checkFastResolution(currentPrice) {
         
         // Fast resolution window: End reached + 2s margin
         if (now > pos.slotEnd + 2000) {
-            // v17.38.1: Resolution priority -> OFFICIAL POLYMARKET STRIKE
-            const resolutionStrike = pos.officialStrike || pos.strike;
-            const isUp = currentPrice >= resolutionStrike;
+            // v17.59.1: Aggressive fallback -> Use saved strike immediately if official is late
+            const usedStrike = pos.officialStrike || pos.strike;
+            const isUp = currentPrice >= usedStrike;
             const winningSide = isUp ? 'YES' : 'NO';
             const isWin = pos.side === winningSide;
             
-            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | OfficialStrike:${pos.officialStrike || 'MISSING'} | FinalPrice:${currentPrice} | Winner:${winningSide}`);
+            const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
+            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
             
             if (isWin) {
                 const payout = pos.amount;
                 const profitNet = payout - (pos.buyPrice * pos.amount);
-                const newBalValue = await updateVirtualBalance(payout);
-                const finalBal = typeof newBalValue === 'number' ? newBalValue : (newBalValue?.balance || 0);
+                const result = await updateVirtualBalance(payout);
+                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                 
-                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${finalBal.toFixed(2)}\n• Statut: Libération ultra-rapide`);
+                console.log(`[FastResolution] 🏆 Compound Boost: +$${profitNet.toFixed(2)} | Capital Released: $${finalBal.toFixed(2)}`);
+                await sendTelegramAlert(`🟢 *FAST COMPOUND* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${finalBal.toFixed(2)}\n• Source: ${strikeSource}`);
             } else {
-                const curBal = getVirtualBalance();
-                console.log(`[FastResolution] 💀 Local LOSS. Balance remains: $${curBal.toFixed(2)}`);
-                await sendTelegramAlert(`🧪 *FAST REDEEM (LOSS)* 💀\nCapital restant: $${curBal.toFixed(2)}`);
+                const result = await getVirtualBalance();
+                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                console.log(`[FastResolution] 🔴 Capital Fixed. Balance: $${finalBal.toFixed(2)}`);
+                await sendTelegramAlert(`🔴 *FAST LOSS* 💀\nCapital restant: $${finalBal.toFixed(2)}\nSource: ${strikeSource}`);
             }
             
             lastResolvedCids.add(pos.tokenId);
@@ -467,6 +469,13 @@ async function mainLoop() {
             console.error('[Heartbeat] Write failed:', e.message);
         }
         
+        // v17.59.0: Ultra-High-Priority Resolution (Compound Engine)
+        // We resolve previous trades BEFORE any buy logic to maximize deployable capital
+        const marketState = await getUnifiedMarketState('BTC');
+        if (IS_SIMULATION_ENABLED && marketState) {
+            await checkFastResolution(marketState.bSpot);
+        }
+
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
         
@@ -499,14 +508,8 @@ async function mainLoop() {
         }
 
         // 3. Unified Decision Path (v17.22.0)
-        // Force a fresh context check specifically for the main Loop
-        const marketState = await getUnifiedMarketState('BTC');
-        const mv = marketState; // Use fresh state instead of memoryHealth fallback
-        
-        // v17.36.85: Fast Resolution - released budget for potential compounding
-        if (IS_SIMULATION_ENABLED && marketState) {
-            await checkFastResolution(marketState.bSpot);
-        }
+        // Fresh context check already done at top of loop for resolution
+        const mv = marketState; 
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
             if (now % 30000 < 1000) { 
