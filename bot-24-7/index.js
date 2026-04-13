@@ -356,6 +356,7 @@ async function init() {
 // v17.22.0: Unified Market Context (Synchronized Decision Logic)
 async function getUnifiedMarketState(asset = 'BTC') {
     const now = Date.now();
+    // v22.1.0: Cibler le slot qui a COMMENCÉ au début de ces 5 minutes (Real-Sync)
     const slotStart = Math.floor(now / 300000) * 300000;
     
     // 1. Fetch Binance Spot (Current) - v17.24.0: Added Timeout
@@ -364,10 +365,11 @@ async function getUnifiedMarketState(asset = 'BTC') {
     }).catch(() => null);
     const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
-    // 2. Fetch or Backfill Strike
-    let bStrike = await getBinanceStrike(asset, slotStart);
+    // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
+    const strikeTime = slotStart; 
+    let bStrike = await getBinanceStrike(asset, strikeTime);
     const source = bStrike ? 'OFFICIAL' : 'MISSING';
-    const effectiveStrike = bStrike; // v20.2.0: NEVER fallback to bSpot (prevents Delta 0% error)
+    const effectiveStrike = bStrike;
     
     // 3. Calculate Delta
     let bDeltaPct = 0;
