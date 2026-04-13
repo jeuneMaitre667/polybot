@@ -360,8 +360,7 @@ async function getUnifiedMarketState(asset = 'BTC') {
     
     // 1. Fetch Binance Spot (Current) - v17.24.0: Added Timeout
     const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`, { 
-        timeout: 5000,
-        proxy: process.env.PROXY_URL ? { host: new URL(process.env.PROXY_URL).hostname, port: new URL(process.env.PROXY_URL).port } : false
+        timeout: 5000
     }).catch(() => null);
     const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
