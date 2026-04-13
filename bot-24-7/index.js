@@ -197,8 +197,9 @@ function ensureClobClient() {
         }
 
         if (!clobClient) {
-            // v17.80.0: Force Failover if Primary is dead
+            // v17.85.0: Ethers v5 style provider check for failover
             const rpc = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC;
+            
             clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
                 funderAddress: process.env.CLOB_FUNDER_ADDRESS
             });
@@ -294,11 +295,11 @@ async function reportingLoop() {
         
         let startAudit = Date.now();
         
-        // 0. Fetch Real Blockchain Balance (v17.80.0: Optimized Throttling)
+        // 0. Fetch Real Blockchain Balance (v17.85.0: Ethers v5 syntax)
         if (now - lastBalanceFetchTime > BALANCE_REFRESH_MS || userBalance === null) {
             try {
-                const rpcUrl = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC; // Cycle RPC
-                const provider = new ethers.JsonRpcProvider(rpcUrl);
+                const rpcUrl = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC;
+                const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
                 const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
                 
                 const [usdcRaw, maticRaw] = await Promise.all([
@@ -306,8 +307,8 @@ async function reportingLoop() {
                     provider.getBalance(wallet.address)
                 ]);
 
-                userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
-                maticBalance = parseFloat(ethers.formatEther(maticRaw));
+                userBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
+                maticBalance = parseFloat(ethers.utils.formatEther(maticRaw));
                 lastBalanceFetchTime = now;
 
                 // v17.70.0: Initialize Risk Baseline on FIRST successful balance fetch
@@ -945,10 +946,10 @@ async function executeRedeemOnChain(conditionId) {
         console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
 
         // 2. Encode CTF Call
-        const ctfInterface = new ethers.Interface(CTF_ABI);
+        const ctfInterface = new ethers.utils.Interface(CTF_ABI);
         const callData = ctfInterface.encodeFunctionData("redeemPositions", [
             USDC_E_ADDRESS,
-            ethers.ZeroHash,
+            ethers.constants.HashZero,
             conditionId,
             [1, 2]
         ]);
@@ -984,13 +985,13 @@ async function executeRedeemOnChain(conditionId) {
             safeTxnGas: 0,
             baseGas: 0,
             gasPrice: 0,
-            gasToken: ethers.ZeroAddress,
-            refundReceiver: ethers.ZeroAddress,
+            gasToken: ethers.constants.AddressZero,
+            refundReceiver: ethers.constants.AddressZero,
             nonce: parseInt(nonce)
         };
 
-        // 4. Sign
-        const signature = await wallet.signTypedData(domain, types, message);
+        // 4. Sign (v5 standard)
+        const signature = await wallet._signTypedData(domain, types, message);
 
         // 5. Submit to Relayer
         const submitPayload = {
@@ -1005,8 +1006,8 @@ async function executeRedeemOnChain(conditionId) {
                 operation: "0",
                 safeTxnGas: "0",
                 baseGas: "0",
-                gasToken: ethers.ZeroAddress,
-                refundReceiver: ethers.ZeroAddress
+                gasToken: ethers.constants.AddressZero,
+                refundReceiver: ethers.constants.AddressZero
             },
             type: "SAFE"
         };
