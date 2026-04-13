@@ -197,12 +197,25 @@ function ensureClobClient() {
         }
 
         if (!clobClient) {
-            // v17.90.0: Correct SDK Signature (host, chain, signer, creds, sigType, funderAddress)
-            const sigType = parseInt(process.env.CLOB_SIGNATURE_TYPE || "EOA");
-            const funderAddr = process.env.CLOB_FUNDER_ADDRESS;
+            // v18.0.0: Strict Type Enforcement for Signature Type
+            let sigTypeRaw = process.env.CLOB_SIGNATURE_TYPE;
+            let sigType = 0; // Default to EOA
+            
+            if (sigTypeRaw === "1" || sigTypeRaw === "POLY_PROXY") {
+                sigType = 1;
+            } else if (sigTypeRaw === "2" || sigTypeRaw === "POLY_GNOSIS_SAFE") {
+                sigType = 2;
+            }
+
+            const funderAddr = (process.env.CLOB_FUNDER_ADDRESS || wallet.address).trim();
+            
+            console.log(`[Audit] 🛡️ Initializing CLOB Client:`);
+            console.log(`[Audit] • Signer EOA: ${wallet.address}`);
+            console.log(`[Audit] • Funder: ${funderAddr}`);
+            console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
 
             clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
-            console.log(`[Self-Healing] 🛠️ ClobClient restored via Standard SDK Signature`);
+            console.log(`[Self-Healing] ✅ ClobClient restored via Atomic Audit Signature`);
         }
         return true;
     } catch (err) {
@@ -702,20 +715,27 @@ async function mainLoop() {
             const startExec = Date.now();
             let order = null;
             try {
-                // v17.95.0: Triple-check input validity
+                // v18.0.0: Atomic check for NaN before sending to SDK
                 const safePrice = Number(bestAsk) + 0.005;
                 const safeQty = Math.floor(Number(quantity));
 
-                if (!isFinite(safePrice) || !isFinite(safeQty) || safeQty <= 0) {
-                    throw new Error(`Invalid Order Data: Price=${safePrice}, Qty=${safeQty}`);
+                if (isNaN(safePrice) || isNaN(safeQty) || safeQty <= 0 || !isFinite(safePrice)) {
+                    throw new Error(`CRITICAL: NaN detected in order math! Price=${safePrice}, Qty=${safeQty}`);
                 }
 
                 const orderData = {
-                    tokenID: tokenId,
-                    price: safePrice.toFixed(6), // Strictly 6 decimals
-                    size: safeQty.toString(), // Integer for quantity
+                    tokenID: String(tokenId).trim(),
+                    price: safePrice.toFixed(6),
+                    size: safeQty.toString(),
                     side: Side.BUY
                 };
+
+                // Final verification of orderData to prevent any hidden NaN objects
+                for (const [key, val] of Object.entries(orderData)) {
+                    if (val === "NaN" || val === "undefined") {
+                        throw new Error(`CRITICAL: Found ${val} string in order ${key}`);
+                    }
+                }
 
                 console.log(`[Engine] 📡 SDK EXECUTION: Sending ${JSON.stringify(orderData)}`);
                 order = await clobClient.createOrder(orderData);
