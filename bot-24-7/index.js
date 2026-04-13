@@ -151,8 +151,8 @@ async function checkFastResolution(currentPrice) {
                 const profitNet = payout - (pos.buyPrice * pos.amount);
                 const newBal = await updateVirtualBalance(payout);
                 
-                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${newBal.toFixed(2)}`);
-                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${newBal.toFixed(2)}\n• Statut: Libération ultra-rapide`);
+                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${newBal.balance.toFixed(2)}`);
+                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${newBal.balance.toFixed(2)}\n• Statut: Libération ultra-rapide`);
             } else {
                 const curBal = getVirtualBalance();
                 console.log(`[FastResolution] 💀 Local LOSS. Balance remains: $${curBal.toFixed(2)}`);
@@ -958,7 +958,7 @@ async function executeEmergencyExit(info) {
                             `• Exit: $${info.currentPrice}\n` +
                             `• Pnl: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                             `• Recupere : +${remainingValue.toFixed(2)}$\n` +
-                            `• Capital actuel : $${newBal.toFixed(2)}`;
+                            `• Capital actuel : $${newBal.balance.toFixed(2)}`;
             
             try {
                 await sendTelegramAlert(exitMsg);
