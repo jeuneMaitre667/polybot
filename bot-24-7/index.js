@@ -188,7 +188,7 @@ async function checkFastResolution(currentPrice) {
  * v17.75.0: Self-Healing Wallet Validator
  * Ensures the CLOB client is fully initialized with a valid wallet address.
  */
-function ensureClobClient() {
+async function ensureClobClient() {
     try {
         if (!wallet || !wallet.address) {
             const pk = process.env.PRIVATE_KEY;
@@ -214,8 +214,13 @@ function ensureClobClient() {
             console.log(`[Audit] • Funder: ${funderAddr}`);
             console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
 
-            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
-            console.log(`[Self-Healing] ✅ ClobClient restored via Atomic Audit Signature`);
+            // v21.1.0: Derive API credentials (required for createAndPostOrder)
+            const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
+            const apiCreds = await tempClient.createOrDeriveApiKey();
+            console.log(`[Audit] • API Key derived: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
+
+            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, apiCreds, sigType, funderAddr);
+            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials`);
         }
         return true;
     } catch (err) {
@@ -239,7 +244,7 @@ async function init() {
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
 
-    const success = ensureClobClient();
+    const success = await ensureClobClient();
     if (!success) throw new Error("CRITICAL: Failed to initialize wallet client");
     
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
@@ -663,7 +668,7 @@ async function mainLoop() {
         }
 
         // v17.75.0: Final Wallet Integrity Check relative to current tir
-        if (!ensureClobClient()) {
+        if (!(await ensureClobClient())) {
             console.error("[Engine] ❌ SKIP: Wallet not ready despite self-healing attempt.");
             sendTelegramAlert("🚨 *WALLET ERROR*: Sniper skipped trade due to client amnesia.");
             return;
@@ -1129,7 +1134,7 @@ async function executeEmergencyExit(info) {
         const nonce = nonceRes.data.nonce;
 
         console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
-        ensureClobClient(); // Safety first
+        await ensureClobClient(); // Safety first
         
         // v17.95.0: Triple-check input validity for emergency exit
         const safePrice = Number(info.currentPrice) * 0.98;
