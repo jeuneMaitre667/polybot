@@ -907,26 +907,48 @@ async function performanceLoop() {
                             if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
                             if (isWin) {
-                                const payout = pos.amount; 
-                                const cost = pos.buyPrice * pos.amount;
-                                const profitNet = payout - cost;
-                                const result = await updateVirtualBalance(payout);
-                                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
-                                
-                                const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
-                                               `• Profit: +$${profitNet.toFixed(2)}\n` +
-                                               `• Capital: $${finalBal.toFixed(2)}\n` +
-                                               `• Statut: simulation gagnante`;
-                                
-                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
-                                await sendTelegramAlert(winMsg);
+                                if (pos.isSimulated) {
+                                    // SIMULATION: update virtual balance
+                                    const payout = pos.amount; 
+                                    const cost = pos.buyPrice * pos.amount;
+                                    const profitNet = payout - cost;
+                                    const result = await updateVirtualBalance(payout);
+                                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                                    
+                                    const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
+                                                   `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                                   `• Capital: $${finalBal.toFixed(2)}\n` +
+                                                   `• Statut: simulation gagnante`;
+                                    
+                                    console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
+                                    await sendTelegramAlert(winMsg);
+                                } else {
+                                    // v20.3.0: REAL TRADE REDEEM via Gasless Relayer
+                                    console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
+                                    try {
+                                        await executeRedeemOnChain(pos.conditionId);
+                                        const payout = pos.amount;
+                                        const cost = pos.buyPrice * pos.amount;
+                                        const profitNet = payout - cost;
+                                        const winMsg = `🏆 *REDEEM SUCCESS (WIN)* 💰\n\n` +
+                                                       `• Marché: ${pos.slug}\n` +
+                                                       `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                                       `• Statut: Gasless Redeem ✅`;
+                                        await sendTelegramAlert(winMsg);
+                                    } catch (redeemErr) {
+                                        console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
+                                        await sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
+                                    }
+                                }
                             } else {
                                 if (pos.isSimulated) {
-                                    // v17.36.75: No balance change for loss (stake already subtracted at entry)
                                     const result = await getVirtualBalance();
                                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                                     console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${finalBal.toFixed(2)}`);
                                     await sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde final: $${finalBal.toFixed(2)} 💵`);
+                                } else {
+                                    console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}. No redeem needed.`);
+                                    await sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: $${(pos.buyPrice * pos.amount).toFixed(2)}`);
                                 }
                             }
 
@@ -1043,19 +1065,9 @@ async function executeRedeemOnChain(conditionId) {
         });
 
         if (submitRes.data && submitRes.data.transactionHash) {
-            console.log(`[Relayer] Transaction submitted successfully: ${submitRes.data.transactionHash}`);
-            lastResolvedCids.add(pos.tokenId);
-            changed = true;
-
-            // v17.3.2: Record Winning Trade
-            Analytics.recordTrade({
-                asset: pos.asset || 'BTC',
-                side: pos.side,
-                entryPrice: pos.buyPrice,
-                exitPrice: 1.0, 
-                quantity: pos.amount,
-                pnlUsd: (1.0 - pos.buyPrice) * pos.amount
-            });
+            console.log(`[Relayer] ✅ Redeem transaction submitted: ${submitRes.data.transactionHash}`);
+        } else {
+            console.warn(`[Relayer] ⚠️ Redeem submitted but no txHash returned.`);
         }
 
     } catch (err) {
