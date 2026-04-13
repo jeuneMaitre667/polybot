@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
-import { ClobClient, Side } from '@polymarket/clob-client';
+import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
 import axios from 'axios';
 
 // --- CONFIG & UTILS ---
@@ -742,11 +742,15 @@ async function mainLoop() {
                     }
                 }
 
-                console.log(`[Engine] 📡 SDK EXECUTION: Sending ${JSON.stringify(orderData)}`);
-                order = await clobClient.createOrder(orderData);
+                console.log(`[Engine] 📡 SDK EXECUTION (v21.0.0 createAndPostOrder): Sending ${JSON.stringify(orderData)}`);
+                order = await clobClient.createAndPostOrder(
+                    orderData,
+                    { tickSize: "0.01", negRisk: false },
+                    OrderType.GTC
+                );
                 
                 const latency = Date.now() - startExec;
-                console.log(`[Engine] ✅ Order Filled: ${order.orderID || order.orderId} | Latency: ${latency}ms`);
+                console.log(`[Engine] ✅ Order POSTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
             } catch (err) {
                 console.error(`[Engine] ❌ RELAYER EXECUTION FAILED:`, err.message);
                 sendTelegramAlert(`🚨 *EXECUTION ERROR*\nTrade failed for ${side}: ${err.message}`);
@@ -1142,8 +1146,12 @@ async function executeEmergencyExit(info) {
             side: Side.SELL
         };
 
-        console.log(`[Emergency] 🚨 SDK EXECUTION: Sending ${JSON.stringify(orderData)}`);
-        const orderRes = await clobClient.createOrder(orderData);
+        console.log(`[Emergency] 🚨 SDK EXECUTION (v21.0.0 createAndPostOrder): Sending ${JSON.stringify(orderData)}`);
+        const orderRes = await clobClient.createAndPostOrder(
+            orderData,
+            { tickSize: "0.01", negRisk: false },
+            OrderType.GTC
+        );
 
         if (orderRes && orderRes.orderID) {
             console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
