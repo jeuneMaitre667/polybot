@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 import { sendTelegramAlert } from './telegramAlerts.js';
+import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP Sync
 
 const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json');
 const MAX_SILENCE_MS = 5 * 60 * 1000; // 5 minutes
@@ -26,7 +27,7 @@ async function checkHeartbeat() {
         }
 
         const data = JSON.parse(fs.readFileSync(HEARTBEAT_FILE, 'utf8'));
-        const now = Date.now();
+        const now = timeKeeper.getNow();
         const diff = now - data.timestamp;
 
         if (diff > MAX_SILENCE_MS) {
@@ -53,5 +54,7 @@ async function checkHeartbeat() {
 }
 
 // Start the loop
-setInterval(checkHeartbeat, CHECK_INTERVAL_MS);
-checkHeartbeat();
+timeKeeper.sync().then(() => {
+    setInterval(checkHeartbeat, CHECK_INTERVAL_MS);
+    checkHeartbeat();
+});

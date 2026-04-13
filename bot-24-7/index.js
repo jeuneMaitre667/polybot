@@ -36,6 +36,7 @@ import {
     getCalendarDateYmd,
     getLocalHourMinute
 } from './middayDigest.js';
+import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP Sync
 
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
@@ -451,8 +452,8 @@ async function reportingLoop() {
 
 async function mainLoop() {
     try {
-        const cycleStart = Date.now();
-        const now = Date.now();
+        const cycleStart = timeKeeper.getNow();
+        const now = timeKeeper.getNow();
         lastPulseTime = now; // v17.24.0: Activity Signal
         
         // v17.51.0: Physical Heartbeat for PM2 Watchdog
@@ -1003,7 +1004,12 @@ async function executeEmergencyExit(info) {
 }
 
 
-init().catch(err => {
+init().then(async () => {
+    // v17.52.0: Final Industrialization Step - NTP Software Sync
+    await timeKeeper.sync();
+    // Refresh every 12 hours
+    setInterval(() => timeKeeper.sync(), 12 * 60 * 60 * 1000);
+}).catch(err => {
     console.error("💀 v17.10.0 FATAL:", err.message);
     process.exit(1);
 });
