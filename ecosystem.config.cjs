@@ -24,6 +24,15 @@ module.exports = {
       args: "--port 5175 --host",
       cwd: "C:\\Users\\cedpa\\polymarket-dashboard",
       watch: false,
+    },
+    {
+      name: "poly-watchdog",
+      script: "C:\\Users\\cedpa\\polymarket-dashboard\\bot-24-7\\watchdog.js",
+      cwd: "C:\\Users\\cedpa\\polymarket-dashboard\\bot-24-7",
+      watch: false,
+      env: {
+        DEBUG_WATCHDOG: "true"
+      }
     }
   ]
 };

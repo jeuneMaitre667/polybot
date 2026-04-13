@@ -53,6 +53,7 @@ const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v1
 
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
 const POSITION_LOG = path.join(__dirname, 'active-positions.json');
+const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json'); // v17.51.0: Heartbeat for watchdog
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
@@ -453,6 +454,13 @@ async function mainLoop() {
         const cycleStart = Date.now();
         const now = Date.now();
         lastPulseTime = now; // v17.24.0: Activity Signal
+        
+        // v17.51.0: Physical Heartbeat for PM2 Watchdog
+        try {
+            fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ timestamp: now, version: 'v17.51.0' }));
+        } catch (e) {
+            console.error('[Heartbeat] Write failed:', e.message);
+        }
         
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
