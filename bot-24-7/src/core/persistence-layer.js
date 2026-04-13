@@ -7,7 +7,7 @@ const locks = new Map();
 /**
  * runAtomicUpdate(file, updateFn)
  * Ensures that read and write operations on the same file are sequential.
- * v17.47.1: Fixed default data type to support Arrays (Positions).
+ * v17.49.4: Robustness fix. Returns current data on failure instead of undefined to prevent crashes.
  */
 export const runAtomicUpdate = async (filePath, updateFn) => {
     if (!locks.has(filePath)) {
@@ -16,25 +16,27 @@ export const runAtomicUpdate = async (filePath, updateFn) => {
 
     const currentLock = locks.get(filePath);
     const nextOp = currentLock.then(async () => {
+        const isArray = filePath.includes('positions') || filePath.includes('history');
+        const defaultVal = isArray ? [] : {};
+
         try {
-            // Detect if target is likely an array or object based on filename or existing content
-            const isArray = filePath.includes('positions') || filePath.includes('history');
-            const data = safeReadJson(filePath, isArray ? [] : {});
-            
+            const data = safeReadJson(filePath, defaultVal);
             const updatedData = await updateFn(data);
+            
             if (updatedData !== undefined) {
                 atomicWriteJson(filePath, updatedData);
+                return updatedData;
             }
-            return updatedData;
+            return data;
         } catch (e) {
             console.error(`[Atomic] Update failed for ${path.basename(filePath)}:`, e.message);
-            // v17.47.1: We must NOT throw here to keep the lock chain alive and usable
-            return undefined;
+            // Return current disk state to prevent TypeError: cannot read property 'X' of undefined
+            return safeReadJson(filePath, defaultVal);
         }
     });
 
-    // v17.47.1: Always append to the chain even if previous failed
-    locks.set(filePath, nextOp);
+    // Always append to the chain to keep order and prevent deadlocks
+    locks.set(filePath, nextOp.catch(() => {})); 
     return nextOp;
 };
 
