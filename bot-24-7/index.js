@@ -465,7 +465,7 @@ async function mainLoop() {
         const hbSecondsLeft = Math.floor((slotStartLocal + 300000 - hbNow) / 1000);
         const displayTime = new Date(hbNow).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-        if (hbSecondsLeft <= 120 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStartLocal) {
+        if (hbSecondsLeft <= 90 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStartLocal) {
             lastHeartbeatSlot = slotStartLocal; // Lock immediately
             console.log(`[Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
             
