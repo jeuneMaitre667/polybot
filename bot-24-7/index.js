@@ -459,6 +459,7 @@ async function reportingLoop() {
 
 async function mainLoop() {
     const cycleStart = Date.now();
+    let order = null; // v17.62.9: Global scope for the entire loop
     try {
         // v17.61.0: INDEPENDENT REAL-TIME HEARTBEAT (Bypass NTP Lag)
         const hbNow = Date.now();
@@ -645,13 +646,15 @@ async function mainLoop() {
             
             console.log(`[Engine] 🧪 SIMULATION: Order placed | Latency: ${totalLatency}ms`);
             
+            // v17.62.9: Reference current virtual balance for display
+            const currentSimBal = getVirtualBalance();
             const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Side: ${side} 🏹\n` +
                                 `• Price: $${bestAsk} 💵\n` +
                                 `• Latency: ${totalLatency}ms ⚡\n` +
                                 `• Delta: ${bDeltaPct.toFixed(3)}% 📊\n` +
                                 `• Size: -$${tradeAmountUsd.toFixed(2)} 💸\n` +
-                                `• Capital: $${finalBalVal.toFixed(2)} 🏦`;
+                                `• Capital: $${currentSimBal.toFixed(2)} 🏦`;
             
             try {
                 await sendTelegramAlert(simEntryMsg);
@@ -678,13 +681,11 @@ async function mainLoop() {
                 return; // Stop here
             }
             
-            // Unify order object for common state tracking
-            currentOrder = order; 
+            // currentOrder reflects 'order' if it was submitted
         }
 
-        // --- COMMON STATE TRACKING (v17.62.8: Unified Persistent Logic) ---
-        const currentOrder = (typeof order !== 'undefined') ? order : null;
-        if (IS_SIMULATION_ENABLED || (currentOrder && (currentOrder.orderID || currentOrder.orderId))) {
+        // --- COMMON STATE TRACKING (v17.62.9: Reliable ordered tracking) ---
+        if (IS_SIMULATION_ENABLED || (order && (order.orderID || order.orderId))) {
             // v17.38.2: Non-blocking fetch of Official Strike (Background)
             fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
                 if (os && activePosition && activePosition.slotStart === slotStart) {
