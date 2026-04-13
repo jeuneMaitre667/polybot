@@ -482,34 +482,32 @@ async function mainLoop() {
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
         const mv = marketState; 
 
-        // v17.60.3: REAL-TIME Heartbeat (Bypass API lag)
+        // v17.60.7: REAL-TIME Heartbeat (Stable Fix)
         const hbNow = Date.now();
         const hbSecondsLeft = Math.floor((slotStart + 300000 - hbNow) / 1000);
-        
+        const displayTime = new Date(hbNow).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
         if (hbSecondsLeft <= 120 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStart && mv) {
-            console.log(`[Telegram] Heartbeat Trigger! T-${hbSecondsLeft}s. Slot: ${slotStart}`);
-            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(hbNow)}*\n\n` +
+            lastHeartbeatSlot = slotStart; // Lock immediately
+            
+            const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
                           `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
                           `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
                           `• Window: AUTHORIZED ✅\n` +
                           `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 🏦`;
             
-            // v17.60.5: Fire-and-Forget Background Send (No block)
             const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
             const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
             const url = `https://api.telegram.org/bot${token}/sendMessage`;
-            
-            lastHeartbeatSlot = slotStart; // Update immediately to prevent duplicate firing
-            
+
             axios.post(url, { 
                 chat_id: chatId, 
                 text: hbMsg, 
-                parse_mode: 'Markdown',
                 disable_web_page_preview: true 
             }, { timeout: 15000 }).then(() => {
-                console.log(`[Telegram] Status Send Success.`);
+                console.log(`[Telegram] Heartbeat Send Success (${displayTime})`);
             }).catch(hErr => {
-                console.error('[Telegram] Status Send Failed:', hErr.message);
+                console.error('[Telegram] Heartbeat Send Failed:', hErr.message);
             });
         }
         
