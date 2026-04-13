@@ -362,7 +362,8 @@ async function reportingLoop() {
                 const upLabel = bestAskUp > 0.80 ? '🟢 UP' : '⚪ UP';
                 const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
 
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${userBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+                const displayBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${displayBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
