@@ -482,19 +482,21 @@ async function mainLoop() {
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
         const mv = marketState; 
 
-        // v17.60.1: Telegram Heartbeat (T-90s Status Update)
-        // Moved to TOP of loop to bypass slot LOCKS
-        if (secondsLeft <= 90 && secondsLeft > 0 && lastHeartbeatSlot !== slotStart && mv) {
-            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(timeKeeper.getNow())}*\n\n` +
+        // v17.60.3: REAL-TIME Heartbeat (Bypass API lag)
+        const hbNow = Date.now();
+        const hbSecondsLeft = Math.floor((slotStart + 300000 - hbNow) / 1000);
+        
+        if (hbSecondsLeft <= 120 && hbSecondsLeft >= 10 && lastHeartbeatSlot !== slotStart && mv) {
+            console.log(`[Telegram] Heartbeat Trigger! T-${hbSecondsLeft}s. Slot: ${slotStart}`);
+            const hbMsg = `🛰️ *SNIPER STATUS : ${getLocalHourMinute(hbNow)}*\n\n` +
                           `• Signal: ${mv.upProb.toFixed(1)}% UP | ${mv.downProb.toFixed(1)}% DOWN 📈\n` +
                           `• Delta: ${mv.bDeltaPct.toFixed(3)}% 📊\n` +
-                          `• Window Status: AUTHORIZED ✅\n` +
-                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 💰`;
+                          `• Window: AUTHORIZED ✅\n` +
+                          `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 🏦`;
             
             try {
                 await sendTelegramAlert(hbMsg);
                 lastHeartbeatSlot = slotStart;
-                console.log(`[Telegram] Heartbeat sent for slot ${slotStart} (T-${secondsLeft}s)`);
             } catch (hErr) {
                 console.error('[Telegram] Heartbeat failed:', hErr.message);
             }
