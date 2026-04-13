@@ -494,24 +494,23 @@ async function mainLoop() {
                           `• Window: AUTHORIZED ✅\n` +
                           `• Capital: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0)).toFixed(2)} 🏦`;
             
-            try {
-                // v17.60.4: Direct Bypass - Ligne directe Telegram
-                const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
-                const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
-                const url = `https://api.telegram.org/bot${token}/sendMessage`;
-                
-                await axios.post(url, { 
-                    chat_id: chatId, 
-                    text: hbMsg, 
-                    parse_mode: 'Markdown',
-                    disable_web_page_preview: true 
-                }, { timeout: 10000 });
-                
-                lastHeartbeatSlot = slotStart;
-                console.log(`[Telegram] Direct Bypass: Heartbeat sent successfully.`);
-            } catch (hErr) {
-                console.error('[Telegram] Direct Heartbeat failed:', hErr.message);
-            }
+            // v17.60.5: Fire-and-Forget Background Send (No block)
+            const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+            const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+            const url = `https://api.telegram.org/bot${token}/sendMessage`;
+            
+            lastHeartbeatSlot = slotStart; // Update immediately to prevent duplicate firing
+            
+            axios.post(url, { 
+                chat_id: chatId, 
+                text: hbMsg, 
+                parse_mode: 'Markdown',
+                disable_web_page_preview: true 
+            }, { timeout: 15000 }).then(() => {
+                console.log(`[Telegram] Status Send Success.`);
+            }).catch(hErr => {
+                console.error('[Telegram] Status Send Failed:', hErr.message);
+            });
         }
         
         // v17.44.1: Persistent Slot Lock (v17.54.0 Expanded)
