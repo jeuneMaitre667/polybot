@@ -520,7 +520,6 @@ async function mainLoop() {
         }
 
         // 2. Timing Check (Dynamic Window: T-start to T-end)
-        const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
 
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
             if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
@@ -531,7 +530,6 @@ async function mainLoop() {
 
         // 3. Unified Decision Path (v17.22.0)
         // Fresh context check already done at top of loop for resolution
-        const mv = marketState; 
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
             if (now % 30000 < 1000) { 
