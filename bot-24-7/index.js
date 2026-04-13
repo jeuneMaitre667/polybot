@@ -670,16 +670,18 @@ async function mainLoop() {
             // v17.42.3: SAVE POSITION FIRST (Transactional Safety)
             await addPosition(activePosition);
 
+            // v17.58.0: Send Telegram FIRST to ensure delivery even if balance calculation crashes
+            const totalLatency = Date.now() - cycleStart;
             if (IS_SIMULATION_ENABLED) {
-                const totalLatency = Date.now() - cycleStart;
-                const newBal = await updateVirtualBalance(-tradeAmountUsd);
-                console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${newBal.toFixed(2)}`);
-                
                 const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
-                                    `• Price: $${bestAsk}\n• Latency: ${totalLatency}ms\n• Size: $${tradeAmountUsd.toFixed(2)}\n• Capital: $${newBal.toFixed(2)}`;
+                                    `• Price: $${bestAsk}\n• Latency: ${totalLatency}ms\n• Size: $${tradeAmountUsd.toFixed(2)}`;
                 sendTelegramAlert(simEntryMsg);
+                
+                // Then update balance and log it
+                const result = await updateVirtualBalance(-tradeAmountUsd);
+                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${finalBal.toFixed(2)}`);
             } else {
-                const totalLatency = Date.now() - cycleStart;
                 const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Price: $${bestAsk}\n• Size: $${tradeAmountUsd.toFixed(2)}`;
                 sendTelegramAlert(entryMsg);
@@ -788,21 +790,23 @@ async function performanceLoop() {
                                 const payout = pos.amount; 
                                 const cost = pos.buyPrice * pos.amount;
                                 const profitNet = payout - cost;
-                                const newBal = await updateVirtualBalance(payout);
+                                const result = await updateVirtualBalance(payout);
+                                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                                 
                                 const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
                                                `• Profit: +$${profitNet.toFixed(2)}\n` +
-                                               `• Capital: $${newBal.toFixed(2)}\n` +
+                                               `• Capital: $${finalBal.toFixed(2)}\n` +
                                                `• Statut: simulation gagnante`;
                                 
-                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${newBal.toFixed(2)}`);
+                                console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
                                 await sendTelegramAlert(winMsg);
                             } else {
                                 if (pos.isSimulated) {
                                     // v17.36.75: No balance change for loss (stake already subtracted at entry)
-                                    const curBal = getVirtualBalance();
-                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${curBal.toFixed(2)}`);
-                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${curBal.toFixed(2)}`);
+                                    const result = await getVirtualBalance();
+                                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${finalBal.toFixed(2)}`);
+                                    await sendTelegramAlert(`🧪 *SIMULATED LOSS* 💀\nCapital: $${finalBal.toFixed(2)}`);
                                 }
                             }
 
