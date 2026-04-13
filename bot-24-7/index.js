@@ -214,10 +214,22 @@ async function ensureClobClient() {
             console.log(`[Audit] • Funder: ${funderAddr}`);
             console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
 
-            // v21.1.0: Derive API credentials (required for createAndPostOrder)
+            // v21.2.0: Derive API credentials (required for createAndPostOrder)
             const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr);
-            const apiCreds = await tempClient.createOrDeriveApiKey();
-            console.log(`[Audit] • API Key derived: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
+            let apiCreds;
+            try {
+                apiCreds = await tempClient.deriveApiKey();
+                console.log(`[Audit] • API Key derived: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
+            } catch (deriveErr) {
+                console.warn(`[Audit] ⚠️ deriveApiKey failed: ${deriveErr.message}. Trying createOrDeriveApiKey...`);
+                try {
+                    apiCreds = await tempClient.createOrDeriveApiKey();
+                    console.log(`[Audit] • API Key created: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
+                } catch (createErr) {
+                    console.error(`[Audit] ❌ All API key methods failed: ${createErr.message}`);
+                    throw createErr;
+                }
+            }
 
             clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, apiCreds, sigType, funderAddr);
             console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials`);
