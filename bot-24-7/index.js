@@ -80,6 +80,7 @@ let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
 let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
+let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
 
 function updateHealth(data) {
     memoryHealth = { ...memoryHealth, ...data };
@@ -277,6 +278,13 @@ async function reportingLoop() {
 
             userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
             maticBalance = parseFloat(ethers.formatEther(maticRaw));
+
+            // v17.70.0: Initialize Risk Baseline on FIRST successful balance fetch
+            if (!riskSessionInitialized && userBalance !== null) {
+                RiskManager.initSession(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance);
+                riskSessionInitialized = true;
+                console.log(`[Risk] 💎 Session Baseline Locked: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance).toFixed(2)}`);
+            }
         } catch (err) {
             console.error('[Reporting] Multi-balance fetch error:', err.message);
         }
@@ -736,7 +744,7 @@ async function mainLoop() {
             }
 
             // v17.1.0: Launch Stop Loss Sentinel
-            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
+            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10"); // Locked at 10%
             SLSentinel.startMonitoring(
                 tokenId, 
                 bestAsk, 

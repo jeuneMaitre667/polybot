@@ -8,7 +8,8 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "deps:outdated": "npm outdated",
-    "audit:report": "npm audit --omit=dev"
+    "audit:report": "npm audit --omit=dev",
+    "sentinel": "node sentinel-v2.js"
   },
   "dependencies": {
     "@polymarket/builder-relayer-client": "^0.0.8",
