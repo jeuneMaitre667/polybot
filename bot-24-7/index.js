@@ -725,15 +725,15 @@ async function mainLoop() {
 
                 const orderData = {
                     tokenID: String(tokenId).trim(),
-                    price: safePrice.toFixed(6),
-                    size: safeQty.toString(),
+                    price: Number(safePrice.toFixed(6)), // MUST BE NUMBER
+                    size: Number(safeQty),              // MUST BE NUMBER
                     side: Side.BUY
                 };
 
                 // Final verification of orderData to prevent any hidden NaN objects
                 for (const [key, val] of Object.entries(orderData)) {
-                    if (val === "NaN" || val === "undefined") {
-                        throw new Error(`CRITICAL: Found ${val} string in order ${key}`);
+                    if (val === "NaN" || val === "undefined" || (typeof val === 'number' && isNaN(val))) {
+                        throw new Error(`CRITICAL: Invalid ${typeof val} detected in order ${key}: ${val}`);
                     }
                 }
 
@@ -1120,8 +1120,8 @@ async function executeEmergencyExit(info) {
 
         const orderData = {
             tokenID: pos.tokenId,
-            price: safePrice.toFixed(6),
-            size: safeQty.toString(),
+            price: Number(safePrice.toFixed(6)), // MUST BE NUMBER
+            size: Number(safeQty),              // MUST BE NUMBER
             side: Side.SELL
         };
 
