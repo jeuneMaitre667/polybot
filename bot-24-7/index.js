@@ -133,11 +133,13 @@ async function checkFastResolution(currentPrice) {
         
         // Fast resolution window: End reached + 2s margin
         if (now > pos.slotEnd + 2000) {
-            const isUp = currentPrice >= pos.strike;
+            // v17.38.1: Resolution priority -> OFFICIAL POLYMARKET STRIKE
+            const resolutionStrike = pos.officialStrike || pos.strike;
+            const isUp = currentPrice >= resolutionStrike;
             const winningSide = isUp ? 'YES' : 'NO';
             const isWin = pos.side === winningSide;
             
-            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | Strike:${pos.strike} | EndPrice:${currentPrice} | Side:${pos.side} | Winner:${winningSide}`);
+            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | OfficialStrike:${pos.officialStrike || 'MISSING'} | FinalPrice:${currentPrice} | Winner:${winningSide}`);
             
             if (isWin) {
                 const payout = pos.amount;
@@ -363,7 +365,11 @@ async function reportingLoop() {
                 const downLabel = bestAskDown > 0.80 ? '🔴 DOWN' : '⚪ DOWN';
 
                 const displayBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${displayBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+                
+                // v17.38.3: Double-Strike HUD Monitoring
+                const officialLabel = activePosition?.officialStrike ? `(Poly:${activePosition.officialStrike.toFixed(2)})` : '';
+                
+                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${displayBalance.toFixed(2)} | Open:${effectiveStrike.toFixed(2)}${officialLabel} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
@@ -602,11 +608,26 @@ async function mainLoop() {
                 sendTelegramAlert(entryMsg);
             }
 
+            // v17.38.2: Non-blocking fetch of Official Strike to avoid main loop lag
+            fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
+                if (os && activePosition && activePosition.slotStart === slotStart) {
+                    activePosition.officialStrike = os;
+                    const list = loadActivePositions();
+                    const idx = list.findIndex(p => p.tokenId === activePosition.tokenId);
+                    if (idx !== -1) {
+                        list[idx].officialStrike = os;
+                        saveActivePositions(list);
+                        console.log(`[Engine] 🎯 Official Strike Updated: ${os}`);
+                    }
+                }
+            });
+
             activePosition = {
                 tokenId,
                 conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
-                strike: currentSig.strike, // v17.36.85: Added for Fast-Resolution
+                strike: currentSig.strike, // Binance reference (Signal)
+                officialStrike: currentSig.strike, // Temp fallback until background fetch completes
                 amount: quantity,
                 slotStart,
                 side,
