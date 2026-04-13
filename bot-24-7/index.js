@@ -756,8 +756,8 @@ async function mainLoop() {
             // currentOrder reflects 'order' if it was submitted
         }
 
-        // --- COMMON STATE TRACKING (v17.62.9: Reliable ordered tracking) ---
-        if (IS_SIMULATION_ENABLED || (order && (order.orderID || order.orderId))) {
+        // --- COMMON STATE TRACKING (v20.4.0: Accept any non-null order response) ---
+        if (IS_SIMULATION_ENABLED || (order && typeof order === 'object')) {
             // v17.38.2: Non-blocking fetch of Official Strike (Background)
             fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
                 if (os && activePosition && activePosition.slotStart === slotStart) {
