@@ -19,7 +19,7 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 import { SUPPORTED_ASSETS, MARKET_MODE } from './config.js';
 import { startStrikeWorker } from './strike-worker.js';
 import { fetchSignals, getSignalKey } from './signal-engine.js';
-import { atomicWriteJson, safeReadJson } from './src/core/persistence-layer.js';
+import { atomicWriteJson, safeReadJson, runAtomicUpdate } from './src/core/persistence-layer.js';
 import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
@@ -98,19 +98,22 @@ function updateHealth(data) {
     atomicWriteJson(HEALTH_FILE, fullHealth);
 }
 
-// --- PERSISTENCE HELPERS ---
+// v17.46.7: Atomic sequence for positions
 function loadActivePositions() {
     return safeReadJson(POSITION_LOG, []);
 }
 
-function saveActivePositions(positions) {
-    atomicWriteJson(POSITION_LOG, positions);
+async function saveActivePositions(positions) {
+    return runAtomicUpdate(POSITION_LOG, () => {
+        return positions;
+    });
 }
 
-function addPosition(pos) {
-    const list = loadActivePositions();
-    list.push(pos);
-    saveActivePositions(list);
+async function addPosition(pos) {
+    return runAtomicUpdate(POSITION_LOG, (list = []) => {
+        list.push(pos);
+        return list;
+    });
 }
 
 /**
@@ -144,7 +147,7 @@ async function checkFastResolution(currentPrice) {
             if (isWin) {
                 const payout = pos.amount;
                 const profitNet = payout - (pos.buyPrice * pos.amount);
-                const newBal = updateVirtualBalance(payout);
+                const newBal = await updateVirtualBalance(payout);
                 
                 console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${newBal.toFixed(2)}`);
                 await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${newBal.toFixed(2)}\n• Statut: Libération ultra-rapide`);
@@ -644,11 +647,11 @@ async function mainLoop() {
             };
 
             // v17.42.3: SAVE POSITION FIRST (Transactional Safety)
-            addPosition(activePosition);
+            await addPosition(activePosition);
 
             if (IS_SIMULATION_ENABLED) {
                 const totalLatency = Date.now() - cycleStart;
-                const newBal = updateVirtualBalance(-tradeAmountUsd);
+                const newBal = await updateVirtualBalance(-tradeAmountUsd);
                 console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${newBal.toFixed(2)}`);
                 
                 const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
@@ -764,7 +767,7 @@ async function performanceLoop() {
                                 const payout = pos.amount; 
                                 const cost = pos.buyPrice * pos.amount;
                                 const profitNet = payout - cost;
-                                const newBal = updateVirtualBalance(payout);
+                                const newBal = await updateVirtualBalance(payout);
                                 
                                 const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
                                                `• Profit: +$${profitNet.toFixed(2)}\n` +
@@ -931,7 +934,7 @@ async function executeEmergencyExit(info) {
         // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {
             const lossUsd = (pos.buyPrice - info.currentPrice) * pos.amount;
-            const newBal = updateVirtualBalance(-lossUsd);
+            const newBal = await updateVirtualBalance(-lossUsd);
 
             console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (PnL: ${(info.pnlPct * 100).toFixed(2)}%)`);
             const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
