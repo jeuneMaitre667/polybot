@@ -281,11 +281,16 @@ async function getUnifiedMarketState(asset = 'BTC') {
     
     // 2. Fetch or Backfill Strike
     let bStrike = await getBinanceStrike(asset, slotStart);
-    const source = bStrike ? 'OFFICIAL' : 'FALLBACK_SPOT';
-    const effectiveStrike = bStrike || bSpot;
+    const source = bStrike ? 'OFFICIAL' : 'MISSING';
+    const effectiveStrike = bStrike; // v20.2.0: NEVER fallback to bSpot (prevents Delta 0% error)
     
     // 3. Calculate Delta
-    const bDeltaPct = (effectiveStrike > 0 && bSpot > 0) ? ((bSpot - effectiveStrike) / effectiveStrike) * 100 : 0;
+    let bDeltaPct = 0;
+    if (effectiveStrike && effectiveStrike > 0 && bSpot > 0) {
+        bDeltaPct = ((bSpot - effectiveStrike) / effectiveStrike) * 100;
+    } else {
+        if (now % 60000 < 1000) console.warn(`[Lookup] ⚠️ Strike missing for ${asset} at ${slotStart}. Delta calculation suspended.`);
+    }
     
     return {
         asset,
