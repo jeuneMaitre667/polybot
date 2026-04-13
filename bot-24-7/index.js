@@ -933,16 +933,16 @@ async function executeEmergencyExit(info) {
 
         // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {
-            const lossUsd = (pos.buyPrice - info.currentPrice) * pos.amount;
-            const newBal = await updateVirtualBalance(-lossUsd);
+            const remainingValue = info.currentPrice * pos.amount;
+            const newBal = await updateVirtualBalance(remainingValue);
 
-            console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (PnL: ${(info.pnlPct * 100).toFixed(2)}%)`);
+            console.log(`[Emergency] 🧪 SIMULATION EXIT: Price $${info.currentPrice} (Recovery: +$${remainingValue.toFixed(2)})`);
             const exitMsg = `🧪 *SORTIE SIMULÉE (STOP LOSS)* 🧪\n\n` +
                             `• Slot: ${pos.slotStart}\n` +
                             `• Entry: $${pos.buyPrice}\n` +
                             `• Exit: $${info.currentPrice}\n` +
                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                            `• Perte : -${lossUsd.toFixed(2)}$\n` +
+                            `• Récupéré : +${remainingValue.toFixed(2)}$\n` +
                             `• Capital actuel : $${newBal.toFixed(2)}`;
             await sendTelegramAlert(exitMsg);
             
