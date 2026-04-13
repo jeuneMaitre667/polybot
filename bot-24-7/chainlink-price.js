@@ -59,7 +59,7 @@ export async function getChainlinkPrice(asset = 'BTC') {
   // On lance tous les RPC en parallèle et on prend le premier succès.
   const promises = RPC_ENDPOINTS.map(async (url) => {
     try {
-      const provider = new ethers.JsonRpcProvider(url, 137, { staticNetwork: true });
+      const provider = new ethers.providers.JsonRpcProvider(url, 137);
       const contract = new ethers.Contract(DATA_FEEDS[cleanAsset], AGGREGATOR_V3_ABI, provider);
       const data = await contract.latestRoundData();
       const rawPrice = Number(data.answer) / Math.pow(10, CHAINLINK_DECIMALS);
