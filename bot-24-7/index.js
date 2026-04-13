@@ -50,6 +50,9 @@ const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
 const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
 const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
 const IS_SIMULATION_ENABLED = (process.env.SIMULATION_TRADE_ENABLED || '').trim() === 'true';
+const BALANCE_REFRESH_MS = parseInt(process.env.BALANCE_REFRESH_MS || "45000");
+const PRIMARY_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+const FAILOVER_RPC = process.env.POLYGON_RPC_URL_FAILOVER || 'https://rpc.ankr.com/polygon';
 const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v17.35.0
 
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
@@ -79,6 +82,7 @@ let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
 let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
+let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
 
@@ -193,10 +197,12 @@ function ensureClobClient() {
         }
 
         if (!clobClient) {
+            // v17.80.0: Force Failover if Primary is dead
+            const rpc = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC;
             clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, {
                 funderAddress: process.env.CLOB_FUNDER_ADDRESS
             });
-            console.log(`[Self-Healing] 🛠️ ClobClient restored for: ${wallet.address}`);
+            console.log(`[Self-Healing] 🛠️ ClobClient restored via ${rpc === PRIMARY_RPC ? 'Primary' : 'Failover'}`);
         }
         return true;
     } catch (err) {
@@ -288,28 +294,32 @@ async function reportingLoop() {
         
         let startAudit = Date.now();
         
-        // 0. Fetch Real Blockchain Balance (v16.20.1)
-        try {
-            const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com');
-            const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-            
-            // v16.21.0: Dual Balance Fetch (Signer MATIC + Funder USDC)
-            const [usdcRaw, maticRaw] = await Promise.all([
-                usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address),
-                provider.getBalance(wallet.address)
-            ]);
+        // 0. Fetch Real Blockchain Balance (v17.80.0: Optimized Throttling)
+        if (now - lastBalanceFetchTime > BALANCE_REFRESH_MS || userBalance === null) {
+            try {
+                const rpcUrl = (userBalance === null) ? PRIMARY_RPC : FAILOVER_RPC; // Cycle RPC
+                const provider = new ethers.JsonRpcProvider(rpcUrl);
+                const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+                
+                const [usdcRaw, maticRaw] = await Promise.all([
+                    usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address),
+                    provider.getBalance(wallet.address)
+                ]);
 
-            userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
-            maticBalance = parseFloat(ethers.formatEther(maticRaw));
+                userBalance = parseFloat(ethers.formatUnits(usdcRaw, 6));
+                maticBalance = parseFloat(ethers.formatEther(maticRaw));
+                lastBalanceFetchTime = now;
 
-            // v17.70.0: Initialize Risk Baseline on FIRST successful balance fetch
-            if (!riskSessionInitialized && userBalance !== null) {
-                RiskManager.initSession(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance);
-                riskSessionInitialized = true;
-                console.log(`[Risk] 💎 Session Baseline Locked: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance).toFixed(2)}`);
+                // v17.70.0: Initialize Risk Baseline on FIRST successful balance fetch
+                if (!riskSessionInitialized && userBalance !== null) {
+                    RiskManager.initSession(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance);
+                    riskSessionInitialized = true;
+                    console.log(`[Risk] 💎 Session Baseline Locked: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance).toFixed(2)}`);
+                }
+            } catch (err) {
+                console.error('[Reporting] v17.80.0 RPC Error (Switching...):', err.message);
+                // On next loop it will try again, possibly with null catch-all
             }
-        } catch (err) {
-            console.error('[Reporting] Multi-balance fetch error:', err.message);
         }
 
         // 1. Get Unified Market State (v17.22.0 Sync)
