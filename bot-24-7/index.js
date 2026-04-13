@@ -55,6 +55,7 @@ const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v1
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
 const POSITION_LOG = path.join(__dirname, 'active-positions.json');
 const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json'); // v17.51.0: Heartbeat for watchdog
+const LAST_TRADE_FILE = path.join(__dirname, 'last-trade.json'); // v17.54.0: Total persistence
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
@@ -149,10 +150,11 @@ async function checkFastResolution(currentPrice) {
             if (isWin) {
                 const payout = pos.amount;
                 const profitNet = payout - (pos.buyPrice * pos.amount);
-                const newBal = await updateVirtualBalance(payout);
+                const newBalValue = await updateVirtualBalance(payout);
+                const finalBal = typeof newBalValue === 'number' ? newBalValue : (newBalValue?.balance || 0);
                 
-                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${newBal.balance.toFixed(2)}`);
-                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${newBal.balance.toFixed(2)}\n• Statut: Libération ultra-rapide`);
+                console.log(`[FastResolution] 🏆 Local WIN. Profit: +$${profitNet.toFixed(2)} | Balance released: $${finalBal.toFixed(2)}`);
+                await sendTelegramAlert(`🧪 *FAST REDEEM (WIN)* 💰\n\n• Profit: +$${profitNet.toFixed(2)}\n• Capital mis à jour: $${finalBal.toFixed(2)}\n• Statut: Libération ultra-rapide`);
             } else {
                 const curBal = getVirtualBalance();
                 console.log(`[FastResolution] 💀 Local LOSS. Balance remains: $${curBal.toFixed(2)}`);
@@ -466,17 +468,22 @@ async function mainLoop() {
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         const slotStart = Math.floor(now / 300000) * 300000;
         
-        // v17.44.1: Air-Gap Slot Lock (Memory + Persistence)
+        // v17.44.1: Persistent Slot Lock (v17.54.0 Expanded)
         if (lastExecutedSlot === slotStart) return;
         
-        // v17.44.1: Guard level 2 - Physical check on disk before even analyzing signals
-        const persistentPositions = loadActivePositions();
-        const alreadyDone = persistentPositions.some(p => p.slotStart === slotStart);
+        const alreadyDone = (() => {
+            try {
+                if (fs.existsSync(LAST_TRADE_FILE)) {
+                    const last = JSON.parse(fs.readFileSync(LAST_TRADE_FILE, 'utf8'));
+                    if (last.slot === slotStart) return true;
+                }
+            } catch (e) {}
+            // Level 2: check active positions just in case
+            return loadActivePositions().some(p => p.slotStart === slotStart);
+        })();
+
         if (alreadyDone) {
-            if (lastExecutedSlot !== slotStart) {
-                console.log(`[Engine] 🛡️ Slot Lock Active: Slot ${slotStart} already present on disk. Blocking duplicate entry.`);
-                lastExecutedSlot = slotStart; // Sync memory
-            }
+            lastExecutedSlot = slotStart; // Sync memory
             return;
         }
 
@@ -593,8 +600,11 @@ async function mainLoop() {
 
         const quantity = Math.floor(tradeAmountUsd / bestAsk);
         
-        // Mark slot as processed (Anti-Spam)
+        // Mark slot as processed (v17.54.0 Persistent)
         lastExecutedSlot = slotStart;
+        try {
+            fs.writeFileSync(LAST_TRADE_FILE, JSON.stringify({ slot: slotStart, time: new Date().toISOString() }));
+        } catch (e) {}
 
         if (IS_SIMULATION_ENABLED) {
             const totalLatency = Date.now() - cycleStart;
@@ -943,7 +953,8 @@ async function executeEmergencyExit(info) {
         // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {
             const remainingValue = info.currentPrice * pos.amount;
-            const newBal = await updateVirtualBalance(remainingValue);
+            const newBalValue = await updateVirtualBalance(remainingValue);
+            const finalBal = typeof newBalValue === 'number' ? newBalValue : (newBalValue?.balance || 0);
 
             console.log(`[Emergency] SIMULATION EXIT: Price $${info.currentPrice} (Recovery: +$${remainingValue.toFixed(2)})`);
             
@@ -958,7 +969,7 @@ async function executeEmergencyExit(info) {
                             `• Exit: $${info.currentPrice}\n` +
                             `• Pnl: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                             `• Recupere : +${remainingValue.toFixed(2)}$\n` +
-                            `• Capital actuel : $${newBal.balance.toFixed(2)}`;
+                            `• Capital actuel : $${finalBal.toFixed(2)}`;
             
             try {
                 await sendTelegramAlert(exitMsg);

@@ -40,16 +40,40 @@ export const runAtomicUpdate = async (filePath, updateFn) => {
     return nextOp;
 };
 
-export const atomicWriteJson = (filePath, data) => {
-    try {
-        const tmpPath = `${filePath}.tmp`;
-        fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-        fs.renameSync(tmpPath, filePath);
-        return true;
-    } catch (e) {
-        console.error(`[Persistence] Error writing ${path.basename(filePath)}:`, e.message);
-        return false;
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+export const atomicWriteJson = async (filePath, data) => {
+    const tmpPath = `${filePath}.tmp`;
+    const maxRetries = 5;
+    
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+            
+            // v17.55.0: Direct overwrite fallback for Windows stability if rename fails
+            try {
+                fs.renameSync(tmpPath, filePath);
+            } catch (renameErr) {
+                if (renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') {
+                    // Force overwrite as fallback
+                    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+                    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+                } else {
+                    throw renameErr;
+                }
+            }
+            return true;
+        } catch (e) {
+            if ((e.code === 'EPERM' || e.code === 'EBUSY') && i < maxRetries - 1) {
+                console.warn(`[Persistence] Lock detected on ${path.basename(filePath)}, retrying (${i+1}/${maxRetries})...`);
+                await sleep(100);
+                continue;
+            }
+            console.error(`[Persistence] Final error writing ${path.basename(filePath)} after ${i+1} attempts:`, e.message);
+            return false;
+        }
     }
+    return false;
 };
 
 export const safeReadJson = (filePath, defaultVal = {}) => {
