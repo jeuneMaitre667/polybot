@@ -10,6 +10,7 @@ import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
 import axios from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // --- CONFIG & UTILS ---
 const __filename = fileURLToPath(import.meta.url);
@@ -208,6 +209,14 @@ async function ensureClobClient() {
             }
 
             const funderAddr = (process.env.CLOB_FUNDER_ADDRESS || wallet.address).trim();
+            const proxyUrl = process.env.PROXY_URL;
+
+            if (proxyUrl) {
+                console.log(`[Audit] 🌐 Using Proxy for CLOB: ${proxyUrl.split('@')[1] || proxyUrl}`);
+                const agent = new HttpsProxyAgent(proxyUrl);
+                axios.defaults.httpsAgent = agent;
+                axios.defaults.proxy = false; // Bypass axios built-in proxy logic to use agent
+            }
             
             console.log(`[Audit] 🛡️ Initializing CLOB Client:`);
             console.log(`[Audit] • Signer EOA: ${wallet.address}`);
@@ -241,6 +250,37 @@ async function ensureClobClient() {
     }
 }
 
+/**
+ * v21.3.0: Mandatory Geoblock Verification
+ * Checks if the current IP/Proxy is authorized to trade on Polymarket.
+ */
+async function validateGeoblockStatus() {
+    if (!clobClient) return false;
+    
+    console.log(`[Geoblock] 🔍 Verifying trading access...`);
+    try {
+        // v21.3.0: We use a private authenticated endpoint that is strictly geoblocked for trading.
+        await clobClient.getOpenOrders();
+        console.log(`[Geoblock] ✅ Access Authorized. Ready for trading.`);
+        return true;
+    } catch (err) {
+        const isRestricted = err.message?.includes("restricted") || 
+                            (err.response?.data?.error?.includes("restricted")) ||
+                            err.response?.status === 403;
+        
+        if (isRestricted) {
+            const errorMsg = "🚨 GEOBLOCK DETECTED: Trading is restricted in your region. The bot cannot trade from this IP.";
+            console.error(`[Geoblock] ❌ ERROR: ${errorMsg}`);
+            await sendTelegramAlert(errorMsg);
+            return false;
+        }
+        
+        // Other errors (auth, net) handled separately, but we still warn
+        console.warn(`[Geoblock] ⚠️ Warning during check:`, err.message);
+        return true; // We don't block for minor network issues here
+    }
+}
+
 // --- INITIALIZATION ---
 async function init() {
     console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
@@ -259,6 +299,13 @@ async function init() {
     const success = await ensureClobClient();
     if (!success) throw new Error("CRITICAL: Failed to initialize wallet client");
     
+    // v21.3.0: Startup Geoblock Pulse
+    const isReady = await validateGeoblockStatus();
+    if (!isReady && !IS_SIMULATION_ENABLED) {
+        console.error("=== 🛑 SYSTEM HALTED DUE TO GEOBLOCK ===");
+        process.exit(1);
+    }
+
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
 
     startStrikeWorker();
