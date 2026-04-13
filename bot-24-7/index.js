@@ -779,11 +779,22 @@ async function mainLoop() {
             }
         }
 
-        // v16.17.1: Dynamic Price Filter
-        if (!bestAsk || bestAsk < SNIPER_PRICE_MIN || bestAsk > SNIPER_PRICE_MAX) {
-            console.warn(`[Engine] Skip: Price outside range ($${bestAsk} for ${side})`);
+        // v22.3.1: Dual-Source Price Decision (Dashboard-First)
+        const gammaPrice = side === 'YES' ? parseFloat(currentSig.priceYes || 0) : parseFloat(currentSig.priceNo || 0);
+        const dashboardPrice = gammaPrice;
+
+        console.log(`[Engine] ⚖️ Signal Price Sync: Dashboard=$${dashboardPrice.toFixed(3)} | Orderbook=$${bestAsk > 0 ? bestAsk.toFixed(3) : 'EMPTY'}`);
+
+        // v22.3.1: CRITICAL TRIGGER DECISION based on Dashboard Price
+        if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
+            if (now % 30000 < 1000) {
+                console.warn(`[Engine] Skip: Dashboard Price ($${dashboardPrice.toFixed(3)}) outside safety range ($${SNIPER_PRICE_MIN}-$${SNIPER_PRICE_MAX})`);
+            }
             return;
         }
+
+        // Use Orderbook for execution price, fallback to Gamma if Book is empty
+        const executionPrice = bestAsk > 0 ? bestAsk : dashboardPrice;
 
         // v17.75.0: Final Wallet Integrity Check relative to current tir
         if (!(await ensureClobClient())) {
@@ -812,7 +823,7 @@ async function mainLoop() {
 
         // --- NEW: TAKER AGGRESSION & DYNAMIC FEES (v21.4.0.1) ---
         // 1. Crossing the spread (+0.02$) for instant execution
-        const safePrice = Math.min(0.99, Number(bestAsk) + 0.02);
+        const safePrice = Math.min(0.99, Number(executionPrice) + 0.02);
 
         // 2. Dynamic Fee Calculation (Polymarket v2026 Formula)
         // Fee = Theta * qty * price * (1 - price) | Theta Crypto approx 0.036 (1.8% peak)
@@ -835,7 +846,7 @@ async function mainLoop() {
         }
 
         // 5. Execution
-        console.log(`[Engine] 🎯 Sniper Triggered (AGGRESSIVE TAKER): ${side} at ${safePrice.toFixed(3)} (Est. Fees incl.) | Size: $${tradeAmountUsd.toFixed(2)} | Qty: ${safeQty}`);
+        console.log(`[Engine] 🎯 Sniper Triggered! Dashboard=$${dashboardPrice.toFixed(3)} | BestAsk=$${executionPrice.toFixed(3)} | Side:${side} | Size:$${tradeAmountUsd.toFixed(2)}`);
         
         // v17.29.5: High visibility on target market expiration
         console.log(`[Engine] 🛡️ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Ends: ${currentSig.m?.endDate} | Side: ${side}`);
@@ -949,7 +960,7 @@ async function mainLoop() {
             const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10"); // Locked at 10%
             SLSentinel.startMonitoring(
                 tokenId, 
-                bestAsk, 
+                executionPrice, 
                 side, 
                 stopLossPct, 
                 async (info) => {
