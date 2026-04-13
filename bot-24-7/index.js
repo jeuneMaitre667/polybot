@@ -49,7 +49,7 @@ const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
 const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
 const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.87");
 const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.97");
-const IS_SIMULATION_ENABLED = process.env.SIMULATION_TRADE_ENABLED === 'true';
+const IS_SIMULATION_ENABLED = (process.env.SIMULATION_TRADE_ENABLED || '').trim() === 'true';
 const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v17.35.0
 
 const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
@@ -491,17 +491,17 @@ async function mainLoop() {
 
         // v17.51.0: Physical Heartbeat for PM2 Watchdog
         try {
-            fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ timestamp: now, version: 'v17.61.0' }));
+            fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ timestamp: now, version: 'v17.61.1' }));
         } catch (e) {
             console.error('[Heartbeat] Write failed:', e.message);
         }
         
         // v17.59.0: Ultra-High-Priority Resolution (Compound Engine)
-        // We resolve previous trades BEFORE any buy logic to maximize deployable capital
         const marketState = await getUnifiedMarketState('BTC');
         if (IS_SIMULATION_ENABLED && marketState) {
             await checkFastResolution(marketState.bSpot);
         }
+        const mv = marketState;
 
         // v17.22.17: Revert to START-time slot convention (Math.floor)
         // Variables slotStart et secondsLeft déjà définies au sommet du loop
