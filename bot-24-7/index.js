@@ -779,9 +779,19 @@ async function mainLoop() {
             }
         }
 
-        // v22.3.1: Dual-Source Price Decision (Dashboard-First)
-        const gammaPrice = side === 'YES' ? parseFloat(currentSig.priceYes || 0) : parseFloat(currentSig.priceNo || 0);
-        const dashboardPrice = gammaPrice;
+        // v22.3.4: Solid Dashboard Price Extraction
+        let dashboardPrice = 0;
+        try {
+            const rawPrices = currentSig.m?.outcomePrices;
+            if (rawPrices) {
+                const pArr = JSON.parse(rawPrices);
+                dashboardPrice = side === 'YES' ? parseFloat(pArr[0]) : parseFloat(pArr[1]);
+            }
+        } catch (e) {}
+
+        if (!dashboardPrice || isNaN(dashboardPrice)) {
+            dashboardPrice = side === 'YES' ? parseFloat(currentSig.priceUp || 0) : parseFloat(currentSig.priceDown || 0);
+        }
 
         console.log(`[Engine] ⚖️ Signal Price Sync: Dashboard=$${dashboardPrice.toFixed(3)} | Orderbook=$${bestAsk > 0 ? bestAsk.toFixed(3) : 'EMPTY'}`);
 
