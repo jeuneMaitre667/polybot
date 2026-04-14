@@ -29,7 +29,7 @@ if (proxyAgent) {
     // The SDK's http-helpers/index.js uses `axios({ method, url, ... })` without any agent.
     axios.defaults.httpsAgent = proxyAgent;
     axios.defaults.httpAgent = proxyAgent;
-    console.log(`[Dublin-Ghost] 🛡️ Global axios defaults set. All SDK requests routed through Dublin.`);
+    console.log(`[Dublin-Ghost] 🛡️🛰️⚓ Global axios defaults set. All SDK requests routed through Dublin.`);
 }
 
 
@@ -64,7 +64,7 @@ const fmt = (val, dec = 2) => (val !== null && val !== undefined && !isNaN(val))
 
 // --- ROBUSTNESS ---
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); });
-process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🔥 Critical Error:', err); });
+process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.error('🛡️⚓ Critical Error:', err); });
 
 // --- CONFIG ---
 // ---// v17.56.0: Removed fixed VIRTUAL_BALANCE constant in favor of dynamic getVirtualBalance()
@@ -186,7 +186,7 @@ async function checkFastResolution(currentPrice) {
             const isWin = pos.side === winningSide;
             
             const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
-            console.log(`[FastResolution] 🏁 Resolving ${pos.slug} | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
+            console.log(`[FastResolution] 🛡️⚓ Resolution Found for ${pos.slug} | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
             
             if (isWin) {
                 const payout = pos.amount;
@@ -194,13 +194,13 @@ async function checkFastResolution(currentPrice) {
                 const result = await updateVirtualBalance(payout);
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                 
-                console.log(`[FastResolution] 🏆 Compound Boost: +$${profitNet.toFixed(2)} | Capital Released: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🟢 *FAST COMPOUND* 💰\n\n• Profit: +$${profitNet.toFixed(2)} 💹\n• Solde actuel: $${finalBal.toFixed(2)} 💵\n• Source: ${strikeSource} ⚙️`);
+                console.log(`[FastResolution] 🛡️⚓ Compound Boost: +$${profitNet.toFixed(2)} | Capital Released: $${finalBal.toFixed(2)}`);
+                await sendTelegramAlert(`🛡️⚓ *FAST COMPOUND* 🛡️⚓\n\n• Profit: +$${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: $${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
             } else {
                 const result = await getVirtualBalance();
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
-                console.log(`[FastResolution] 🔴 Capital Fixed. Balance: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🛑 *FAST LOSS* 💀\n• Solde fixe: $${finalBal.toFixed(2)} 💵\n• Source: ${strikeSource} ⚙️`);
+                console.log(`[FastResolution] 🛡️⚓ Capital Fixed. Balance: $${finalBal.toFixed(2)}`);
+                await sendTelegramAlert(`🛡️⚓ *FAST LOSS* 🛡️⚓\n• Solde fixe: $${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
             }
             
             lastResolvedCids.add(pos.tokenId);
@@ -243,7 +243,7 @@ async function ensureClobClient() {
 
             const funderAddr = (process.env.CLOB_FUNDER_ADDRESS || wallet.address).trim();
             
-            console.log(`[Audit] 🛡️ Initializing CLOB Client:`);
+            console.log(`[Audit] 🛡️🛰️⚓ Initializing CLOB Client:`);
             console.log(`[Audit] • Signer EOA: ${wallet.address}`);
             console.log(`[Audit] • Funder: ${funderAddr}`);
             console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
@@ -253,7 +253,7 @@ async function ensureClobClient() {
             let proxyAgent = null;
             if (proxyUrl) {
                 proxyAgent = new HttpsProxyAgent(proxyUrl);
-                console.log(`[Audit] 🛡️ Shielding SDK with Irish Proxy tunnel...`);
+                console.log(`[Audit] 🛡️🛰️⚓ Shielding SDK with Irish Proxy tunnel...`);
             }
 
             // Shared config to avoid duplication
@@ -285,12 +285,12 @@ async function ensureClobClient() {
                 apiCreds = await tempClient.deriveApiKey();
                 console.log(`[Audit] • API Key derived: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
             } catch (deriveErr) {
-                console.warn(`[Audit] ⚠️ deriveApiKey failed: ${deriveErr.message}. Trying createOrDeriveApiKey...`);
+                console.warn(`[Audit] 🛡️🛰️⚓ deriveApiKey failed: ${deriveErr.message}. Trying createOrDeriveApiKey...`);
                 try {
                     apiCreds = await tempClient.createOrDeriveApiKey();
                     console.log(`[Audit] • API Key created: ${apiCreds.key ? apiCreds.key.substring(0, 8) + '...' : 'FAIL'}`);
                 } catch (createErr) {
-                    console.error(`[Audit] ❌ All API key methods failed: ${createErr.message}`);
+                    console.error(`[Audit] 🛡️⚠️ All API key methods failed: ${createErr.message}`);
                     throw createErr;
                 }
             }
@@ -301,11 +301,11 @@ async function ensureClobClient() {
             // Removed legacy monkey patch on getTickSize which broke order validation.
             clobClient.getFeeRate = async () => '1000'; // Kept fee patching to bypass 404 on unlisted markets
             
-            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
+            console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }
         return true;
     } catch (err) {
-        console.error(`[Self-Healing] ❌ FAILED to restore wallet:`, err.message);
+        console.error(`[Self-Healing] 🛡️⚠️ FAILED to restore wallet:`, err.message);
         return false;
     }
 }
@@ -315,7 +315,7 @@ async function ensureClobClient() {
  * Checks if the current IP/Proxy is authorized to trade on Polymarket.
  */
 async function validateGeoblockStatus() {
-    console.log(`[Geoblock] 🔍 Verifying Ghost-Shield integrity...`);
+    console.log(`[Geoblock] 🛡️🛰️⚓ Verifying Ghost-Shield integrity...`);
     try {
         // v22.5.1: Pre-Flight IP Verification (Absolute security)
         const proxyUrl = process.env.PROXY_URL;
@@ -327,15 +327,15 @@ async function validateGeoblockStatus() {
             }).catch(() => null);
             
             if (ipLookup && ipLookup.data && ipLookup.data.ip) {
-                console.log(`[Geoblock] 🕵️‍♂️ Bot Public IP: ${ipLookup.data.ip} (Dublin Tunnel Verified)`);
+                console.log(`[Geoblock] 🛡️🛰️⚓🛡️🛰️⚓ Bot Public IP: ${ipLookup.data.ip} (Dublin Tunnel Verified)`);
             } else {
-                console.warn(`[Geoblock] ⚠️ IP Lookup failed, but proceeding with caution...`);
+                console.warn(`[Geoblock] 🛡️🛰️⚓ IP Lookup failed, but proceeding with caution...`);
             }
         }
 
         // v21.3.0: We use a private authenticated endpoint that is strictly geoblocked for trading.
         await clobClient.getOpenOrders();
-        console.log(`[Geoblock] ✅ Access Authorized. Ready for trading.`);
+        console.log(`[Geoblock] 🛡️🛰️⚓ Access Authorized. Ready for trading.`);
         return true;
     } catch (err) {
         const isRestricted = err.message?.includes("restricted") || 
@@ -343,21 +343,21 @@ async function validateGeoblockStatus() {
                             err.response?.status === 403;
         
         if (isRestricted) {
-            const errorMsg = "🚨 GHOST-SHIELD FAILURE: Trading is restricted in your region. IP Leak detected!";
-            console.error(`[Geoblock] ❌ ERROR: ${errorMsg}`);
+            const errorMsg = "🛡️🛰️⚓ GHOST-SHIELD FAILURE: Trading is restricted in your region. IP Leak detected!";
+            console.error(`[Geoblock] 🛡️⚠️ ERROR: ${errorMsg}`);
             await sendTelegramAlert(errorMsg);
             return false;
         }
         
         // Other errors (auth, net) handled separately, but we still warn
-        console.warn(`[Geoblock] ⚠️ Warning during check:`, err.message);
+        console.warn(`[Geoblock] 🛡️🛰️⚓ Warning during check:`, err.message);
         return true; // We don't block for minor network issues here
     }
 }
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
+    console.log("=== 🛡️🛰️⚓ SNIPER BOT: v16.17.2 ENGINE ONLINE ===");
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
@@ -365,7 +365,7 @@ async function init() {
     // v17.36.0: Initialize RiskManager with Virtual or Real Balance
     const initialBal = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
     RiskManager.initSession(initialBal);
-    console.log(`[Init] 🏆 Risk Strategy: ${IS_SIMULATION_ENABLED ? 'LAB (Virtual $'+initialBal+')' : 'LIVE (Real)'}`);
+    console.log(`[Init] 🛡️🛰️⚓ Risk Strategy: ${IS_SIMULATION_ENABLED ? 'LAB (Virtual $' + initialBal + ')' : 'LIVE (Real)'}`);
 
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
@@ -385,7 +385,7 @@ async function init() {
     
     // Core Operational Loops (1Hz)
     // v22.0.0: Ghost Protocol Start
-    console.log(`[Ghost] 👻 Protocol Active | Initializing Stealth Engine...`);
+    console.log(`[Ghost] 🛡️🛰️⚓ Protocol Active | Initializing Stealth Engine...`);
     
     // Start the loops with organic timing
     setTimeout(scheduledMainLoop, getJitter(500, 100));
@@ -401,7 +401,7 @@ async function init() {
     setInterval(() => {
         const stallTime = Date.now() - lastPulseTime;
         if (stallTime > 60000) {
-            console.error(`[Watchdog] 💀 SILENT HANG DETECTED (${Math.floor(stallTime/1000)}s). Restarting...`);
+            console.error(`[Watchdog] 🛡️🛰️⚓ SILENT HANG DETECTED (${Math.floor(stallTime/1000)}s). Restarting...`);
             process.exit(1); // PM2 or Shell will restart it
         }
     }, 10000);
@@ -439,12 +439,12 @@ async function getUnifiedMarketState(asset = 'BTC') {
     if (effectiveStrike && effectiveStrike > 0 && bSpot > 0) {
         bDeltaPct = ((bSpot - effectiveStrike) / effectiveStrike) * 100;
     } else {
-        if (now % 60000 < 1000) console.warn(`[Lookup] ⚠️ Strike missing for ${asset} at ${slotStart}. Delta calculation suspended.`);
+        if (now % 60000 < 1000) console.warn(`[Lookup] 🛡️🛰️⚓ Strike missing for ${asset} at ${slotStart}. Delta calculation suspended.`);
     }
     
     // v24.2.4: Fast-Signal Detection (Log early even before trade window)
     if (Math.abs(bDeltaPct) > 0.05) {
-        process.stdout.write(`\r[SIGNAL] ⚡ Delta spike detected: ${bDeltaPct > 0 ? '+' : ''}${bDeltaPct.toFixed(3)}% | Time: ${new Date().toLocaleTimeString()}\n`);
+        process.stdout.write(`\r[SIGNAL] 🛡️🛰️⚓ Delta spike detected: ${bDeltaPct > 0 ? '+' : ''}${bDeltaPct.toFixed(3)}% | Time: ${new Date().toLocaleTimeString()}\n`);
     }
 
     return {
@@ -472,10 +472,11 @@ async function reportingLoop() {
             try {
                 const rpcUrl = PRIMARY_RPC;
                 const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, 137);
-                const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+                const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address owner) view returns (uint256)"], provider);
                 
+                const funder = process.env.CLOB_FUNDER_ADDRESS || wallet.address;
                 const [usdcRaw, maticRaw] = await Promise.all([
-                    usdc.balanceOf(process.env.CLOB_FUNDER_ADDRESS || wallet.address),
+                    usdc.balanceOf(funder),
                     provider.getBalance(wallet.address)
                 ]);
 
@@ -487,11 +488,10 @@ async function reportingLoop() {
                 if (!riskSessionInitialized && userBalance !== null) {
                     RiskManager.initSession(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance);
                     riskSessionInitialized = true;
-                    console.log(`[Risk] 💎 Session Baseline Locked: $${(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance).toFixed(2)}`);
+                    console.log(`[Risk] 🛡️🛰️⚓ Session Baseline Locked: ${(IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance).toFixed(2)}`);
                 }
             } catch (err) {
-                console.error('[Reporting] v21.4.0 RPC Error:', err.message);
-                // On next loop it will try again, possibly with null catch-all
+                console.error('[Reporting] v27.7.2 RPC Error:', err.message);
             }
         }
 
@@ -563,38 +563,26 @@ async function reportingLoop() {
                 if (priceDown > 0 && priceDown < 0.05 && priceUp === 0) priceUp = 0.99;
                 
                 // Final fallback only if both are empty (unlikely during active slot)
-                bestAskUp = priceUp || sig.priceUp || 0.5;
-                bestAskDown = priceDown || sig.priceDown || 0.5;
+                bestAskUp = priceUp || sig.priceYes || 0.5;
+                bestAskDown = priceDown || sig.priceNo || 0.5;
 
                 // v16.16.0: Active Stop Loss Monitoring
                 if (activePosition && activePosition.slotStart === slotStart) {
                     const currentPrice = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
-                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice)) {
-                        console.warn(`[Risk] 🚨 Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
-                        
-                        const pnlVal = ((currentPrice - activePosition.buyPrice) / activePosition.buyPrice * 100);
-                        const pnl = fmt(pnlVal, 2);
-                        const slMsg = `🚨 *STOP LOSS TRIGGERED* 🚨\n\n` +
-                                     `• Slot: ${activePosition.slotStart}\n` +
-                                     `• Side: ${activePosition.side}\n` +
-                                     `• Entry: $${activePosition.buyPrice}\n` +
-                                     `• Exit: $${currentPrice}\n` +
-                                     `• PnL: ${pnl}%\n` +
-                                     `• Status: Position Closed to Protect Capital`;
-                        
-                        sendTelegramAlert(slMsg);
+                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice) && !activePosition.isExiting) {
+                        console.warn(`[Risk] 🛡️🛰️⚓ Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
+                        activePosition.isExiting = true; // Prevents multiple alerts/attempts
 
                         try {
-                            const sellOrder = await clobClient.createOrder({
-                                token_id: activePosition.tokenId,
-                                price: currentPrice * 0.95, // Aggressive sell limit
-                                size: activePosition.amount,
-                                side: Side.SELL
+                            // v27.8: Unified Emergency Exit for SL (Message now sent inside function)
+                            await executeEmergencyExit({
+                                tokenId: activePosition.tokenId,
+                                currentPrice: currentPrice,
+                                pnlPct: pnlVal / 100
                             });
-                            console.log(`[Risk] Stop Loss Order Placed:`, sellOrder.orderID);
-                            activePosition = null; // Clear position after sell
                         } catch (err) {
                             console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
+                            activePosition.isExiting = false; // Reset on failure to allow retry in next tick
                         }
                     }
                 }
@@ -607,12 +595,12 @@ async function reportingLoop() {
                 
                 // v17.57.0: Unified Actionable Signals (Prob + Delta consistency)
                 const isDeltaMet = Math.abs(deltaPct) >= SNIPER_DELTA_THRESHOLD_PCT;
-                const upLabel = (bestAskUp > 0.80 && isDeltaMet && deltaPct > 0) ? '🟢 UP' : '⚪ UP';
-                const downLabel = (bestAskDown > 0.80 && isDeltaMet && deltaPct < 0) ? '🔴 DOWN' : '⚪ DOWN';
+                const upLabel = (bestAskUp > 0.80 && isDeltaMet && deltaPct > 0) ? '🛡️🛰️⚓ UP' : '🛡️🛰️⚓ UP';
+                const downLabel = (bestAskDown > 0.80 && isDeltaMet && deltaPct < 0) ? '🛡️🛰️⚓ DOWN' : '🛡️🛰️⚓ DOWN';
 
                 const displayBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
                 
-                // v17.39.12: Continuous Double-Strike TÃ©lÃ©mÃ©try
+                // v17.39.12: Continuous Double-Strike TryTryTry
                 // Prioritize active position strike, fallback to lookup, then signal's internal value
                 let polyStrike = activePosition?.officialStrike;
                 if (!polyStrike) {
@@ -724,10 +712,10 @@ async function mainLoop() {
             
             const hbBal = await updateVirtualBalance(0); // Force fresh check or return current
             const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : 0));
-            const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
-                          `• Window: OPEN ✅\n` +
-                          `• Capital: $${currentBal.toFixed(2)} 🏦\n` +
-                          `• Engine: READY ⚡`;
+            const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
+                          `• Window: OPEN 🛡️🛰️⚓\n` +
+                          `• Capital: $${currentBal.toFixed(2)} 🛡️🛰️⚓\n` +
+                          `• Engine: READY 🛡️🛰️⚓`;
             
             const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
             const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
@@ -802,8 +790,8 @@ async function mainLoop() {
         const side = bDeltaPct > 0 ? 'YES' : 'NO';
         
         // v17.22.13: FORCED REAL-TIME DEPTH (Eliminate 3s Health-Sync Lag)
-        // D'Ã¨s que le signal Binance est bon, on va chercher le prix REEL sur l'Orderbook
-        console.log(`[Engine] 🔍 Binance Signal Met (${fmt(bDeltaPct, 3)}%). Checking Polymarket Depth for ${side}...`);
+        // Dès que le signal Binance est bon, on va chercher le prix REEL sur l'Orderbook
+        console.log(`[Engine] 🛡️🛰️⚓ Binance Signal Met (${fmt(bDeltaPct, 3)}%). Checking Polymarket Depth for ${side}...`);
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
@@ -822,7 +810,7 @@ async function mainLoop() {
         
         // v17.22.15: Strict Token Validation
         if (!tokenId || String(tokenId).length < 20 || !/^\d+$/.test(String(tokenId))) {
-            console.error(`[Engine] ❌ CRITICAL: Invalid Token ID detected for ${side}: "${tokenId}" (Market: ${currentSig?.slug || 'Unknown'})`);
+            console.error(`[Engine] 🛡️⚠️ CRITICAL: Invalid Token ID detected for ${side}: "${tokenId}" (Market: ${currentSig?.slug || 'Unknown'})`);
             return;
         }
 
@@ -843,7 +831,7 @@ async function mainLoop() {
         if (bestAsk === 0) {
             const gammaPrice = side === 'YES' ? parseFloat(currentSig.priceYes || 0) : parseFloat(currentSig.priceNo || 0);
             if (gammaPrice > 0) {
-                console.log(`[Engine] ⚠️ Orderbook empty. Using Gamma Fallback: $${gammaPrice}`);
+                console.log(`[Engine] 🛡️🛰️⚓ Orderbook empty. Using Gamma Fallback: $${gammaPrice}`);
                 bestAsk = gammaPrice;
             }
         }
@@ -855,7 +843,7 @@ async function mainLoop() {
         // We prioritize live orderbook, but fallback to dashboard if book is thin
         const dashboardPrice = (liveClobPrice > 0) ? liveClobPrice : staleGammaPrice;
 
-        console.log(`[Engine] ⚖️ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
+        console.log(`[Engine] 🛡️🛰️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
 
         // v22.4.1: CRITICAL TRIGGER DECISION (Non-blocking fallback)
         if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
@@ -869,7 +857,7 @@ async function mainLoop() {
 
         // v17.75.0: Final Wallet Integrity Check relative to current tir
         if (!(await ensureClobClient())) {
-            console.error("[Engine] ❌ SKIP: Wallet not ready despite self-healing attempt.");
+            console.error("[Engine] 🛡️⚠️ SKIP: Wallet not ready despite self-healing attempt.");
             sendTelegramAlert("🚨 *WALLET ERROR*: Sniper skipped trade due to client amnesia.");
             return;
         }
@@ -916,7 +904,7 @@ async function mainLoop() {
         console.log(`[Engine] 🎯 Sniper Triggered! Dashboard=$${dashboardPrice.toFixed(3)} | BestAsk=$${executionPrice.toFixed(3)} | Side:${side} | Size:$${tradeAmountUsd.toFixed(2)}`);
         
         // v17.29.5: High visibility on target market expiration
-        console.log(`[Engine] 🛡️ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Ends: ${currentSig.m?.endDate} | Side: ${side}`);
+        console.log(`[Engine] 🛡️🛰️⚓ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Ends: ${currentSig.m?.endDate} | Side: ${side}`);
 
         // Mark slot as processed (v17.54.0 Persistent)
         lastExecutedSlot = slotStart;
@@ -948,11 +936,11 @@ async function mainLoop() {
                 try {
                     tSize = await clobClient.getTickSize(tokenId) || "0.01";
                     if (Number(tSize) >= 1) {
-                        console.warn(`[Engine] ⚠️ Warning: API returned erroneous tickSize ${tSize}. Forcing to 0.01.`);
+                        console.warn(`[Engine] 🛡️🛰️⚓ Warning: API returned erroneous tickSize ${tSize}. Forcing to 0.01.`);
                         tSize = "0.01";
                     }
                 } catch (e) {
-                    console.warn(`[Engine] ⚠️ Tick lookup failed, using fallback: ${tSize}`);
+                    console.warn(`[Engine] 🛡️🛰️⚓ Tick lookup failed, using fallback: ${tSize}`);
                 }
 
                 // v25.3.0: Surgical Price Rounding & Boundary Shield
@@ -989,10 +977,10 @@ async function mainLoop() {
                 }
             } catch (err) {
                 const errorData = err.response?.data?.error || err.message;
-                console.error(`[Engine] ❌ SDK EXECUTION FAILED:`, errorData);
+                console.error(`[Engine] 🛡️⚠️ SDK EXECUTION FAILED:`, errorData);
                 
                 if (err.response?.status === 403) {
-                    console.error(`[Engine] 🧱 Geoblock persistent. Proxy Ireland check required.`);
+                    console.error(`[Engine] 🛡️🛰️⚓ Geoblock persistent. Proxy Ireland check required.`);
                 }
                 
                 sendTelegramAlert(`🚨 *OFFICIAL SDK ERROR*\nOrder failed for ${side}: ${errorData}`);
@@ -1045,7 +1033,9 @@ async function mainLoop() {
                 console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${finalBal.toFixed(2)}`);
             } else {
                 const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                                `• Price: $${bestAsk}\n• Size: $${tradeAmountUsd.toFixed(2)}`;
+                                `• Price: $${bestAsk}\n` +
+                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
+                                `• Latency: ${totalLatency}ms ⚡`;
                 sendTelegramAlert(entryMsg);
             }
 
@@ -1198,7 +1188,7 @@ async function performanceLoop() {
                                 }
                             }
 
-                            lastResolvedCids.add(pos.tokenId);
+                            lastResolvedCid = pos.tokenId;
                             positions.splice(i, 1);
                             changed = true;
                         }
@@ -1224,7 +1214,7 @@ async function performanceLoop() {
  */
 async function executeRedeemOnChain(conditionId) {
     try {
-        console.log(`[Redeem] 🛡️ Starting GASLESS redemption for ${conditionId}...`);
+        console.log(`[Redeem] 🛡️🛰️⚓ Starting GASLESS redemption for ${conditionId}...`);
         
         const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
         const signerAddress = wallet.address;
@@ -1320,13 +1310,13 @@ async function executeRedeemOnChain(conditionId) {
 
         if (submitRes.data && (submitRes.data.transactionHash || submitRes.data.hash)) {
             const txHash = submitRes.data.transactionHash || submitRes.data.hash;
-            console.log(`[Relayer] ✅ Redeem transaction submitted: ${txHash}`);
+            console.log(`[Relayer] 🛡️🛰️⚓ Redeem transaction submitted: ${txHash}`);
         } else {
-            console.warn(`[Relayer] ⚠️ Redeem submitted but response structure unexpected: ${JSON.stringify(submitRes.data)}`);
+            console.warn(`[Relayer] 🛡️🛰️⚓ Redeem submitted but response structure unexpected: ${JSON.stringify(submitRes.data)}`);
         }
 
     } catch (err) {
-        console.error(`[Redeem] ❌ Relayer Error:`, err.response?.data || err.message);
+        console.error(`[Redeem] 🛡️⚠️ Relayer Error:`, err.response?.data || err.message);
     }
 }
 
@@ -1336,6 +1326,7 @@ async function executeRedeemOnChain(conditionId) {
  */
 async function executeEmergencyExit(info) {
     try {
+        const exitStart = Date.now();
         console.log(`[Emergency] 🚨 EXECUTION: Handling exit for ${info.tokenId}...`);
         
         // Fetch current quantity from active position
@@ -1379,7 +1370,7 @@ async function executeEmergencyExit(info) {
         const priceResp = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC", { timeout: 8000 });
         const currentSpot = parseFloat(priceResp.data.price);
 
-        console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
+        console.log(`[Emergency] 🛡️🛰️⚓ Sending SELL order to CLOB for ${pos.tokenId}...`);
         await ensureClobClient(); // Safety first
         
         // v17.95.0: Triple-check input validity for emergency exit
@@ -1439,21 +1430,23 @@ async function executeEmergencyExit(info) {
                 await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
                 SLSentinel.stopMonitoring();
                 
+                const exitLatency = Date.now() - exitStart;
                 const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                                 `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                                 `• Prix Sortie: $${info.currentPrice}\n` +
+                                `• Latence: ${exitLatency}ms ⚡\n` +
                                 `• Statut: Sécurisé (Official SDK)`;
                 
                 await sendTelegramAlert(exitMsg);
             }
         } catch (err) {
-            console.error(`[Emergency] ❌ SDK Exit Failed:`, err.message);
+            console.error(`[Emergency] 🛡️⚠️ SDK Exit Failed:`, err.message);
             throw err;
         }
 
     } catch (err) {
-        console.error(`[Emergency] ❌ Exit Process Failed:`, err.message);
-        await sendTelegramAlert(`❌ *ERREUR SORTIE D'URGENCE*\nLe bot n'a pas pu sortir : ${err.message}`);
+        console.error(`[Emergency] 🛡️⚠️ Exit Process Failed:`, err.message);
+        await sendTelegramAlert(`🛡️⚠️ *ERREUR SORTIE D'URGENCE*\nLe bot n'a pas pu sortir : ${err.message}`);
     }
 }
 
@@ -1488,6 +1481,6 @@ init().then(async () => {
     // Refresh every 12 hours
     setInterval(() => timeKeeper.sync(), 12 * 60 * 60 * 1000);
 }).catch(err => {
-    console.error("💀 v17.10.0 FATAL:", err.message);
+    console.error("🛡️⚠️ v17.10.0 FATAL:", err.message);
     process.exit(1);
 });
