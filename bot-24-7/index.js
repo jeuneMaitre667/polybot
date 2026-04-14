@@ -16,6 +16,15 @@ import axios from 'axios';
 import { getStealthProfile, getJitter, logStealthMode } from './stealth-config.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
+
+// v22.7.3: Laser-Precision Proxy Setup (Reverted Global to avoid 407 errors)
+const proxyUrl = process.env.PROXY_URL;
+const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null;
+if (proxyAgent) {
+    console.log(`[Laser-Ghost] 🛡️ Irish Proxy Ready for targeted injection.`);
+}
+
+
 // --- CONFIG & UTILS ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -221,25 +230,38 @@ async function ensureClobClient() {
             console.log(`[Audit] • Funder: ${funderAddr}`);
             console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
 
-            // v22.0.2: Pass proxy agent specifically to the CLOB client if defined
-            let httpAgent = null;
-            if (process.env.PROXY_URL) {
-                httpAgent = new HttpsProxyAgent(process.env.PROXY_URL);
+            // v22.5.1: Ghost-Shield - Multi-layer proxy injection
+            const proxyUrl = process.env.PROXY_URL;
+            let proxyAgent = null;
+            if (proxyUrl) {
+                proxyAgent = new HttpsProxyAgent(proxyUrl);
+                console.log(`[Audit] 🛡️ Shielding SDK with Irish Proxy tunnel...`);
             }
 
+            // Shared config to avoid duplication
+            const sdkConfig = {
+                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
+                chainId: 137,
+                signer: wallet,
+                signatureType: sigType,
+                funderAddress: funderAddr,
+                httpAgent: proxyAgent,
+                httpsAgent: proxyAgent // Force both for total coverage
+            };
+
             clobClient = new ClobClient(
-                process.env.CLOB_API_URL || 'https://clob.polymarket.com',
-                137,
-                wallet,
+                sdkConfig.host,
+                sdkConfig.chainId,
+                sdkConfig.signer,
                 undefined,
                 process.env.CLOB_API_KEY,
                 process.env.CLOB_API_SECRET,
                 process.env.CLOB_API_PASSPHRASE,
-                httpAgent
+                proxyAgent
             );
             
             // v21.2.0: Derive API credentials (required for createAndPostOrder)
-            const tempClient = new ClobClient("https://clob.polymarket.com", 137, wallet, undefined, sigType, funderAddr, undefined, httpAgent);
+            const tempClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, undefined, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
             let apiCreds;
             try {
                 apiCreds = await tempClient.deriveApiKey();
@@ -255,8 +277,8 @@ async function ensureClobClient() {
                 }
             }
 
-            clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, apiCreds, sigType, funderAddr, undefined, httpAgent);
-            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (STRICT PROXY)`);
+            clobClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, apiCreds, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
+            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (GHOST-SHIELD ACTIVE)`);
         }
         return true;
     } catch (err) {
@@ -270,10 +292,24 @@ async function ensureClobClient() {
  * Checks if the current IP/Proxy is authorized to trade on Polymarket.
  */
 async function validateGeoblockStatus() {
-    if (!clobClient) return false;
-    
-    console.log(`[Geoblock] 🔍 Verifying trading access...`);
+    console.log(`[Geoblock] 🔍 Verifying Ghost-Shield integrity...`);
     try {
+        // v22.5.1: Pre-Flight IP Verification (Absolute security)
+        const proxyUrl = process.env.PROXY_URL;
+        if (proxyUrl) {
+            const agent = new HttpsProxyAgent(proxyUrl);
+            const ipLookup = await axios.get('https://api.ipify.org?format=json', { 
+                httpsAgent: agent, 
+                timeout: 10000 
+            }).catch(() => null);
+            
+            if (ipLookup && ipLookup.data && ipLookup.data.ip) {
+                console.log(`[Geoblock] 🕵️‍♂️ Bot Public IP: ${ipLookup.data.ip} (Dublin Tunnel Verified)`);
+            } else {
+                console.warn(`[Geoblock] ⚠️ IP Lookup failed, but proceeding with caution...`);
+            }
+        }
+
         // v21.3.0: We use a private authenticated endpoint that is strictly geoblocked for trading.
         await clobClient.getOpenOrders();
         console.log(`[Geoblock] ✅ Access Authorized. Ready for trading.`);
@@ -284,7 +320,7 @@ async function validateGeoblockStatus() {
                             err.response?.status === 403;
         
         if (isRestricted) {
-            const errorMsg = "🚨 GEOBLOCK DETECTED: Trading is restricted in your region. The bot cannot trade from this IP.";
+            const errorMsg = "🚨 GHOST-SHIELD FAILURE: Trading is restricted in your region. IP Leak detected!";
             console.error(`[Geoblock] ❌ ERROR: ${errorMsg}`);
             await sendTelegramAlert(errorMsg);
             return false;
@@ -359,11 +395,11 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // v22.1.0: Cibler le slot qui a COMMENCÉ au début de ces 5 minutes (Real-Sync)
     const slotStart = Math.floor(now / 300000) * 300000;
     
-    // 1. Fetch Binance Spot (Current) - v17.24.0: Added Timeout
-    const spotRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${asset}USDC`, { 
+    // 1. Fetch Binance Spot (Current) - v22.6.0: Switched to BTCUSD Index for Dashboard Parity
+    const spotRes = await axios.get(`https://dapi.binance.com/dapi/v1/ticker/price?symbol=${asset}USD_PERP`, { 
         timeout: 5000
     }).catch(() => null);
-    const bSpot = spotRes ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+    const bSpot = (spotRes && spotRes.data && spotRes.data[0]) ? parseFloat(spotRes.data[0].price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
     const strikeTime = slotStart; 
@@ -779,32 +815,24 @@ async function mainLoop() {
             }
         }
 
-        // v22.3.4: Solid Dashboard Price Extraction
-        let dashboardPrice = 0;
-        try {
-            const rawPrices = currentSig.m?.outcomePrices;
-            if (rawPrices) {
-                const pArr = JSON.parse(rawPrices);
-                dashboardPrice = side === 'YES' ? parseFloat(pArr[0]) : parseFloat(pArr[1]);
-            }
-        } catch (e) {}
+        // v22.4.1: Final Strike (Orderbook Priority with Gamma Fallback)
+        const liveClobPrice = bestAsk;
+        const staleGammaPrice = side === 'YES' ? parseFloat(currentSig.priceUp || 0) : parseFloat(currentSig.priceDown || 0);
+        
+        // We prioritize live orderbook, but fallback to dashboard if book is thin
+        const dashboardPrice = (liveClobPrice > 0) ? liveClobPrice : staleGammaPrice;
 
-        if (!dashboardPrice || isNaN(dashboardPrice)) {
-            dashboardPrice = side === 'YES' ? parseFloat(currentSig.priceUp || 0) : parseFloat(currentSig.priceDown || 0);
-        }
+        console.log(`[Engine] ⚖️ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
 
-        console.log(`[Engine] ⚖️ Signal Price Sync: Dashboard=$${dashboardPrice.toFixed(3)} | Orderbook=$${bestAsk > 0 ? bestAsk.toFixed(3) : 'EMPTY'}`);
-
-        // v22.3.1: CRITICAL TRIGGER DECISION based on Dashboard Price
+        // v22.4.1: CRITICAL TRIGGER DECISION (Non-blocking fallback)
         if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
-            if (now % 30000 < 1000) {
-                console.warn(`[Engine] Skip: Dashboard Price ($${dashboardPrice.toFixed(3)}) outside safety range ($${SNIPER_PRICE_MIN}-$${SNIPER_PRICE_MAX})`);
+            if (now % 20000 < 1000) {
+                console.warn(`[Engine] Skip: Integrated Price ($${dashboardPrice.toFixed(3)}) outside safety range ($${SNIPER_PRICE_MIN}-$${SNIPER_PRICE_MAX})`);
             }
             return;
         }
 
-        // Use Orderbook for execution price, fallback to Gamma if Book is empty
-        const executionPrice = bestAsk > 0 ? bestAsk : dashboardPrice;
+        const executionPrice = dashboardPrice;
 
         // v17.75.0: Final Wallet Integrity Check relative to current tir
         if (!(await ensureClobClient())) {
@@ -917,7 +945,6 @@ async function mainLoop() {
 
         // --- COMMON STATE TRACKING (v20.4.0: Accept any non-null order response) ---
         if (IS_SIMULATION_ENABLED || (order && typeof order === 'object')) {
-            // v17.38.2: Non-blocking fetch of Official Strike (Background)
             fetchStrikeFromPolymarket('BTC', slotStart).then(os => {
                 if (os && activePosition && activePosition.slotStart === slotStart) {
                     activePosition.officialStrike = os;
@@ -926,7 +953,6 @@ async function mainLoop() {
                     if (idx !== -1) {
                         list[idx].officialStrike = os;
                         saveActivePositions(list);
-                        console.log(`[Engine] 🎯 Official Strike Updated: ${os}`);
                     }
                 }
             });

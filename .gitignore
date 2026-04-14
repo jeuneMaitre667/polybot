@@ -20,6 +20,11 @@ public/data/*.json
 .env.*
 !.env.example
 *.pem
+*.key
+*.ppk
+*_keys/
+lightsail-keys/
+.antigravity*
 
 # Editor directories and files
 .vscode/*
