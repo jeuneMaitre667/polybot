@@ -131,26 +131,38 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
     return null;
 };
 
+// v24.2.4: High-Speed Memory Cache (Zero Disk Lag)
+const binanceStrikeCache = {};
+
 /**
  * getBinanceStrike(asset, startTime)
  * v2025 : Récupère le prix d'ouverture Binance.
- * v2025.1 : Ajout d'un fallback REST pour backfill l'opening si le worker a raté le slot.
+ * v24.2.4 : Cache RAM pour éliminer la latence disque des scans 1Hz.
  */
 export const getBinanceStrike = async (asset, startTime) => {
+    const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
+    const cleanAsset = asset.trim().toUpperCase();
+    const cacheKey = `${ms}_${cleanAsset}`;
+
+    // 1. Check RAM first (Fastest)
+    if (binanceStrikeCache[cacheKey]) return binanceStrikeCache[cacheKey];
+
     try {
         const filePath = path.join(process.cwd(), 'binance-strikes.json');
         const data = safeReadJson(filePath);
-        const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
         
-        if (data && data[asset]) {
-            const match = data[asset].find(p => Math.abs(p.at - ms) < 10000);
-            if (match) return match.price;
+        if (data && data[cleanAsset]) {
+            const match = data[cleanAsset].find(p => Math.abs(p.at - ms) < 10000);
+            if (match) {
+                binanceStrikeCache[cacheKey] = match.price; // Hydrate cache
+                return match.price;
+            }
         }
 
         // --- FALLBACK: Backfill via Binance Klines API ---
         console.log(`[Strike] [BACKFILL] Fetching ${asset} open price (USDC) for ${new Date(ms).toISOString()}...`);
-        const symbol = `${asset.trim().toUpperCase()}USDC`;
-        const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 5000 }); // v17.24.0: Added Timeout
+        const symbol = `${cleanAsset}USDC`;
+        const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 5000 });
         
         if (res.data && res.data[0]) {
             const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
@@ -158,10 +170,11 @@ export const getBinanceStrike = async (asset, startTime) => {
             
             // v24.2.0: PERSISTENCE - Don't ask again!
             const currentData = safeReadJson(filePath);
-            if (!currentData[asset]) currentData[asset] = [];
-            currentData[asset].push({ at: ms, price: openPrice });
+            if (!currentData[cleanAsset]) currentData[cleanAsset] = [];
+            currentData[cleanAsset].push({ at: ms, price: openPrice });
             atomicWriteJson(filePath, currentData);
             
+            binanceStrikeCache[cacheKey] = openPrice; // Save in cache
             return openPrice;
         }
     } catch (e) {

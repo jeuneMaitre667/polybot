@@ -392,7 +392,7 @@ async function init() {
     console.log(`[Ghost] 👻 Protocol Active | Initializing Stealth Engine...`);
     
     // Start the loops with organic timing
-    setTimeout(scheduledMainLoop, getJitter(1000, 200));
+    setTimeout(scheduledMainLoop, getJitter(500, 100));
     setInterval(reportingLoop, 1000);
     setInterval(performanceLoop, 10000); // v24.1.4: 6x faster resolution check (10s)
     
@@ -446,6 +446,11 @@ async function getUnifiedMarketState(asset = 'BTC') {
         if (now % 60000 < 1000) console.warn(`[Lookup] ⚠️ Strike missing for ${asset} at ${slotStart}. Delta calculation suspended.`);
     }
     
+    // v24.2.4: Fast-Signal Detection (Log early even before trade window)
+    if (Math.abs(bDeltaPct) > 0.05) {
+        process.stdout.write(`\r[SIGNAL] ⚡ Delta spike detected: ${bDeltaPct > 0 ? '+' : ''}${bDeltaPct.toFixed(3)}% | Time: ${new Date().toLocaleTimeString()}\n`);
+    }
+
     return {
         asset,
         slotStart,
@@ -702,7 +707,7 @@ async function scheduledMainLoop() {
     } catch (err) {
         console.error(`[Ghost] Main loop catch:`, err.message);
     } finally {
-        const jitter = getJitter(1000, 400);
+        const jitter = getJitter(500, 100);
         setTimeout(scheduledMainLoop, jitter);
     }
 }
