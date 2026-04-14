@@ -515,6 +515,8 @@ async function reportingLoop() {
 
         if (sig) {
             try {
+                let bestBidUp = 0;
+                let bestBidDown = 0;
                 let priceUp = 0;
                 let priceDown = 0;
 
@@ -523,7 +525,7 @@ async function reportingLoop() {
                     stealthOpts.proxyUrl = process.env.PROXY_URL;
                 }
                 
-                // 1. Fetch Real UP Ask via Stealth Got
+                // 1. Fetch Real UP Bids/Asks via Stealth Got
                 if (sig.tokenIdYes) {
                     const bookUrl = `https://clob.polymarket.com/book?token_id=${sig.tokenIdYes}`;
                     const res = await gotScraping.get(bookUrl, {
@@ -533,14 +535,19 @@ async function reportingLoop() {
                     if (res) {
                         const book = res.body;
                         const asks = book?.asks || [];
+                        const bids = book?.bids || [];
                         if (asks.length > 0) {
                             const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
                             if (prices.length > 0) priceUp = Math.min(...prices);
                         }
+                        if (bids.length > 0) {
+                            const bPrices = bids.map(b => parseFloat(b.price)).filter(p => p > 0.001);
+                            if (bPrices.length > 0) bestBidUp = Math.max(...bPrices);
+                        }
                     }
                 }
 
-                // 2. Fetch Real DOWN Ask via Stealth Got
+                // 2. Fetch Real DOWN Bids/Asks via Stealth Got
                 if (sig.tokenIdNo) {
                     const bookUrl = `https://clob.polymarket.com/book?token_id=${sig.tokenIdNo}`;
                     const res = await gotScraping.get(bookUrl, {
@@ -550,15 +557,19 @@ async function reportingLoop() {
                     if (res) {
                         const book = res.body;
                         const asks = book?.asks || [];
+                        const bids = book?.bids || [];
                         if (asks.length > 0) {
                             const prices = asks.map(a => parseFloat(a.price)).filter(p => p < 0.999);
                             if (prices.length > 0) priceDown = Math.min(...prices);
+                        }
+                        if (bids.length > 0) {
+                            const bPrices = bids.map(b => parseFloat(b.price)).filter(p => p > 0.001);
+                            if (bPrices.length > 0) bestBidDown = Math.max(...bPrices);
                         }
                     }
                 }
 
                 // v17.3.5: Extreme Price Calibration (Cross-Inference)
-                // If one side has 0 liquidity but the other is extremely cheap, infer the expensive side
                 if (priceUp > 0 && priceUp < 0.05 && priceDown === 0) priceDown = 0.99;
                 if (priceDown > 0 && priceDown < 0.05 && priceUp === 0) priceUp = 0.99;
                 
@@ -566,23 +577,30 @@ async function reportingLoop() {
                 bestAskUp = priceUp || sig.priceYes || 0.5;
                 bestAskDown = priceDown || sig.priceNo || 0.5;
 
-                // v16.16.0: Active Stop Loss Monitoring
+                // Sync Bids if book was empty
+                if (bestBidUp === 0) bestBidUp = Math.max(0.01, bestAskUp - 0.01);
+                if (bestBidDown === 0) bestBidDown = Math.max(0.01, bestAskDown - 0.01);
+
+                // v16.16.0: Active Stop Loss Monitoring (Precision Bid-Based)
                 if (activePosition && activePosition.slotStart === slotStart) {
-                    const currentPrice = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
-                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentPrice) && !activePosition.isExiting) {
-                        console.warn(`[Risk] 🛡️🛰️⚓ Stop Loss Triggered for ${activePosition.side}! Executing SELL...`);
-                        activePosition.isExiting = true; // Prevents multiple alerts/attempts
+                    // v28.0: TRIGGER ON BID (Real sell price)
+                    const currentBid = activePosition.side === 'YES' ? bestBidUp : bestBidDown;
+                    const currentAsk = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
+                    
+                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentBid) && !activePosition.isExiting) {
+                        console.warn(`[Risk] 🛡️🛰️⚓ Stop Loss Triggered! Bid:$${currentBid} (Ask:$${currentAsk}) | Exiting...`);
+                        activePosition.isExiting = true; 
 
                         try {
-                            // v27.8: Unified Emergency Exit for SL (Message now sent inside function)
+                            const pnlVal = ((currentBid - activePosition.buyPrice) / activePosition.buyPrice * 100);
                             await executeEmergencyExit({
                                 tokenId: activePosition.tokenId,
-                                currentPrice: currentPrice,
+                                currentPrice: currentBid,
                                 pnlPct: pnlVal / 100
                             });
                         } catch (err) {
                             console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
-                            activePosition.isExiting = false; // Reset on failure to allow retry in next tick
+                            activePosition.isExiting = false; 
                         }
                     }
                 }
@@ -1394,22 +1412,22 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v27.9: Aggressive Sweep Price logic.
-                // Selling much lower than current market ensures we eat the best available bids 
-                // and get filled instantly even during a fast dump. 🛡️🛰️⚓
+                // v28.0: Precision SL Exit logic.
+                // We use a tight 0.5% buffer against the Best Bid to ensure immediate execution 
+                // without distorted strategy prices. 🛡️🛰️⚓
                 const eDivisor = 1 / parseFloat(emergencyTickSize);
                 const eRounded = Math.round(safePrice * eDivisor) / eDivisor;
                 const eFinalPrice = Math.min(parseFloat(eRounded.toFixed(4)), 0.99);
                 
-                // Sweep price: 20% below current price or $0.05 minimum to ensure total priority.
-                const sweepPrice = Math.max(0.05, parseFloat((eFinalPrice * 0.80).toFixed(4)));
+                // Tight Sell Price: 0.5% below trigger price (Bid) instead of aggressive sweep.
+                const tightPrice = Math.max(0.01, parseFloat((eFinalPrice * 0.995).toFixed(4)));
                 
-                console.log(`[Emergency] 🎯 Sweep Price Active: Target=$${info.currentPrice} -> OrderPrice=$${sweepPrice} (Guaranteeing Fill)`);
+                console.log(`[Emergency] 🎯 Precision Exit Active: Target=$${info.currentPrice} -> OrderPrice=$${tightPrice} (Surgical Fill)`);
 
                 const response = await clobClient.createAndPostOrder(
                     {
                         tokenID: pos.tokenId,
-                        price: sweepPrice,
+                        price: tightPrice,
                         size: safeQty,
                         side: pos.side === 'YES' ? Side.SELL : Side.BUY
                     },
