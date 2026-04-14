@@ -109,16 +109,24 @@ let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
  * v22.8.0: Manual CLOB Header Generator
  * Bypasses SDK to ensure 100% proxy tunneling and zero IP leaks.
  */
-function createClobHeaders(method, path, body, creds) {
+function createClobHeaders(method, path, body, creds, userAddress) {
     const timestamp = Math.floor(Date.now() / 1000);
+    const message = timestamp + method + path + body;
+    
+    // Create standard HMAC signature
     const sig = crypto.createHmac('sha256', Buffer.from(creds.secret, 'base64'))
-        .update(timestamp + method + path + body)
+        .update(message)
         .digest('base64');
+    
+    // Convert to URL-safe base64 (Polymarket Standard)
+    const sigUrlSafe = sig.replace(/\+/g, '-').replace(/\//g, '_');
+    
     return {
+        'POLY_ADDRESS': userAddress,
         'POLY_API_KEY': creds.key,
         'POLY_PASSPHRASE': creds.passphrase,
         'POLY_TIMESTAMP': String(timestamp),
-        'POLY_SIGNATURE': sig,
+        'POLY_SIGNATURE': sigUrlSafe,
         'Content-Type': 'application/json'
     };
 }
@@ -975,7 +983,7 @@ async function mainLoop() {
                 // v23.0.0: Strict Proxy Header Auth Forge
                 const targetPath = '/order';
                 const bodyStr = JSON.stringify(orderPayload);
-                const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
+                const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds, wallet.address);
 
                 console.log(`[Manual-Post] 🛰️ Sending signed payload via Dublin Tunnel (Axios Forced)...`);
                 const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
@@ -1236,7 +1244,8 @@ async function executeRedeemOnChain(conditionId) {
 
         // 1. Get Nonce from Relayer
         const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, {
-            proxy: process.env.PROXY_URL ? { host: new URL(process.env.PROXY_URL).hostname, port: new URL(process.env.PROXY_URL).port } : false
+            httpsAgent: proxyAgent,
+            timeout: 10000
         });
         const nonce = nonceRes.data.nonce;
         console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
@@ -1312,7 +1321,9 @@ async function executeRedeemOnChain(conditionId) {
             headers: {
                 'RELAYER_API_KEY': apiKey,
                 'RELAYER_API_KEY_ADDRESS': signerAddress
-            }
+            },
+            httpsAgent: proxyAgent,
+            timeout: 15000
         });
 
         if (submitRes.data && submitRes.data.transactionHash) {
@@ -1473,7 +1484,10 @@ async function fetchStrikeFromPolymarket(asset, slotStartMs) {
     try {
         const slotSec = Math.floor(slotStartMs / 1000);
         const url = `https://gamma-api.polymarket.com/events?slug=btc-updown-5m-${slotSec}`;
-        const res = await axios.get(url, { timeout: 5000 });
+        const res = await axios.get(url, { 
+            httpsAgent: proxyAgent,
+            timeout: 5000 
+        });
         if (res.data && res.data[0] && res.data[0].markets) {
             const m = res.data[0].markets[0];
             const strike = m?.eventMetadata?.priceToBeat;
