@@ -1412,58 +1412,70 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v28.0: Precision SL Exit logic.
-                // We use a tight 0.5% buffer against the Best Bid to ensure immediate execution 
-                // without distorted strategy prices. 🛡️🛰️⚓
-                const eDivisor = 1 / parseFloat(emergencyTickSize);
-                const eRounded = Math.round(safePrice * eDivisor) / eDivisor;
-                const eFinalPrice = Math.min(parseFloat(eRounded.toFixed(4)), 0.99);
-                
-                // Tight Sell Price: 0.5% below trigger price (Bid) instead of aggressive sweep.
-                const tightPrice = Math.max(0.01, parseFloat((eFinalPrice * 0.995).toFixed(4)));
-                
-                console.log(`[Emergency] 🎯 Precision Exit Active: Target=$${info.currentPrice} -> OrderPrice=$${tightPrice} (Surgical Fill)`);
+                // v29.1: Aggressive Flash Retry Policy (4 attempts)
+                let success = false;
+                const buffers = [0.01, 0.025, 0.05, 0.075]; // -1%, -2.5%, -5%, -7.5%
+                for (let attempt = 1; attempt <= 4; attempt++) {
+                    const priceBuffer = 1 - buffers[attempt - 1];
+                    const tightPrice = Math.max(0.01, parseFloat((eFinalPrice * priceBuffer).toFixed(4)));
+                    
+                    console.log(`[Emergency] 🚀 Attempt ${attempt}/4 | Price: $${tightPrice} (Buffer: -${(buffers[attempt-1]*100).toFixed(1)}%)`);
 
-                const response = await clobClient.createAndPostOrder(
-                    {
-                        tokenID: pos.tokenId,
-                        price: tightPrice,
-                        size: safeQty,
-                        side: pos.side === 'YES' ? Side.SELL : Side.BUY
-                    },
-                    {
-                        tickSize: emergencyTickSize,
-                        negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
-                    },
-                    OrderType.FOK 
-                );
+                    try {
+                        const response = await clobClient.createAndPostOrder(
+                            {
+                                tokenID: pos.tokenId,
+                                price: tightPrice,
+                                size: safeQty,
+                                side: pos.side === 'YES' ? Side.SELL : Side.BUY
+                            },
+                            {
+                                tickSize: emergencyTickSize,
+                                negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
+                            },
+                            OrderType.FOK 
+                        );
 
-            if (response && response.orderID) {
-                console.log(`[Emergency] ✅ OFFICIAL EXIT ACCEPTED: ${response.orderID}`);
-                
-                Analytics.recordTrade({
-                    asset: pos.asset || 'BTC',
-                    side: pos.side,
-                    entryPrice: pos.buyPrice,
-                    exitPrice: info.currentPrice,
-                    quantity: pos.amount,
-                    pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
-                });
+                        if (response && response.orderID) {
+                            console.log(`[Emergency] ✅ OFFICIAL EXIT ACCEPTED on attempt ${attempt}: ${response.orderID}`);
+                            
+                            Analytics.recordTrade({
+                                asset: pos.asset || 'BTC',
+                                side: pos.side,
+                                entryPrice: pos.buyPrice,
+                                exitPrice: info.currentPrice,
+                                quantity: pos.amount,
+                                pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
+                            });
 
-                // Cleanup
-                activePosition = null;
-                await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
-                SLSentinel.stopMonitoring();
-                
-                const exitLatency = Date.now() - exitStart;
-                const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
-                                `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                                `• Prix Sortie: $${info.currentPrice}\n` +
-                                `• Latence: ${exitLatency}ms ⚡\n` +
-                                `• Statut: Sécurisé (Official SDK)`;
-                
-                await sendTelegramAlert(exitMsg);
-            }
+                            // Cleanup
+                            activePosition = null;
+                            await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+                            SLSentinel.stopMonitoring();
+                            
+                            const exitLatency = Date.now() - exitStart;
+                            const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
+                                            `• Tentative: ${attempt}/4\n` +
+                                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                                            `• Prix Sortie: $${tightPrice}\n` +
+                                            `• Buffer: -${(buffers[attempt-1]*100).toFixed(1)}%\n` +
+                                            `• Latence: ${exitLatency}ms ⚡\n` +
+                                            `• Statut: Sécurisé (Attempt ${attempt})`;
+                            
+                            await sendTelegramAlert(exitMsg);
+                            success = true;
+                            break; // EXIT LOOP ON SUCCESS
+                        }
+                    } catch (attemptErr) {
+                        console.warn(`[Emergency] ⚠️ Attempt ${attempt}/4 FAILED: ${attemptErr.message}`);
+                        // Small delay if not the last attempt
+                        if (attempt < 4) await new Promise(r => setTimeout(r, 100));
+                    }
+                }
+
+                if (!success) {
+                    throw new Error("All 4 immediate exit attempts failed. Falling back to next loop cycle.");
+                }
         } catch (err) {
             console.error(`[Emergency] 🛡️⚠️ SDK Exit Failed:`, err.message);
             throw err;
