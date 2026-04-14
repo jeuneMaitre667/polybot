@@ -1394,15 +1394,22 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v25.3.0: Boundary Shield for Emergency Exit
+                // v27.9: Aggressive Sweep Price logic.
+                // Selling much lower than current market ensures we eat the best available bids 
+                // and get filled instantly even during a fast dump. 🛡️🛰️⚓
                 const eDivisor = 1 / parseFloat(emergencyTickSize);
                 const eRounded = Math.round(safePrice * eDivisor) / eDivisor;
                 const eFinalPrice = Math.min(parseFloat(eRounded.toFixed(4)), 0.99);
+                
+                // Sweep price: 20% below current price or $0.05 minimum to ensure total priority.
+                const sweepPrice = Math.max(0.05, parseFloat((eFinalPrice * 0.80).toFixed(4)));
+                
+                console.log(`[Emergency] 🎯 Sweep Price Active: Target=$${info.currentPrice} -> OrderPrice=$${sweepPrice} (Guaranteeing Fill)`);
 
                 const response = await clobClient.createAndPostOrder(
                     {
                         tokenID: pos.tokenId,
-                        price: eFinalPrice,
+                        price: sweepPrice,
                         size: safeQty,
                         side: pos.side === 'YES' ? Side.SELL : Side.BUY
                     },
