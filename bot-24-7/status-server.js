@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Même dossier que le bot (où se trouvent balance.json et last-order.json). */
-const BOT_DIR = '/home/ubuntu/bot-24-7';
+const BOT_DIR = __dirname;
 
 const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
 const HOST = '0.0.0.0';
@@ -1071,11 +1071,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (url.pathname === '/' || url.pathname === '/api/health') {
+  if (url.pathname === '/api/health') {
     return json(res, { ok: true, service: 'bot-status' });
   }
 
-  if (url.pathname === '/api/bot-status') {
+  if (url.pathname === '/' || url.pathname === '/api/bot-status') {
     /** Rend la main à la boucle d’événements entre blocs sync — sinon /api/health reste bloqué pendant toute la construction du JSON. */
     const tick = () => new Promise((r) => setImmediate(r));
     (async () => {

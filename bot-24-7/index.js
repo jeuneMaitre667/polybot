@@ -109,28 +109,10 @@ let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
  * v22.8.0: Manual CLOB Header Generator
  * Bypasses SDK to ensure 100% proxy tunneling and zero IP leaks.
  */
-function createClobHeaders(method, path, body, creds, userAddress) {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const message = timestamp + method + path + body;
-    
-    // Create standard HMAC signature
-    const sig = crypto.createHmac('sha256', Buffer.from(creds.secret, 'base64'))
-        .update(message)
-        .digest('base64');
-    
-    // Convert to URL-safe base64 (Polymarket Standard)
-    const sigUrlSafe = sig.replace(/\+/g, '-').replace(/\//g, '_');
-    
-    return {
-        'POLY_ADDRESS': userAddress,
-        'POLY_API_KEY': creds.key,
-        'POLY_PASSPHRASE': creds.passphrase,
-        'POLY_TIMESTAMP': String(timestamp),
-        'POLY_SIGNATURE': sigUrlSafe,
-        'Content-Type': 'application/json'
-    };
-}
-
+/**
+ * v25.0.0: Official SDK Shielded Pulse
+ * (createClobHeaders removed: SDK now handles authentication natively via Proxy Agent)
+ */
 function updateHealth(data) {
     memoryHealth = { ...memoryHealth, ...data };
     
@@ -386,10 +368,9 @@ async function init() {
     if (!success) throw new Error("CRITICAL: Failed to initialize wallet client");
     
     // v21.3.0: Startup Geoblock Pulse
-    const isReady = await validateGeoblockStatus();
-    if (!isReady && !IS_SIMULATION_ENABLED) {
-        console.error("=== 🛑 SYSTEM HALTED DUE TO GEOBLOCK ===");
-        process.exit(1);
+    const geoPassed = await validateGeoblockStatus();
+    if (!geoPassed && !IS_SIMULATION_ENABLED) {
+        throw new Error("CRITICAL: Geoblock test failed. Engine aborted for safety.");
     }
 
     console.log(`[Init] Wallet: ${wallet.address} - READY`);
@@ -949,61 +930,46 @@ async function mainLoop() {
             try { await sendTelegramAlert(simEntryMsg); } catch (e) {}
         } else {
             const startExec = Date.now();
-            let order = null;
-            // v24.0.0: ZERO-SDK MANUAL SIGNING (Geoblock Shield)
+            let orderData = null;
+            
             try {
-                const timestamp = Math.floor(Date.now() / 1000);
-                const salt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
-                const expiration = timestamp + 3600; // 1h safety
+                // v25.0.0: Official SDK Injection (Mode Shielded)
+                console.log(`[Engine] 🏹 Placing OFFICIAL order via Shielded SDK...`);
+                
+                // Fetch dynamic metadata from signal (v2026 standards)
+                const tSize = currentSig.m?.tickSize || "0.01";
+                const nRisk = currentSig.m?.negRisk ?? false;
 
-                const orderToSign = {
-                    salt: salt,
-                    maker: process.env.CLOB_FUNDER_ADDRESS,
-                    signer: wallet.address,
-                    taker: ethers.constants.AddressZero,
-                    tokenId: tokenId,
-                    makerAmount: ethers.utils.parseUnits(String(safeQty), 6).toString(), // Usually USDC qty * 1e6
-                    takerAmount: ethers.utils.parseUnits(String(safeQty * safePrice), 6).toString(),
-                    expiration: String(expiration),
-                    nonce: "0",
-                    feeRateBps: "1000",
-                    side: side === 'YES' ? 0 : 1,
-                    signatureType: 1
-                };
+                const response = await clobClient.createAndPostOrder(
+                    {
+                        tokenID: tokenId,
+                        price: safePrice,
+                        size: safeQty,
+                        side: side === 'YES' ? Side.BUY : Side.SELL
+                    },
+                    {
+                        tickSize: tSize,
+                        negRisk: nRisk
+                    },
+                    OrderType.GTC
+                );
 
-                console.log(`[Zero-SDK] ✍️ Signing order locally (EIP-712)...`);
-                const signature = await signOrderManual(wallet, orderToSign);
-
-                const orderPayload = {
-                    ...orderToSign,
-                    signature: signature,
-                    owner: wallet.address
-                };
-
-                // v23.0.0: Strict Proxy Header Auth Forge
-                const targetPath = '/order';
-                const bodyStr = JSON.stringify(orderPayload);
-                const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds, wallet.address);
-
-                console.log(`[Manual-Post] 🛰️ Sending signed payload via Dublin Tunnel (Axios Forced)...`);
-                const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
-                    headers,
-                    httpsAgent: proxyAgent,
-                    timeout: 10000
-                });
-
-                order = response.data;
-                const latency = Date.now() - startExec;
-                console.log(`[Manual-Post] ✅ Order ACCEPTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
+                if (response && response.orderID) {
+                    order = response; // For common state tracking below
+                    const latency = Date.now() - startExec;
+                    console.log(`[Engine] ✅ OFFICIAL Order Accepted: ${response.orderID} | Latency: ${latency}ms`);
+                } else {
+                    throw new Error(JSON.stringify(response));
+                }
             } catch (err) {
                 const errorData = err.response?.data?.error || err.message;
-                console.error(`[Manual-Post] ❌ TUNNEL EXECUTION FAILED:`, errorData);
+                console.error(`[Engine] ❌ SDK EXECUTION FAILED:`, errorData);
                 
                 if (err.response?.status === 403) {
-                    console.error(`[Manual-Post] 🧱 Geoblock persistent even with Dublin Tunnel. Manual Intervention required.`);
+                    console.error(`[Engine] 🧱 Geoblock persistent. Proxy Ireland check required.`);
                 }
                 
-                sendTelegramAlert(`🚨 *EXECUTION ERROR*\nManual Tunnel failed for ${side}: ${errorData}`);
+                sendTelegramAlert(`🚨 *OFFICIAL SDK ERROR*\nOrder failed for ${side}: ${errorData}`);
                 return;
             }
         }
@@ -1319,17 +1285,18 @@ async function executeRedeemOnChain(conditionId) {
 
         const submitRes = await axios.post(`${RELAYER_URL}/submit`, submitPayload, {
             headers: {
-                'RELAYER_API_KEY': apiKey,
-                'RELAYER_API_KEY_ADDRESS': signerAddress
+                'X-Relayer-Api-Key': apiKey,
+                'X-Relayer-Address': signerAddress
             },
             httpsAgent: proxyAgent,
             timeout: 15000
         });
 
-        if (submitRes.data && submitRes.data.transactionHash) {
-            console.log(`[Relayer] ✅ Redeem transaction submitted: ${submitRes.data.transactionHash}`);
+        if (submitRes.data && (submitRes.data.transactionHash || submitRes.data.hash)) {
+            const txHash = submitRes.data.transactionHash || submitRes.data.hash;
+            console.log(`[Relayer] ✅ Redeem transaction submitted: ${txHash}`);
         } else {
-            console.warn(`[Relayer] ⚠️ Redeem submitted but no txHash returned.`);
+            console.warn(`[Relayer] ⚠️ Redeem submitted but response structure unexpected: ${JSON.stringify(submitRes.data)}`);
         }
 
     } catch (err) {
@@ -1397,50 +1364,26 @@ async function executeEmergencyExit(info) {
             throw new Error(`Invalid Emergency Data: Price=${safePrice}, Qty=${safeQty}`);
         }
 
-        // v24.0.0: ZERO-SDK MANUAL EXIT (Geoblock Shield)
+        // v25.0.0: Official SDK Shielded Exit
         try {
-            const timestamp = Math.floor(Date.now() / 1000);
-            const salt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
-            const expiration = timestamp + 3600;
+            console.log(`[Emergency] 🏹 Placing OFFICIAL EXIT via Shielded SDK...`);
+            
+                const response = await clobClient.createAndPostOrder(
+                    {
+                        tokenID: pos.tokenId,
+                        price: safePrice,
+                        size: safeQty,
+                        side: pos.side === 'YES' ? Side.SELL : Side.BUY
+                    },
+                    {
+                        tickSize: pos.tickSize || "0.01",
+                        negRisk: pos.negRisk ?? (pos.tokenId.length > 50) // Auto-detect for multi-outcome
+                    },
+                    OrderType.FOK // Fill or Kill for emergency
+                );
 
-            const orderToSign = {
-                salt: salt,
-                maker: process.env.CLOB_FUNDER_ADDRESS,
-                signer: wallet.address,
-                taker: ethers.constants.AddressZero,
-                tokenId: pos.tokenId,
-                makerAmount: ethers.utils.parseUnits(String(safeQty), 6).toString(),
-                takerAmount: ethers.utils.parseUnits(String(safeQty * safePrice), 6).toString(),
-                expiration: String(expiration),
-                nonce: "0",
-                feeRateBps: "1000",
-                side: pos.side === 'YES' ? 1 : 0, // Exit side (SELL)
-                signatureType: 1
-            };
-
-            console.log(`[Zero-SDK] ✍️ Signing EMERGENCY exit locally...`);
-            const signature = await signOrderManual(wallet, orderToSign);
-
-            const orderPayload = {
-                ...orderToSign,
-                signature: signature,
-                owner: wallet.address
-            };
-
-            const targetPath = '/order';
-            const bodyStr = JSON.stringify(orderPayload);
-            const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
-
-            console.log(`[Emergency] 🛰️ Sending signed exit via Dublin Tunnel...`);
-            const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
-                headers,
-                httpsAgent: proxyAgent,
-                timeout: 8000
-            });
-
-            const orderRes = response.data;
-            if (orderRes && orderRes.orderID) {
-                console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
+            if (response && response.orderID) {
+                console.log(`[Emergency] ✅ OFFICIAL EXIT ACCEPTED: ${response.orderID}`);
                 
                 Analytics.recordTrade({
                     asset: pos.asset || 'BTC',
@@ -1453,23 +1396,23 @@ async function executeEmergencyExit(info) {
 
                 // Cleanup
                 activePosition = null;
-                saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+                await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
                 SLSentinel.stopMonitoring();
                 
                 const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                                 `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
                                 `• Prix Sortie: $${info.currentPrice}\n` +
-                                `• Reactivity: <500ms (WS Sentinel)\n` +
-                                `• Statut: Sécurisé (Zero-SDK)`;
+                                `• Statut: Sécurisé (Official SDK)`;
                 
                 await sendTelegramAlert(exitMsg);
             }
-        } catch (postErr) {
-            throw new Error(`Manual Exit Post failed: ${postErr.response?.data?.error || postErr.message}`);
+        } catch (err) {
+            console.error(`[Emergency] ❌ SDK Exit Failed:`, err.message);
+            throw err;
         }
 
     } catch (err) {
-        console.error(`[Emergency] ❌ Exit Failed:`, err.message);
+        console.error(`[Emergency] ❌ Exit Process Failed:`, err.message);
         await sendTelegramAlert(`❌ *ERREUR SORTIE D'URGENCE*\nLe bot n'a pas pu sortir : ${err.message}`);
     }
 }
