@@ -299,10 +299,11 @@ async function ensureClobClient() {
             clobCreds = apiCreds; // Save for manual post fallback
             clobClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, apiCreds, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
             
-            // v23.0.0: Monkey-patch getTickSize to avoid leaky unproxied network calls
-            clobClient.getTickSize = async () => '1'; // Standard precision for Polymarket tokens
+            // v23.1.0: Total SDK Silence - Monkey-patch ALL internal leaky validation calls
+            clobClient.getTickSize = async () => '1';   // Force fixed precision
+            clobClient.getFeeRate = async () => '1000'; // Force fixed fee rate (1000 bps = standard)
             
-            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (DUBLIN-GHOST PROTOCOL)`);
+            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }
         return true;
     } catch (err) {
