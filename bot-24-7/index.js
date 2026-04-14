@@ -22,18 +22,14 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 const proxyUrl = process.env.PROXY_URL;
 const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null;
 if (proxyAgent) {
-    console.log(`[Dublin-Ghost] 🛡️ Surgical Shield Ready. Injecting global axios proxy interceptor.`);
-    // v26.2.0: Global Axios Proxy Injection
-    // The SDK's http-helpers use bare axios() without passing the proxy agent.
-    // This interceptor ensures ALL requests (GET, POST, etc.) go through Dublin.
-    axios.interceptors.request.use((config) => {
-        if (!config.httpsAgent && config.url && config.url.includes('polymarket.com')) {
-            config.httpsAgent = proxyAgent;
-            config.httpAgent = proxyAgent;
-        }
-        return config;
-    });
-    console.log(`[Dublin-Ghost] 🛡️ Global interceptor active for polymarket.com requests.`);
+    // v26.3.0: Prevent circular JSON when SDK tries to serialize the agent in error logs
+    proxyAgent.toJSON = () => '[DublinProxy]';
+    
+    // v26.3.0: Set axios defaults so the SDK's bare axios() calls go through Dublin.
+    // The SDK's http-helpers/index.js uses `axios({ method, url, ... })` without any agent.
+    axios.defaults.httpsAgent = proxyAgent;
+    axios.defaults.httpAgent = proxyAgent;
+    console.log(`[Dublin-Ghost] 🛡️ Global axios defaults set. All SDK requests routed through Dublin.`);
 }
 
 
