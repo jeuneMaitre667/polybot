@@ -98,6 +98,7 @@ let maticBalance = null;
 let wallet = null; // v16.21.1: Global scope fix
 let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
+let isPerformanceLoopRunning = false; // v24.2.0: Mutex for overlap protection
 let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
 let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
@@ -393,13 +394,14 @@ async function init() {
     // Start the loops with organic timing
     setTimeout(scheduledMainLoop, getJitter(1000, 200));
     setInterval(reportingLoop, 1000);
-    setInterval(performanceLoop, 60000);
+    setInterval(performanceLoop, 10000); // v24.1.4: 6x faster resolution check (10s)
     
     // Initial triggers
     mainLoop();
     reportingLoop();
     
     // v17.24.0: Stability Watchdog (Reset engine if it hangs for > 60s)
+
     setInterval(() => {
         const stallTime = Date.now() - lastPulseTime;
         if (stallTime > 60000) {
@@ -1014,7 +1016,7 @@ async function mainLoop() {
                 buyPrice: bestAsk,
                 strike: currentSig.strike, // Binance reference (Signal)
                 officialStrike: currentSig.strike, // Temp fallback
-                amount: quantity,
+                amount: safeQty,
                 slotStart,
                 side,
                 asset: 'BTC',
@@ -1066,7 +1068,11 @@ async function mainLoop() {
  * Gère les résumés de 12h et détecte les marchés résolus (Redeems).
  */
 async function performanceLoop() {
-    const tz = process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris';
+    if (isPerformanceLoopRunning) return; // v24.2.0: Prevent stacked execution
+    isPerformanceLoopRunning = true;
+    
+    try {
+        const tz = process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris';
     const { hour, minute } = getLocalHourMinute(tz);
     const dateStr = getCalendarDateYmd(tz);
 
@@ -1202,6 +1208,9 @@ async function performanceLoop() {
         }
     } catch (err) {
         console.error(`[Sentinel] Resolution Error:`, err.message);
+    }
+} finally {
+        isPerformanceLoopRunning = false; // v24.2.0: Release lock after completion
     }
 }
 

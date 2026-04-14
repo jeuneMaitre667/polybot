@@ -155,6 +155,13 @@ export const getBinanceStrike = async (asset, startTime) => {
         if (res.data && res.data[0]) {
             const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
             console.log(`[Strike] [BACKFILL] Recovered ${asset} USDC Open: ${openPrice}`);
+            
+            // v24.2.0: PERSISTENCE - Don't ask again!
+            const currentData = safeReadJson(filePath);
+            if (!currentData[asset]) currentData[asset] = [];
+            currentData[asset].push({ at: ms, price: openPrice });
+            atomicWriteJson(filePath, currentData);
+            
             return openPrice;
         }
     } catch (e) {

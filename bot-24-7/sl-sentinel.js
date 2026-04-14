@@ -109,6 +109,10 @@ function initWebSocket() {
     setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send("PING");
+            // v24.1.4: Visible Heartbeat for user peace of mind
+            if (activeSubscription) {
+                console.log(`[SL Sentinel] 💓 Heartbeat: Monitoring ${activeSubscription.tokenId} active...`);
+            }
         }
     }, 20000);
 }
