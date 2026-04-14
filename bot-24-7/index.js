@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
+import { signOrderManual } from './ManualSigner.js';
 import https from 'https';
 import http from 'http';
 import crypto from 'crypto'; // v22.8.0: Required for manual HMAC signing
@@ -941,64 +942,62 @@ async function mainLoop() {
         } else {
             const startExec = Date.now();
             let order = null;
+            // v24.0.0: ZERO-SDK MANUAL SIGNING (Geoblock Shield)
             try {
-                // v18.0.0: Atomic check for NaN before sending to SDK
-                const orderData = {
-                    tokenID: String(tokenId).trim(),
-                    price: Number(safePrice.toFixed(6)), // MUST BE NUMBER
-                    size: Number(safeQty),              // MUST BE NUMBER
-                    side: Side.BUY
+                const timestamp = Math.floor(Date.now() / 1000);
+                const salt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+                const expiration = timestamp + 3600; // 1h safety
+
+                const orderToSign = {
+                    salt: salt,
+                    maker: process.env.CLOB_FUNDER_ADDRESS,
+                    signer: wallet.address,
+                    taker: ethers.constants.AddressZero,
+                    tokenId: tokenId,
+                    makerAmount: ethers.utils.parseUnits(String(safeQty), 6).toString(), // Usually USDC qty * 1e6
+                    takerAmount: ethers.utils.parseUnits(String(safeQty * safePrice), 6).toString(),
+                    expiration: String(expiration),
+                    nonce: "0",
+                    feeRateBps: "1000",
+                    side: side === 'YES' ? 0 : 1,
+                    signatureType: 1
                 };
 
-                // Final verification of orderData to prevent any hidden NaN objects
-                for (const [key, val] of Object.entries(orderData)) {
-                    if (val === "NaN" || val === "undefined" || (typeof val === 'number' && isNaN(val))) {
-                        throw new Error(`CRITICAL: Invalid ${typeof val} detected in order ${key}: ${val}`);
-                    }
-                }
+                console.log(`[Zero-SDK] ✍️ Signing order locally (EIP-712)...`);
+                const signature = await signOrderManual(wallet, orderToSign);
 
-                // v22.8.0: MANUAL POST - Taking total control of the network packet
-                try {
-                    const orderPayload = await clobClient.createOrder({
-                        token_id: tokenId,
-                        price: safePrice,
-                        side: Side.BUY,
-                        size: safeQty,
-                        fee_rate_bps: 1000
-                    });
+                const orderPayload = {
+                    ...orderToSign,
+                    signature: signature,
+                    owner: wallet.address
+                };
 
-                    // v23.0.0: Strict Proxy Header Auth Forge
-                    const targetPath = '/order';
-                    const bodyStr = JSON.stringify(orderPayload);
-                    const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
+                // v23.0.0: Strict Proxy Header Auth Forge
+                const targetPath = '/order';
+                const bodyStr = JSON.stringify(orderPayload);
+                const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
 
-                    console.log(`[Manual-Post] 🛰️ Sending signed payload via Dublin Tunnel (Axios Forced)...`);
-                    const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
-                        headers,
-                        httpsAgent: proxyAgent,
-                        timeout: 10000
-                    });
+                console.log(`[Manual-Post] 🛰️ Sending signed payload via Dublin Tunnel (Axios Forced)...`);
+                const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
+                    headers,
+                    httpsAgent: proxyAgent,
+                    timeout: 10000
+                });
 
-                    order = response.data;
-                    const latency = Date.now() - startExec;
-                    console.log(`[Manual-Post] ✅ Order ACCEPTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
-                } catch (err) {
-                    const errorData = err.response?.data?.error || err.message;
-                    console.error(`[Manual-Post] ❌ TUNNEL EXECUTION FAILED:`, errorData);
-                    
-                    if (err.response?.status === 403) {
-                        console.error(`[Manual-Post] 🧱 Geoblock persistent even with Dublin Tunnel. Manual Intervention required.`);
-                    }
-                    
-                    sendTelegramAlert(`🚨 *EXECUTION ERROR*\nManual Tunnel failed for ${side}: ${errorData}`);
-                    return;
-                }
+                order = response.data;
+                const latency = Date.now() - startExec;
+                console.log(`[Manual-Post] ✅ Order ACCEPTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
             } catch (err) {
-                console.error(`[Engine] ❌ RELAYER EXECUTION FAILED:`, err.message);
-                sendTelegramAlert(`🚨 *EXECUTION ERROR*\nTrade failed for ${side}: ${err.message}`);
-                return; // Stop here
+                const errorData = err.response?.data?.error || err.message;
+                console.error(`[Manual-Post] ❌ TUNNEL EXECUTION FAILED:`, errorData);
+                
+                if (err.response?.status === 403) {
+                    console.error(`[Manual-Post] 🧱 Geoblock persistent even with Dublin Tunnel. Manual Intervention required.`);
+                }
+                
+                sendTelegramAlert(`🚨 *EXECUTION ERROR*\nManual Tunnel failed for ${side}: ${errorData}`);
+                return;
             }
-            // currentOrder reflects 'order' if it was submitted
         }
 
         // --- COMMON STATE TRACKING (v20.4.0: Accept any non-null order response) ---
@@ -1387,45 +1386,75 @@ async function executeEmergencyExit(info) {
             throw new Error(`Invalid Emergency Data: Price=${safePrice}, Qty=${safeQty}`);
         }
 
-        const orderData = {
-            tokenID: pos.tokenId,
-            price: Number(safePrice.toFixed(6)), // MUST BE NUMBER
-            size: Number(safeQty),              // MUST BE NUMBER
-            side: Side.SELL
-        };
+        // v24.0.0: ZERO-SDK MANUAL EXIT (Geoblock Shield)
+        try {
+            const timestamp = Math.floor(Date.now() / 1000);
+            const salt = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+            const expiration = timestamp + 3600;
 
-        console.log(`[Emergency] 🚨 SDK EXECUTION (v21.0.0 createAndPostOrder): Sending ${JSON.stringify(orderData)}`);
-        const orderRes = await clobClient.createAndPostOrder(
-            orderData,
-            { tickSize: "0.01", negRisk: false },
-            OrderType.GTC
-        );
+            const orderToSign = {
+                salt: salt,
+                maker: process.env.CLOB_FUNDER_ADDRESS,
+                signer: wallet.address,
+                taker: ethers.constants.AddressZero,
+                tokenId: pos.tokenId,
+                makerAmount: ethers.utils.parseUnits(String(safeQty), 6).toString(),
+                takerAmount: ethers.utils.parseUnits(String(safeQty * safePrice), 6).toString(),
+                expiration: String(expiration),
+                nonce: "0",
+                feeRateBps: "1000",
+                side: pos.side === 'YES' ? 1 : 0, // Exit side (SELL)
+                signatureType: 1
+            };
 
-        if (orderRes && orderRes.orderID) {
-            console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
-            
-            // v17.3.2: Record Losing/Neutral Trade
-            Analytics.recordTrade({
-                asset: pos.asset || 'BTC',
-                side: pos.side,
-                entryPrice: pos.buyPrice,
-                exitPrice: info.currentPrice,
-                quantity: pos.amount,
-                pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
+            console.log(`[Zero-SDK] ✍️ Signing EMERGENCY exit locally...`);
+            const signature = await signOrderManual(wallet, orderToSign);
+
+            const orderPayload = {
+                ...orderToSign,
+                signature: signature,
+                owner: wallet.address
+            };
+
+            const targetPath = '/order';
+            const bodyStr = JSON.stringify(orderPayload);
+            const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
+
+            console.log(`[Emergency] 🛰️ Sending signed exit via Dublin Tunnel...`);
+            const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
+                headers,
+                httpsAgent: proxyAgent,
+                timeout: 8000
             });
 
-            // Cleanup
-            activePosition = null;
-            saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
-            SLSentinel.stopMonitoring();
-            
-            const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
-                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                            `• Prix Sortie: $${info.currentPrice}\n` +
-                            `• Reactivity: <500ms (WS Sentinel)\n` +
-                            `• Statut: Sécurisé (Gasless)`;
-            
-            await sendTelegramAlert(exitMsg);
+            const orderRes = response.data;
+            if (orderRes && orderRes.orderID) {
+                console.log(`[Emergency] ✅ EXIT SUCCESS: ${orderRes.orderID}`);
+                
+                Analytics.recordTrade({
+                    asset: pos.asset || 'BTC',
+                    side: pos.side,
+                    entryPrice: pos.buyPrice,
+                    exitPrice: info.currentPrice,
+                    quantity: pos.amount,
+                    pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
+                });
+
+                // Cleanup
+                activePosition = null;
+                saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
+                SLSentinel.stopMonitoring();
+                
+                const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
+                                `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                                `• Prix Sortie: $${info.currentPrice}\n` +
+                                `• Reactivity: <500ms (WS Sentinel)\n` +
+                                `• Statut: Sécurisé (Zero-SDK)`;
+                
+                await sendTelegramAlert(exitMsg);
+            }
+        } catch (postErr) {
+            throw new Error(`Manual Exit Post failed: ${postErr.response?.data?.error || postErr.message}`);
         }
 
     } catch (err) {

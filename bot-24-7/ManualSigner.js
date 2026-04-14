@@ -5,7 +5,7 @@
  */
 import { ethers } from 'ethers';
 
-const POLYMARKET_EXCHANGE_CONTRACT = "0x4bFb30164a3501E8505e6097e17De830114fE643";
+const POLYMARKET_EXCHANGE_CONTRACT = ethers.utils.getAddress("0x4bfb30164a3501e8505e6097e17de830114fe643".toLowerCase());
 const POLYGON_CHAIN_ID = 137;
 
 // Domaine EIP-712 Polymarket
