@@ -420,11 +420,15 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // v22.1.0: Cibler le slot qui a COMMENCÉ au début de ces 5 minutes (Real-Sync)
     const slotStart = Math.floor(now / 300000) * 300000;
     
-    // 1. Fetch Binance Spot (Current) - v22.6.0: Switched to BTCUSD Index for Dashboard Parity
-    const spotRes = await axios.get(`https://dapi.binance.com/dapi/v1/ticker/price?symbol=${asset}USD_PERP`, { 
-        timeout: 5000
-    }).catch(() => null);
-    const bSpot = (spotRes && spotRes.data && spotRes.data[0]) ? parseFloat(spotRes.data[0].price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+    // v24.0.0: True-Mirror Sync (1:1 Chart Parity)
+    // Switched from Inverse-Perp (DAPI) to Spot (API) to match User Dashboard Chart
+    const binanceSignalSymbol = "BTCUSDC";
+    const binanceSpotUrl = `https://api.binance.com/api/v3/ticker/price?symbol=${binanceSignalSymbol}`;
+    const binanceKlinesUrl = `https://api.binance.com/api/v3/klines?symbol=${binanceSignalSymbol}`;
+    
+    // 1. Fetch Binance Spot (Current)
+    const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000 }).catch(() => null);
+    const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
     const strikeTime = slotStart; 
@@ -1354,9 +1358,9 @@ async function executeEmergencyExit(info) {
         const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
         const apiKey = process.env.RELAYER_API_KEY;
 
-        // 1. Get Nonce - v17.24.0: Added Timeout
-        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, { timeout: 5000 });
-        const nonce = nonceRes.data.nonce;
+        // v24.0.0: High-Precision Spot Fetch
+        const priceResp = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC", { timeout: 8000 });
+        const currentSpot = parseFloat(priceResp.data.price);
 
         console.log(`[Emergency] 📡 Sending SELL order to CLOB for ${pos.tokenId}...`);
         await ensureClobClient(); // Safety first
