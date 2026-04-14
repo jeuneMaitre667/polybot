@@ -11,17 +11,17 @@ import { ethers } from 'ethers';
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
 import https from 'https';
 import http from 'http';
+import crypto from 'crypto'; // v22.8.0: Required for manual HMAC signing
 import { gotScraping } from 'got-scraping';
 import axios from 'axios';
 import { getStealthProfile, getJitter, logStealthMode } from './stealth-config.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-
-// v22.7.3: Laser-Precision Proxy Setup (Reverted Global to avoid 407 errors)
+// v23.0.0: Dublin-Ghost Protocol (Surgical & Stable)
 const proxyUrl = process.env.PROXY_URL;
 const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : null;
 if (proxyAgent) {
-    console.log(`[Laser-Ghost] 🛡️ Irish Proxy Ready for targeted injection.`);
+    console.log(`[Dublin-Ghost] 🛡️ Surgical Shield Ready. NO global interceptors (Avoiding 407 errors).`);
 }
 
 
@@ -90,6 +90,7 @@ let lastResolvedCids = new Set(); // Track resolved markets to avoid double aler
 let lastDigestDate = ''; // YYYY-MM-DD
 let lastDigestWindow = ''; // 'morning' | 'night'
 let clobClient = null;
+let clobCreds = null; // v22.8.0: Store API credentials for manual posting
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
 let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
@@ -101,6 +102,24 @@ let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
 let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
+
+/**
+ * v22.8.0: Manual CLOB Header Generator
+ * Bypasses SDK to ensure 100% proxy tunneling and zero IP leaks.
+ */
+function createClobHeaders(method, path, body, creds) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const sig = crypto.createHmac('sha256', Buffer.from(creds.secret, 'base64'))
+        .update(timestamp + method + path + body)
+        .digest('base64');
+    return {
+        'POLY_API_KEY': creds.key,
+        'POLY_PASSPHRASE': creds.passphrase,
+        'POLY_TIMESTAMP': String(timestamp),
+        'POLY_SIGNATURE': sig,
+        'Content-Type': 'application/json'
+    };
+}
 
 function updateHealth(data) {
     memoryHealth = { ...memoryHealth, ...data };
@@ -277,8 +296,13 @@ async function ensureClobClient() {
                 }
             }
 
+            clobCreds = apiCreds; // Save for manual post fallback
             clobClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, apiCreds, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
-            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (GHOST-SHIELD ACTIVE)`);
+            
+            // v23.0.0: Monkey-patch getTickSize to avoid leaky unproxied network calls
+            clobClient.getTickSize = async () => '1'; // Standard precision for Polymarket tokens
+            
+            console.log(`[Self-Healing] ✅ ClobClient initialized with API credentials (DUBLIN-GHOST PROTOCOL)`);
         }
         return true;
     } catch (err) {
@@ -879,10 +903,6 @@ async function mainLoop() {
             await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
         }
 
-        if (!IS_SIMULATION_ENABLED) {
-            await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
-        }
-
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered! Dashboard=$${dashboardPrice.toFixed(3)} | BestAsk=$${executionPrice.toFixed(3)} | Side:${side} | Size:$${tradeAmountUsd.toFixed(2)}`);
         
@@ -925,21 +945,47 @@ async function mainLoop() {
                     }
                 }
 
-                console.log(`[Engine] 📡 SDK EXECUTION (v21.0.0 createAndPostOrder): Sending ${JSON.stringify(orderData)}`);
-                order = await clobClient.createAndPostOrder(
-                    orderData,
-                    { tickSize: "0.01", negRisk: false },
-                    OrderType.GTC
-                );
-                
-                const latency = Date.now() - startExec;
-                console.log(`[Engine] ✅ Order POSTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
+                // v22.8.0: MANUAL POST - Taking total control of the network packet
+                try {
+                    const orderPayload = await clobClient.createOrder({
+                        token_id: tokenId,
+                        price: safePrice,
+                        side: Side.BUY,
+                        size: safeQty,
+                        fee_rate_bps: 1000
+                    });
+
+                    // v23.0.0: Strict Proxy Header Auth Forge
+                    const targetPath = '/order';
+                    const bodyStr = JSON.stringify(orderPayload);
+                    const headers = createClobHeaders('POST', targetPath, bodyStr, clobCreds);
+
+                    console.log(`[Manual-Post] 🛰️ Sending signed payload via Dublin Tunnel (Axios Forced)...`);
+                    const response = await axios.post(`https://clob.polymarket.com${targetPath}`, orderPayload, {
+                        headers,
+                        httpsAgent: proxyAgent,
+                        timeout: 10000
+                    });
+
+                    order = response.data;
+                    const latency = Date.now() - startExec;
+                    console.log(`[Manual-Post] ✅ Order ACCEPTED: ${JSON.stringify(order)} | Latency: ${latency}ms`);
+                } catch (err) {
+                    const errorData = err.response?.data?.error || err.message;
+                    console.error(`[Manual-Post] ❌ TUNNEL EXECUTION FAILED:`, errorData);
+                    
+                    if (err.response?.status === 403) {
+                        console.error(`[Manual-Post] 🧱 Geoblock persistent even with Dublin Tunnel. Manual Intervention required.`);
+                    }
+                    
+                    sendTelegramAlert(`🚨 *EXECUTION ERROR*\nManual Tunnel failed for ${side}: ${errorData}`);
+                    return;
+                }
             } catch (err) {
                 console.error(`[Engine] ❌ RELAYER EXECUTION FAILED:`, err.message);
                 sendTelegramAlert(`🚨 *EXECUTION ERROR*\nTrade failed for ${side}: ${err.message}`);
                 return; // Stop here
             }
-            
             // currentOrder reflects 'order' if it was submitted
         }
 
