@@ -936,20 +936,32 @@ async function mainLoop() {
                 // v25.0.0: Official SDK Injection (Mode Shielded)
                 console.log(`[Engine] 🏹 Placing OFFICIAL order via Shielded SDK...`);
                 
-                // Fetch dynamic metadata from signal (v2026 standards)
-                const tSize = currentSig.m?.tickSize || "0.01";
-                const nRisk = currentSig.m?.negRisk ?? false;
+                // v25.2.0: Dynamic Precision Recovery
+                let tSize = "0.01";
+                try {
+                    tSize = await clobClient.getTickSize(tokenId) || "0.01";
+                    console.log(`[Engine] 📐 Dynamic Tick detected: ${tSize}`);
+                } catch (e) {
+                    console.warn(`[Engine] ⚠️ Tick lookup failed, using fallback: ${tSize}`);
+                }
+
+                // v25.2.0: Surgical Price Rounding
+                const divisor = 1 / parseFloat(tSize);
+                const rounded = Math.round(safePrice * divisor) / divisor;
+                const finalPrice = parseFloat(rounded.toFixed(4));
+                
+                console.log(`[Engine] 🎯 Price aligned: Raw=$${safePrice} -> Final=$${finalPrice} (Tick:${tSize})`);
 
                 const response = await clobClient.createAndPostOrder(
                     {
                         tokenID: tokenId,
-                        price: safePrice,
+                        price: finalPrice,
                         size: safeQty,
                         side: side === 'YES' ? Side.BUY : Side.SELL
                     },
                     {
                         tickSize: tSize,
-                        negRisk: nRisk
+                        negRisk: currentSig.m?.negRisk ?? (tokenId.length > 50)
                     },
                     OrderType.GTC
                 );
@@ -1368,18 +1380,28 @@ async function executeEmergencyExit(info) {
         try {
             console.log(`[Emergency] 🏹 Placing OFFICIAL EXIT via Shielded SDK...`);
             
+                // v25.2.0: Dynamic Emergency Precision
+                let emergencyTickSize = "0.01";
+                try {
+                    emergencyTickSize = await clobClient.getTickSize(pos.tokenId) || "0.01";
+                } catch (e) { }
+
+                const eDivisor = 1 / parseFloat(emergencyTickSize);
+                const eRounded = Math.round(safePrice * eDivisor) / eDivisor;
+                const eFinalPrice = parseFloat(eRounded.toFixed(4));
+
                 const response = await clobClient.createAndPostOrder(
                     {
                         tokenID: pos.tokenId,
-                        price: safePrice,
+                        price: eFinalPrice,
                         size: safeQty,
                         side: pos.side === 'YES' ? Side.SELL : Side.BUY
                     },
                     {
-                        tickSize: pos.tickSize || "0.01",
-                        negRisk: pos.negRisk ?? (pos.tokenId.length > 50) // Auto-detect for multi-outcome
+                        tickSize: emergencyTickSize,
+                        negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
                     },
-                    OrderType.FOK // Fill or Kill for emergency
+                    OrderType.FOK 
                 );
 
             if (response && response.orderID) {
