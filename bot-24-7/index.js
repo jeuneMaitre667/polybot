@@ -716,7 +716,8 @@ async function mainLoop() {
             lastHeartbeatSlot = slotStartLocal; // Lock immediately
             console.log(`[PID:${process.pid}] [Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
             
-            const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0));
+            const hbBal = await updateVirtualBalance(0); // Force fresh check or return current
+            const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : 0));
             const hbMsg = `🛰️ *SNIPER STATUS : ${displayTime}*\n\n` +
                           `• Window: OPEN ✅\n` +
                           `• Capital: $${currentBal.toFixed(2)} 🏦\n` +
@@ -936,21 +937,28 @@ async function mainLoop() {
                 // v25.0.0: Official SDK Injection (Mode Shielded)
                 console.log(`[Engine] 🏹 Placing OFFICIAL order via Shielded SDK...`);
                 
-                // v25.2.0: Dynamic Precision Recovery
+                // v25.3.0: Dynamic Precision Recovery
                 let tSize = "0.01";
                 try {
                     tSize = await clobClient.getTickSize(tokenId) || "0.01";
-                    console.log(`[Engine] 📐 Dynamic Tick detected: ${tSize}`);
+                    if (Number(tSize) >= 1) {
+                        console.warn(`[Engine] ⚠️ Warning: API returned erroneous tickSize ${tSize}. Forcing to 0.01.`);
+                        tSize = "0.01";
+                    }
                 } catch (e) {
                     console.warn(`[Engine] ⚠️ Tick lookup failed, using fallback: ${tSize}`);
                 }
 
-                // v25.2.0: Surgical Price Rounding
+                // v25.3.0: Surgical Price Rounding & Boundary Shield
                 const divisor = 1 / parseFloat(tSize);
                 const rounded = Math.round(safePrice * divisor) / divisor;
-                const finalPrice = parseFloat(rounded.toFixed(4));
                 
-                console.log(`[Engine] 🎯 Price aligned: Raw=$${safePrice} -> Final=$${finalPrice} (Tick:${tSize})`);
+                // Never allow price to hit 1.0 (invalid for CLOB)
+                // Also respect the user's SNIPER_PRICE_MAX
+                const maxAllowed = Math.min(0.99, SNIPER_PRICE_MAX);
+                const finalPrice = Math.min(parseFloat(rounded.toFixed(4)), maxAllowed);
+                
+                console.log(`[Engine] 🎯 Price Aligned: Raw=$${safePrice} -> Final=$${finalPrice} (Tick:${tSize}, Cap:${maxAllowed})`);
 
                 const response = await clobClient.createAndPostOrder(
                     {
@@ -963,7 +971,7 @@ async function mainLoop() {
                         tickSize: tSize,
                         negRisk: currentSig.m?.negRisk ?? (tokenId.length > 50)
                     },
-                    OrderType.GTC
+                    OrderType.FOK // v25.3.0: Fill Or Kill for surgical entry
                 );
 
                 if (response && response.orderID) {
@@ -1384,11 +1392,15 @@ async function executeEmergencyExit(info) {
                 let emergencyTickSize = "0.01";
                 try {
                     emergencyTickSize = await clobClient.getTickSize(pos.tokenId) || "0.01";
+                    if (Number(emergencyTickSize) >= 1) {
+                        emergencyTickSize = "0.01";
+                    }
                 } catch (e) { }
 
+                // v25.3.0: Boundary Shield for Emergency Exit
                 const eDivisor = 1 / parseFloat(emergencyTickSize);
                 const eRounded = Math.round(safePrice * eDivisor) / eDivisor;
-                const eFinalPrice = parseFloat(eRounded.toFixed(4));
+                const eFinalPrice = Math.min(parseFloat(eRounded.toFixed(4)), 0.99);
 
                 const response = await clobClient.createAndPostOrder(
                     {
