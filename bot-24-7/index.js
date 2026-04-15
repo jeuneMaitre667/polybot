@@ -170,7 +170,7 @@ async function addPosition(pos) {
  * Releases simulated funds as soon as the slot ends.
  */
 async function checkFastResolution(currentPrice) {
-    if (!IS_SIMULATION_ENABLED || isResolving) return; // v33.0: Mutex protection
+    if (!IS_SIMULATION_ENABLED || isResolving) return; 
     
     isResolving = true;
     try {
@@ -178,63 +178,54 @@ async function checkFastResolution(currentPrice) {
         if (positions.length === 0) return;
         
         const now = Date.now();
-        let changed = false;
-    
-    for (let i = positions.length - 1; i >= 0; i--) {
-        const pos = positions[i];
-        if (!pos.isSimulated || !pos.slotEnd || !pos.strike) continue;
         
-        // Fast resolution window: End reached + 2s margin
-        if (now > pos.slotEnd + 2000) {
-            // v17.59.1: Aggressive fallback -> Use saved strike immediately if official is late
-            // v31.5 Eagle Eye: Safety Zone (0.05%)
-            const usedStrike = pos.officialStrike || pos.strike;
-            const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
-            // v31.7 Ghost Buster: Reduced Gap for high-price buy-ins (0.01% instead of 0.05%)
-            const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
+        for (const pos of [...positions]) { // Iteration on clone
+            if (!pos.isSimulated || !pos.slotEnd || !pos.strike) continue;
             
-            if (gapPct < dynamicSafety) {
-                console.log(`[FastResolution] 🦉 Eagle Eye: Gap too tight (${(gapPct * 100).toFixed(4)}%) for ${pos.slug} (Threshold: ${dynamicSafety}). Waiting...`);
-                continue;
-            }
-
-            const isUp = currentPrice >= usedStrike;
-            const winningSide = isUp ? 'YES' : 'NO';
-            const isWin = pos.side === winningSide;
-            
-            const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
-            console.log(`[FastResolution] 🛡️⚓ Resolution Found for ${pos.slug} | Gap:${(gapPct*100).toFixed(3)}% | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
-            
-            if (isWin) {
-                const payout = pos.amount;
-                const profitNet = payout - (pos.buyPrice * pos.amount);
-                const result = await updateVirtualBalance(payout);
-                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+            if (now > pos.slotEnd + 2000) {
+                const usedStrike = pos.officialStrike || pos.strike;
+                const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
+                const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
                 
-                console.log(`[FastResolution] 🛡️⚓ Compound Boost: +$${profitNet.toFixed(2)} | Capital Released: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🛡️⚓ *FAST COMPOUND* 🛡️⚓\n\n• Profit: +$${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: $${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
-            } else {
-                const result = await getVirtualBalance();
-                const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
-                console.log(`[FastResolution] 🛡️⚓ Capital Fixed. Balance: $${finalBal.toFixed(2)}`);
-                await sendTelegramAlert(`🛡️⚓ *FAST LOSS* 🛡️⚓\n• Solde fixe: $${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
+                if (gapPct < dynamicSafety) continue;
+
+                // ATOMIC CLAIM: Remove from log before resolving to prevent race conditions
+                let claimed = false;
+                await runAtomicUpdate(POSITION_LOG, (list = []) => {
+                    const idx = list.findIndex(p => p.tokenId === pos.tokenId);
+                    if (idx !== -1) {
+                        list.splice(idx, 1);
+                        claimed = true;
+                        return list;
+                    }
+                    return list;
+                });
+
+                if (!claimed) continue; // Already resolved by another process or concurrent tick
+
+                const isUp = currentPrice >= usedStrike;
+                const isWin = pos.side === (isUp ? 'YES' : 'NO');
+                const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
+                
+                if (isWin) {
+                    const payout = pos.amount;
+                    const profitNet = payout - (pos.buyPrice * pos.amount);
+                    const result = await updateVirtualBalance(payout);
+                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                    
+                    console.log(`[FastResolution] 🛡️⚓ Atomic Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
+                    await sendTelegramAlert(`🛡️⚓ *FAST COMPOUND* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
+                } else {
+                    const bal = await getVirtualBalance();
+                    console.log(`[FastResolution] 🛡️⚓ Atomic Loss Recorded. Balance: ${bal.toFixed(2)}`);
+                    await sendTelegramAlert(`🛡️⚓ *FAST LOSS* 🛡️⚓\n• Solde fixe: ${bal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
+                }
+                
+                if (activePosition && activePosition.tokenId === pos.tokenId) activePosition = null;
             }
-            
-            lastResolvedCids.add(pos.tokenId);
-            positions.splice(i, 1);
-            changed = true;
         }
-    }
-    
-    if (changed) {
-        saveActivePositions(positions);
-        // Refresh local activePosition state if it was the one we just resolved
-        if (activePosition && !positions.find(p => p.tokenId === activePosition.tokenId)) {
-            activePosition = null;
-        }
-    }
     } finally {
-        isResolving = false; // v33.0: Always release lock
+        isResolving = false;
     }
 }
 
