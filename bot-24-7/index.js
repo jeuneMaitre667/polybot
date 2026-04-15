@@ -93,8 +93,10 @@ const RELAYER_URL = "https://relayer-v2.polymarket.com";
 
 // --- STATE ---
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
-let lastExecutedCid = null;
-let lastResolvedCids = new Set(); // Track resolved markets to avoid double alerts
+let activePosition = null;
+let isResolving = false; // v33.0 Mutex lock for resolution logic
+const lastResolvedCids = new Set();
+ // Track resolved markets to avoid double alerts
 let lastDigestDate = ''; // YYYY-MM-DD
 let lastDigestWindow = ''; // 'morning' | 'night'
 let clobClient = null;
@@ -104,7 +106,6 @@ const MAX_FEED_SIZE = 50;
 let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
 let maticBalance = null; 
 let wallet = null; // v16.21.1: Global scope fix
-let activePosition = null; // { tokenId, buyPrice, amount, slotStart, side }
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
 let isPerformanceLoopRunning = false; // v24.2.0: Mutex for overlap protection
 let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
@@ -165,13 +166,15 @@ async function addPosition(pos) {
  * Releases simulated funds as soon as the slot ends.
  */
 async function checkFastResolution(currentPrice) {
-    if (!IS_SIMULATION_ENABLED) return;
+    if (!IS_SIMULATION_ENABLED || isResolving) return; // v33.0: Mutex protection
     
-    const positions = loadActivePositions();
-    if (positions.length === 0) return;
-    
-    const now = Date.now();
-    let changed = false;
+    isResolving = true;
+    try {
+        const positions = loadActivePositions();
+        if (positions.length === 0) return;
+        
+        const now = Date.now();
+        let changed = false;
     
     for (let i = positions.length - 1; i >= 0; i--) {
         const pos = positions[i];
@@ -225,6 +228,9 @@ async function checkFastResolution(currentPrice) {
         if (activePosition && !positions.find(p => p.tokenId === activePosition.tokenId)) {
             activePosition = null;
         }
+    }
+    } finally {
+        isResolving = false; // v33.0: Always release lock
     }
 }
 
@@ -507,8 +513,6 @@ async function reportingLoop() {
 
         // 1. Get Unified Market State (v17.22.0 Sync)
         const marketState = await getUnifiedMarketState('BTC');
-        // v30.0: Slot Chaining (Simulated resolution release)
-        await checkFastResolution(marketState.bSpot);
         
         const { bSpot, effectiveStrike, bDeltaPct, source } = marketState;
 
@@ -1358,6 +1362,26 @@ async function executeRedeemOnChain(conditionId) {
 }
 
 /**
+ * v32.0: Smart Orderbook Sweep Logic
+ * Calculates the price level needed to clear the entire quantity.
+ */
+function calculateSellSweepPrice(qty, bids) {
+    if (!bids || bids.length === 0) return null;
+    let remaining = qty;
+    let worstPrice = parseFloat(bids[0].price);
+    
+    for (const bid of bids) {
+        const p = parseFloat(bid.price);
+        const s = parseFloat(bid.size);
+        const take = Math.min(remaining, s);
+        remaining -= take;
+        worstPrice = p;
+        if (remaining <= 0) break;
+    }
+    return worstPrice;
+}
+
+/**
  * Emergency Sell Execution via Relayer (v17.1.0)
  * Gasless and Ultra-Fast sub-1s exit.
  */
@@ -1434,14 +1458,31 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
+                // v32.0: Smart Sweep Integration
+                let sweepPrice = null;
+                try {
+                    const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
+                    const bids = book?.bids || [];
+                    sweepPrice = calculateSellSweepPrice(safeQty, bids);
+                    if (sweepPrice) {
+                        console.log(`[Emergency] 🎯 Smart Sweep Price calculated: $${sweepPrice} for ${safeQty} units`);
+                    }
+                } catch (e) {
+                    console.warn(`[Emergency] Orderbook fetch failed for sweep pricing. Falling back to sentinel price.`);
+                }
+
+                // Base price for buffers
+                const basePrice = sweepPrice || info.currentPrice;
+
                 // v29.1: Aggressive Flash Retry Policy (4 attempts)
                 let success = false;
-                const buffers = [0.01, 0.025, 0.05, 0.075]; // -1%, -2.5%, -5%, -7.5%
+                const buffers = [0, 0.002, 0.005, 0.01]; // v32.0: Much tighter buffers (0%, -0.2%, -0.5%, -1% from sweep)
                 for (let attempt = 1; attempt <= 4; attempt++) {
                     const priceBuffer = 1 - buffers[attempt - 1];
-                    const tightPrice = Math.max(0.01, parseFloat((eFinalPrice * priceBuffer).toFixed(4)));
+                    // v32.0: Fix eFinalPrice Reference Error + Apply smarter buffer
+                    const tightPrice = Math.max(0.01, parseFloat((basePrice * priceBuffer).toFixed(4)));
                     
-                    console.log(`[Emergency] 🚀 Attempt ${attempt}/4 | Price: $${tightPrice} (Buffer: -${(buffers[attempt-1]*100).toFixed(1)}%)`);
+                    console.log(`[Emergency] 🚀 Attempt ${attempt}/4 | Price: $${tightPrice} (Buffer: -${(buffers[attempt-1]*100).toFixed(2)}%)`);
 
                     try {
                         const response = await clobClient.createAndPostOrder(
