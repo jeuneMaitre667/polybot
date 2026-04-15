@@ -95,6 +95,7 @@ const RELAYER_URL = "https://relayer-v2.polymarket.com";
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
 let activePosition = null;
 let isResolving = false; // v33.0 Mutex lock for resolution logic
+let isReporting = false; // v34.0 Mutex lock for Telegram reporting
 const lastResolvedCids = new Set();
  // Track resolved markets to avoid double alerts
 let lastDigestDate = ''; // YYYY-MM-DD
@@ -405,12 +406,11 @@ async function init() {
     
     // Start the loops with organic timing
     setTimeout(scheduledMainLoop, getJitter(500, 100));
-    setInterval(reportingLoop, 1000);
+    reportingLoop();
     setInterval(performanceLoop, 10000); // v24.1.4: 6x faster resolution check (10s)
     
     // Initial triggers
     mainLoop();
-    reportingLoop();
     
     // v17.24.0: Stability Watchdog (Reset engine if it hangs for > 60s)
 
@@ -474,8 +474,16 @@ async function getUnifiedMarketState(asset = 'BTC') {
     };
 }
 
+/**
+ * v34.0: Recursive Reporting (Anti-Overlap)
+ */
 async function reportingLoop() {
+    if (isReporting) {
+        setTimeout(reportingLoop, 1000); // Try again next second
+        return;
+    }
 
+    isReporting = true;
     try {
         const now = Date.now();
         const slotStart = Math.floor(now / 300000) * 300000;
@@ -711,8 +719,11 @@ async function reportingLoop() {
             decisionFeed: decisionFeed,
             gasBalance: maticBalance !== null ? maticBalance.toFixed(4) : "---"
         });
-    } catch (e) {
-        console.error('[Reporting] v16.3.1 Loop Error:', e.message);
+    } catch (err) {
+        console.error('[Reporting] Critical loop failure:', err.message);
+    } finally {
+        isReporting = false;
+        setTimeout(reportingLoop, 1000); // v34.0: Schedule next run only AFTER completion
     }
 }
 

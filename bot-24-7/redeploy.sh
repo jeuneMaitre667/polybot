@@ -193,10 +193,10 @@ pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null 2>&1 || true
 echo ""
 echo "=== Redémarrage du bot (PM2) ==="
 # On essaie de redémarrer, sinon on start proprement avec les noms attendus
-pm2 restart polymarket-bot --update-env 2>/dev/null || pm2 start index.js --name polymarket-bot
+pm2 restart poly-engine --update-env 2>/dev/null || pm2 start index.js --name poly-engine
 pm2 restart bot-status-server --update-env 2>/dev/null || pm2 start status-server.js --name bot-status-server
 pm2 save 2>/dev/null || true
 
 echo ""
 echo "=== Redéploiement terminé. ==="
-echo "   Logs : pm2 logs polymarket-bot"
+echo "   Logs : pm2 logs poly-engine"
