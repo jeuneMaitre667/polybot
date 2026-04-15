@@ -1058,7 +1058,7 @@ async function mainLoop() {
                                     `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
                                     `• Price: $${bestAsk} (Taker)\n` +
                                     `• Qty: ${safeQty} 📦\n` +
-                                    `• Capital: $${tradeAmountUsd.toFixed(2)} 🏦`;
+                                    `• Mise: $${tradeAmountUsd.toFixed(2)} 🏦`;
                 sendTelegramAlert(simEntryMsg);
                 
                 // v31.6 True North: Accounting Precision
@@ -1071,7 +1071,7 @@ async function mainLoop() {
             } else {
                 const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Price: $${bestAsk}\n` +
-                                `• Size: $${tradeAmountUsd.toFixed(2)}\n` +
+                                `• Mise: $${tradeAmountUsd.toFixed(2)}\n` +
                                 `• Latency: ${totalLatency}ms ⚡`;
                 sendTelegramAlert(entryMsg);
             }

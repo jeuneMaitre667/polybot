@@ -10,15 +10,15 @@ const SESSION_MAX_LOSS = parseFloat(process.env.MAX_LOSS || '0.10');
 let sessionStartingBalance = null;
 
 export function calculateTradeSize(availableBalance) {
-    // v30.0: Aggressive Scaling Logic (10% of capital)
-    let scaledSize = availableBalance * 0.10;
+    // v31.8: Full Compounding Logic (100% of capital reinvested)
+    let scaledSize = availableBalance; // Reinvest everything
     
     // Respect bounds: Start at 10$ (INITIAL_BET_USD), Max 100$ (MAX_BET_USD)
-    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_BET_USD));
+    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_STAKE_USD));
     
     // Absolute Safety buffer (don't go to zero)
-    if (finalSize > availableBalance * 0.95) {
-        finalSize = availableBalance * 0.95;
+    if (finalSize > availableBalance * 0.98) {
+        finalSize = availableBalance * 0.98;
     }
 
     console.log('[RiskManager] Mode: AGGRESSIVE | Balance: $' + availableBalance.toFixed(2) + ' | Next Trade: $' + finalSize.toFixed(2));
