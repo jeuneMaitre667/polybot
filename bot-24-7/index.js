@@ -183,9 +183,11 @@ async function checkFastResolution(currentPrice) {
             // v31.5 Eagle Eye: Safety Zone (0.05%)
             const usedStrike = pos.officialStrike || pos.strike;
             const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
+            // v31.7 Ghost Buster: Reduced Gap for high-price buy-ins (0.01% instead of 0.05%)
+            const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
             
-            if (gapPct < 0.0005) {
-                console.log(`[FastResolution] 🦉 Eagle Eye: Gap too tight (${(gapPct * 100).toFixed(4)}%) for ${pos.slug}. Waiting...`);
+            if (gapPct < dynamicSafety) {
+                console.log(`[FastResolution] 🦉 Eagle Eye: Gap too tight (${(gapPct * 100).toFixed(4)}%) for ${pos.slug} (Threshold: ${dynamicSafety}). Waiting...`);
                 continue;
             }
 
