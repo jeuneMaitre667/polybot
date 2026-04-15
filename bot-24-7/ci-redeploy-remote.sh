@@ -2,10 +2,10 @@
 # Exécuté sur le VPS par GitHub Actions (scp + bash) : pre-pull GitHub avec retries, puis redeploy.sh à jour.
 set -euo pipefail
 
-grep -q '^GIT_REPO_URL=' "$HOME/bot-24-7/.env" 2>/dev/null \
-  || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> "$HOME/bot-24-7/.env"
+grep -q '^GIT_REPO_URL=' "$HOME/polybot/bot-24-7/.env" 2>/dev/null \
+  || echo 'GIT_REPO_URL=https://github.com/jeuneMaitre667/polybot.git' >> "$HOME/polybot/bot-24-7/.env"
 
-REPO="$HOME/polymarket-dashboard"
+REPO="$HOME/polybot"
 if [ -d "$REPO/.git" ]; then
   for a in 1 2 3 4 5; do
     if git -C "$REPO" fetch --prune origin "+refs/heads/main:refs/remotes/origin/main" \
@@ -23,7 +23,7 @@ fi
 if [ -f "$REPO/bot-24-7/redeploy.sh" ]; then
   bash "$REPO/bot-24-7/redeploy.sh"
 else
-  bash "$HOME/bot-24-7/redeploy.sh"
+  bash "$HOME/polybot/bot-24-7/redeploy.sh"
 fi
 
-bash "$HOME/bot-24-7/verify-deploy.sh"
+bash "$HOME/polybot/bot-24-7/verify-deploy.sh"
