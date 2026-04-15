@@ -114,7 +114,11 @@ export function buildSimulatedBuyFill({ amountUsd, bestAskP, conditionId }) {
 export async function fetchGammaMarketForCondition(conditionId) {
   const id = encodeURIComponent(String(conditionId).trim());
   const url = `https://gamma-api.polymarket.com/markets?condition_ids=${id}&limit=1`;
-  const { data } = await axios.get(url, { timeout: 15000, headers: { Accept: 'application/json' } });
+  const { data } = await axios.get(url, { 
+    timeout: 15000, 
+    headers: { Accept: 'application/json' },
+    httpsAgent: null // v34.3: Direct connection to Gamma
+  });
   return Array.isArray(data) ? data[0] : data?.[0] ?? null;
 }
 

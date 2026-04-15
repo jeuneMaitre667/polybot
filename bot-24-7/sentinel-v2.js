@@ -76,7 +76,10 @@ async function checkUpdates() {
 
     // 1. Check NPM Version
     try {
-        const npmRes = await axios.get(`https://registry.npmjs.org/${SDK_PACKAGE}/latest`, { timeout: 5000 });
+        const npmRes = await axios.get(`https://registry.npmjs.org/${SDK_PACKAGE}/latest`, { 
+            timeout: 5000,
+            httpsAgent: null 
+        });
         const latestVersion = npmRes.data.version;
         if (latestVersion !== state.lastSdkVersion) {
             alerts.push(`🚨 *POLYMARKET SDK UPDATE* ⚡\nNouveau SDK détecté : v${latestVersion} (Précédente: v${state.lastSdkVersion}). La migration V2 approche !`);
@@ -86,7 +89,10 @@ async function checkUpdates() {
 
     // 2. Check Changelog for Keywords
     try {
-        const clRes = await axios.get(CHANGELOG_URL, { timeout: 7000 });
+        const clRes = await axios.get(CHANGELOG_URL, { 
+            timeout: 7000,
+            httpsAgent: null
+        });
         const content = clRes.data;
         const keywords = ['V2', 'migration', 'Polymarket USD', 'Protocol Upgrade', 'USDC.e'];
         const found = keywords.filter(k => content.includes(k) && ! (state.lastFoundKeywords || []).includes(k));

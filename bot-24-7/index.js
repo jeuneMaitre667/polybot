@@ -342,8 +342,8 @@ async function validateGeoblockStatus() {
         if (proxyUrl) {
             const agent = new HttpsProxyAgent(proxyUrl);
             const ipLookup = await axios.get('https://api.ipify.org?format=json', { 
-                httpsAgent: agent, 
-                timeout: 10000 
+                timeout: 5000,
+                httpsAgent: null // v34.3: Direct connection for IP check
             }).catch(() => null);
             
             if (ipLookup && ipLookup.data && ipLookup.data.ip) {
@@ -444,7 +444,7 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const binanceKlinesUrl = `https://api.binance.com/api/v3/klines?symbol=${binanceSignalSymbol}`;
     
     // 1. Fetch Binance Spot (Current)
-    const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000 }).catch(() => null);
+    const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000, httpsAgent: null }).catch(() => null);
     const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
@@ -1184,7 +1184,7 @@ async function performanceLoop() {
             // v17.44.2: Support multiple redeems per slot if accidentally duplicated
             if (pos.slotEnd && (now > pos.slotEnd + 2000)) { 
                 const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}&closed=true`;
-                const res = await axios.get(url).catch(() => null);
+                const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
                 
                 if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
                     const event = res.data[0];
@@ -1451,7 +1451,7 @@ async function executeEmergencyExit(info) {
         const apiKey = process.env.RELAYER_API_KEY;
 
         // v24.0.0: High-Precision Spot Fetch
-        const priceResp = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC", { timeout: 8000 });
+        const priceResp = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDC", { timeout: 8000, httpsAgent: null });
         const currentSpot = parseFloat(priceResp.data.price);
 
         console.log(`[Emergency] 🛡️🛰️⚓ Sending SELL order to CLOB for ${pos.tokenId}...`);

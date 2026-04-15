@@ -18,15 +18,15 @@ const __dirname = path.dirname(__filename);
 const STRIKES_FILE = path.resolve(__dirname, 'boundary-strikes.json');
 
 /**
- * Moteur de Signaux Polymarket (v5.4.0 â€” BTC 5m Only)
- * GÃ¨re la rÃ©cupÃ©ration, le filtrage et le sizing (LOB depth) pour BTC.
+ * Moteur de Signaux Polymarket (v5.4.0 — BTC 5m Only)
+ * Gère la récupération, le filtrage et le sizing (LOB depth) pour BTC.
  */
 
 const signalCache = new Map(); // asset -> { data, ts }
 const FETCH_SIGNALS_CACHE_MS = 200;
 
 /**
- * RÃ©cupÃ¨re les signaux Gamma pour BTC 5m.
+ * Récupère les signaux Gamma pour BTC 5m.
  */
 export async function fetchSignals(asset, context = {}) {
     const now = Date.now();
@@ -44,12 +44,9 @@ export async function fetchSignals(asset, context = {}) {
     const startFetch = Date.now();
     try {
         const stealthOpts = getStealthProfile();
-        if (process.env.PROXY_URL) {
-            stealthOpts.proxyUrl = process.env.PROXY_URL;
-        }
-        logStealthMode(asset);
         
-        // v22.0.3: Explicitly wait for full body to avoid partial parse 401 side effects
+        // v34.3.3: Direct connection for discovery ONLY. 
+        // Force-omit proxyUrl to avoid 'received type null' validation errors in got-scraping.
         const resGot = await gotScraping.get(discoveryUrl, {
             ...stealthOpts,
             retry: { limit: 2 }
@@ -90,7 +87,6 @@ export async function fetchSignals(asset, context = {}) {
         console.log(`[${asset}] 📡 Discovery: ${validEvents.length} imminent markets found. Primary target: ${primaryEvent.slug}`);
         
         // v21.5.0: Aggregate signals from ALL valid imminent events
-        // This allows the bot to "see" the next slot for sniping while still reporting the current slot in the pipeline.
         const allSignals = [];
         for (const event of validEvents) {
             if (!event.markets) continue;
@@ -116,7 +112,7 @@ export async function fetchSignals(asset, context = {}) {
 
                 return {
                     asset,
-                    slug: event.slug, // Crucial: identify which market this signal belongs to
+                    slug: event.slug, 
                     conditionId: m.conditionId,
                     tokenIdToBuy: tokenIdYes,
                     tokenIdYes,
@@ -161,23 +157,21 @@ export function getSlotSlugForAsset(asset) {
     const prefix = asset.toLowerCase() === 'btc' ? 'btc-updown-5m' : `${asset.toLowerCase()}-updown-5m`;
     
     // v17.36.0: Return the CURRENT active slot for pipeline reporting (Math.floor).
-    // The sniper logic in index.js will still iterate over all future events for trading.
     const slotSec = Math.floor(now / 300000) * 300; 
     return `${prefix}-${slotSec}`;
 }
 
 /**
- * GÃ©nÃ¨re une clÃ© unique pour un signal (conditionId).
+ * Génère une clé unique pour un signal (conditionId).
  */
 export function getSignalKey(s) {
     return s.conditionId;
 }
 
 /**
- * Garde-fou temporel (Double-check avec entry timing).
+ * Garde-fou temporel.
  */
 export function shouldSkipTradeTiming(s) {
-    // Logique simplifiÃ©e : ici on pourrait importer isSlotEntryTimeForbiddenNow
     return false; 
 }
 
@@ -188,7 +182,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
     if (!book || !book.asks || book.asks.length === 0) return 0;
     
     let totalAvailableUsdc = 0;
-    const maxSlippage = targetPrice * 1.02; // TolÃ©rance 2%
+    const maxSlippage = targetPrice * 1.02; // Tolérance 2%
 
     for (const ask of book.asks) {
         const p = parseFloat(ask.price);
@@ -197,10 +191,7 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
         totalAvailableUsdc += (p * size);
     }
 
-    // SÃ©curitÃ© : on ne prend que 80% de la liquiditÃ© immÃ©diate pour Ã©viter de vider le carnet
     const optimal = totalAvailableUsdc * 0.8;
-    
-    // Frais inclus
     const netStake = optimal / (1 + (POLYMARKET_FEE_RATE * FEE_SAFETY_BUFFER));
     return Math.floor(netStake * 100) / 100;
 }
@@ -211,7 +202,6 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
 export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
     try {
         const data = fs.existsSync(STRIKES_FILE) ? JSON.parse(fs.readFileSync(STRIKES_FILE, 'utf8') || '{}') : {};
-        // Normaliser le timestamp Ã  la borne la plus proche (passÃ©e)
         const date = new Date(timestamp);
         date.setSeconds(0);
         date.setMilliseconds(0);
@@ -222,7 +212,6 @@ export function saveBoundaryStrike(asset, price, timestamp = Date.now()) {
         const key = `${date.getTime()}_${asset}`;
         data[key] = price;
         
-        // Garder seulement les 48 derniÃ¨res heures (3 actifs * 4 par heure * 48h = 576 entrÃ©es)
         const keys = Object.keys(data).sort();
         if (keys.length > 800) {
             const keysToDelete = keys.slice(0, keys.length - 800);
@@ -241,24 +230,20 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     
     try {
         let startTime = null;
-        // v9.8.12 : PrioritÃ© ABSOLUE au timestamp extrait du slug pour le matching 5m
         if (marketSlug && marketSlug.includes('-')) {
             const parts = marketSlug.split('-');
             const lastPart = parts[parts.length - 1];
             if (/^\d+$/.test(lastPart)) {
                 startTime = parseInt(lastPart) * 1000;
-                console.log(`[Strike] Extracted slot time from slug for ${asset}: ${startTime}`);
             }
         }
         
-        // Fallback sur startDateStr uniquement si pas de slug
         if (!startTime && startDateStr) {
             startTime = new Date(startDateStr).getTime();
         }
         
         if (!startTime) return null;
 
-        // v7.16.21 : Normalisation Ms (13 digits) vs Sec (10 digits)
         let normalizedTime = String(startTime);
         if (normalizedTime.length === 10) normalizedTime += '000';
         
@@ -267,8 +252,6 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
         if (fs.existsSync(STRIKES_FILE)) {
             const raw = fs.readFileSync(STRIKES_FILE, 'utf8');
             const data = JSON.parse(raw);
-            // v7.16.8 : Recherche absolue (loose match pour Ã©viter tout caractÃ¨re invisible)
-            // v9.8.11 : Recherche par ID ou par Timestamp (fallback)
             const cleanKey = Object.keys(data).find(k => {
                 const k1 = k.replace(/[^0-9A-Z_]/gi, '');
                 const k2 = targetKey.replace(/[^0-9A-Z_]/gi, '');
@@ -276,7 +259,6 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
             });
             
             if (!cleanKey) {
-                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne rÃ©cente (+- 2 min)
                 const targetMs = Number(normalizedTime);
                 const targetAsset = asset.trim().toUpperCase();
                 const nearbyKey = Object.keys(data).find((k) => {
@@ -287,12 +269,8 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
                     const keyAsset = rest.join('_').toUpperCase();
                     return keyAsset.includes(targetAsset);
                 });
-                if (nearbyKey) {
-                    console.log(`[Strike] NEARBY MATCH for ${asset}: ${data[nearbyKey]} (Key: ${nearbyKey}, target ${targetKey})`);
-                    return data[nearbyKey];
-                }
+                if (nearbyKey) return data[nearbyKey];
 
-                // v9.8.11 High-Fidelity Fallback : Essayer de trouver une borne récente (+- 2 min)
                 const now = Date.now();
                 const btcNearbyKey = Object.keys(data).find(k => {
                     const ts = parseInt(k.split('_')[0]);
@@ -301,15 +279,8 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
                 if (btcNearbyKey) return data[btcNearbyKey];
             }
             
-            if (cleanKey) {
-                const captured = data[cleanKey];
-                return captured;
-            } else {
-                // v17.20.0: Non-blocking miss
-                return null;
-            }
-        } else {
-            console.warn(`[Strike] Strikes file missing at: ${STRIKES_FILE}`);
+            if (cleanKey) return data[cleanKey];
+            return null;
         }
     } catch (err) {
         console.error('[Strike] Error lookup:', err.message);
@@ -317,9 +288,6 @@ export function lookupBoundaryStrike(asset, startDateStr, apiLine, marketSlug) {
     return null;
 }
 
-/**
- * v2027 : Extraction robuste du Strike depuis le texte Gamma (fallback line=0).
- */
 function extractStrikeFromQuestion(text) {
     if (!text) return null;
     const matches = text.match(/\$?\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?k?/gi);
@@ -330,5 +298,5 @@ function extractStrikeFromQuestion(text) {
         return parseFloat(val);
     }).filter(v => Number.isFinite(v) && v > 1000);
     if (candidates.length === 0) return null;
-    return candidates[0]; // Simplifié pour le moteur de signal (le filtre 1000 suffit pour BTC)
+    return candidates[0];
 }
