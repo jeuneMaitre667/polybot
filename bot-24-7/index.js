@@ -1053,13 +1053,19 @@ async function mainLoop() {
             const totalLatency = Date.now() - cycleStart;
             if (IS_SIMULATION_ENABLED) {
                 const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
-                                    `• Price: $${bestAsk}\n• Latency: ${totalLatency}ms\n• Size: $${tradeAmountUsd.toFixed(2)}`;
+                                    `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
+                                    `• Price: $${bestAsk} (Taker)\n` +
+                                    `• Qty: ${safeQty} 📦\n` +
+                                    `• Capital: $${tradeAmountUsd.toFixed(2)} 🏦`;
                 sendTelegramAlert(simEntryMsg);
                 
-                // Then update balance and log it
-                const result = await updateVirtualBalance(-tradeAmountUsd);
+                // v31.6 True North: Accounting Precision
+                const actualCost = safeQty * effectivePrice;
+                const change = tradeAmountUsd - actualCost;
+                
+                const result = await updateVirtualBalance(-actualCost);
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
-                console.log(`[Engine] 🧪 SIMULATION: Order placed | New Bal: $${finalBal.toFixed(2)}`);
+                console.log(`[Engine] 🧪 SIMULATION: Order placed | Cost: $${actualCost.toFixed(3)} | New Bal: $${finalBal.toFixed(2)} (Change kept: $${change.toFixed(3)})`);
             } else {
                 const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
                                 `• Price: $${bestAsk}\n` +
