@@ -143,7 +143,7 @@ if [ "${REDEPLOY_PHASE:-}" != "2" ]; then
   echo ""
   echo "=== Copie du code (conservation de .env) ==="
   mkdir -p "$BOT_DIR"
-  rsync -a --exclude='.env' --exclude='node_modules' "$REPO_DIR/bot-24-7/" "$BOT_DIR/"
+  rsync -a --exclude='.env' --exclude='node_modules' --exclude='*.json' "$REPO_DIR/bot-24-7/" "$BOT_DIR/"
   if [ -f "$BOT_DIR/.env.example" ] && [ ! -f "$BOT_DIR/.env" ]; then
     cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
     echo "   .env créé depuis .env.example — pense à configurer PRIVATE_KEY."

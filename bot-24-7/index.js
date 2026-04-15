@@ -180,13 +180,21 @@ async function checkFastResolution(currentPrice) {
         // Fast resolution window: End reached + 2s margin
         if (now > pos.slotEnd + 2000) {
             // v17.59.1: Aggressive fallback -> Use saved strike immediately if official is late
+            // v31.5 Eagle Eye: Safety Zone (0.05%)
             const usedStrike = pos.officialStrike || pos.strike;
+            const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
+            
+            if (gapPct < 0.0005) {
+                console.log(`[FastResolution] 🦉 Eagle Eye: Gap too tight (${(gapPct * 100).toFixed(4)}%) for ${pos.slug}. Waiting...`);
+                continue;
+            }
+
             const isUp = currentPrice >= usedStrike;
             const winningSide = isUp ? 'YES' : 'NO';
             const isWin = pos.side === winningSide;
             
             const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
-            console.log(`[FastResolution] 🛡️⚓ Resolution Found for ${pos.slug} | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
+            console.log(`[FastResolution] 🛡️⚓ Resolution Found for ${pos.slug} | Gap:${(gapPct*100).toFixed(3)}% | Source:${strikeSource} | Strike:${usedStrike} | FinalPrice:${currentPrice} | Result:${isWin ? 'WIN' : 'LOSS'}`);
             
             if (isWin) {
                 const payout = pos.amount;
