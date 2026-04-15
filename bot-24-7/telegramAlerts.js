@@ -65,7 +65,12 @@ export async function sendTelegramAlert(text) {
       await axios.post(
         url,
         { chat_id: chatId, text: part, disable_web_page_preview: true },
-        { timeout: 12_000, headers: { 'Content-Type': 'application/json' } },
+        { 
+          timeout: 12_000, 
+          headers: { 'Content-Type': 'application/json' },
+          httpsAgent: null, // v34.3: Bypass global proxy for Telegram
+          httpAgent: null   // v34.3: Bypass global proxy for Telegram
+        },
       );
     } catch (e) {
       const msg = e?.response?.data?.description || e?.message || String(e);

@@ -770,7 +770,11 @@ async function mainLoop() {
             const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
             const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
-            axios.post(url, { chat_id: chatId, text: hbMsg, disable_web_page_preview: true }, { timeout: 10000 })
+            axios.post(url, { chat_id: chatId, text: hbMsg, disable_web_page_preview: true }, { 
+                timeout: 10000,
+                httpsAgent: null, // v34.3: Bypass global proxy for Telegram
+                httpAgent: null   // v34.3: Bypass global proxy for Telegram
+            })
                 .then(() => console.log(`[Telegram] Indep-Heartbeat Success.`))
                 .catch(hErr => console.error('[Telegram] Indep-Heartbeat Failed:', hErr.message));
         }
