@@ -14,7 +14,7 @@ export function calculateTradeSize(availableBalance) {
     let scaledSize = availableBalance; // Reinvest everything
     
     // Respect bounds: Start at 10$ (INITIAL_BET_USD), Max 100$ (MAX_BET_USD)
-    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_STAKE_USD));
+    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_BET_USD));
     
     // Absolute Safety buffer (don't go to zero)
     if (finalSize > availableBalance * 0.98) {
