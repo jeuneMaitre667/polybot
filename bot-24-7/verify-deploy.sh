@@ -7,7 +7,7 @@
 # /api/bot-status peut être lent (gros fichiers) : timeout long + succès si /api/health OK + PM2 online.
 
 set -e
-BOT_DIR="${BOT_DIR:-$HOME/bot-24-7}"
+BOT_DIR="${BOT_DIR:-$HOME/polybot/bot-24-7}"
 ENV_FILE="$BOT_DIR/.env"
 PORT="${BOT_STATUS_PORT:-3001}"
 

@@ -12,8 +12,8 @@ export NPM_CONFIG_FUND=false
 export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 
-BOT_DIR="$HOME/bot-24-7"
-REPO_DIR="$HOME/polymarket-dashboard"
+BOT_DIR="$HOME/polybot/bot-24-7"
+REPO_DIR="$HOME/polybot"
 ENV_FILE="$BOT_DIR/.env"
 
 git_reset_to_origin_default() {
@@ -159,7 +159,7 @@ echo ""
 echo "=== Installation des dépendances (phase 2) ==="
 # Petits Lightsail (512 Mo–1 Go) : « rm -rf node_modules » + « npm ci » pic RAM → processus « Killed » (OOM),
 # le script s’arrête (set -e) et PM2 n’est jamais redémarré. Par défaut : mise à jour **sans** effacer node_modules.
-# Forcer ancien comportement (clean + ci) : REDEPLOY_NPM_CLEAN=1 bash ~/bot-24-7/redeploy.sh
+# Forcer ancien comportement (clean + ci) : REDEPLOY_NPM_CLEAN=1 bash ~/polybot/bot-24-7/redeploy.sh
 cd "$BOT_DIR" || exit 1
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512}"
 if [ "${REDEPLOY_NPM_CLEAN:-}" = "1" ]; then
