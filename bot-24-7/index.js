@@ -1,5 +1,6 @@
 /**
- * Master Controller (v2025 MODULAR - v16.3.0)
+ * Master Controller (v2025 MODULAR - v34.2 RECOVERY)
+ * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -110,6 +111,8 @@ let wallet = null; // v16.21.1: Global scope fix
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
 let isPerformanceLoopRunning = false; // v24.2.0: Mutex for overlap protection
 let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
+let lastLogSkipTime = 0; // v34.2
+let lastLogPulseTime = 0; // v34.2
 let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
@@ -816,7 +819,8 @@ async function mainLoop() {
         // 2. Timing Check (Dynamic Window: T-start to T-end)
 
         if (secondsLeft < SNIPER_WINDOW_END || secondsLeft > SNIPER_WINDOW_START) {
-            if (now % 30000 < 1000) { // Periodic log only (every 30s) to avoid log spam
+            if (now - lastLogSkipTime > 30000) { // v34.2: Fixed throttle (30s)
+                lastLogSkipTime = now;
                 console.log(`[Engine] Skip: Timing window closed (T-${secondsLeft}s)`);
             }
             return; 
@@ -826,7 +830,8 @@ async function mainLoop() {
         // Fresh context check already done at top of loop for resolution
         
         if (Math.abs(mv.bDeltaPct) < SNIPER_DELTA_THRESHOLD_PCT) {
-            if (secondsLeft % 30 === 0) {
+            if (now - lastLogPulseTime > 30000) { // v34.2: Fixed throttle (30s)
+                lastLogPulseTime = now;
                 console.log(`[PID:${process.pid}] [Engine] Pulse: Monitoring BTC (Delta: ${fmt(mv.bDeltaPct, 3)}% | Target: ${SNIPER_DELTA_THRESHOLD_PCT}%)`);
             }
             return;
