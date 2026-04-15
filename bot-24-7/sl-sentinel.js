@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { sendTelegramAlert } from './telegramAlerts.js';
+import * as RiskManager from './risk-manager.js';
 
 /**
  * v17.1.0 Ultra-Fast SL Sentinel (WebSocket)
@@ -23,7 +24,7 @@ export function startMonitoring(tokenId, buyPrice, side, stopLossPct, onTrigger)
         onTrigger
     };
 
-    console.log(`[SL Sentinel] ⚡ Monitoring started for ${tokenId} (Target SL: ${activeSubscription.stopLossThreshold.toFixed(3)})`);
+    console.log(`[SL Sentinel] ⚡ Monitoring started for ${tokenId} (Target SL: -${(stopLossPct * 100).toFixed(1)}% Net PnL)`);
     
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         initWebSocket();
@@ -160,8 +161,10 @@ function processOrderBook(book) {
         // console.log(`[SL Sentinel] Spot: ${bestBid} | PnL: ${(pnlPct * 100).toFixed(2)}%`);
     }
 
-    if (bestBid <= activeSubscription.stopLossThreshold) {
-        console.warn(`[SL Sentinel] 🚨 STOP LOSS TRIGGERED at ${bestBid}! (Threshold: ${activeSubscription.stopLossThreshold})`);
+    const isTriggered = RiskManager.shouldTriggerStopLoss(activeSubscription.buyPrice, bestBid);
+
+    if (isTriggered) {
+        console.warn(`[SL Sentinel] 🚨 SWISS GUARD TRIGGERED at ${bestBid}! (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
         
         const triggerFn = activeSubscription.onTrigger;
         const info = { ...activeSubscription, currentPrice: bestBid, pnlPct };

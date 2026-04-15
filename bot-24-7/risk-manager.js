@@ -25,11 +25,21 @@ export function calculateTradeSize(availableBalance) {
     return finalSize;
 }
 
-export function shouldTriggerStopLoss(buyPrice, currentAsk) {
-    if (!buyPrice || !currentAsk) return false;
-    const pnlPct = (currentAsk - buyPrice) / buyPrice;
-    if (pnlPct <= -SESSION_MAX_LOSS) {
-        console.warn('[RiskManager] ⚠️ STOP LOSS TRIGGERED: Buy price was ' + buyPrice + ', Current is ' + currentAsk + ' (PnL: ' + (pnlPct * 100).toFixed(2) + '%)');
+export function shouldTriggerStopLoss(buyPrice, currentBid) {
+    if (!buyPrice || !currentBid) return false;
+    
+    // v31.0 Swiss Guard: Fee-Aware Net PnL
+    // Estimate 1.8% fee on entry and 1.8% on exit (Total approx 3.6% overhead)
+    const entryFee = 0.018;
+    const exitFee = 0.018;
+    
+    const effectiveEntry = buyPrice * (1 + entryFee);
+    const effectiveExit = currentBid * (1 - exitFee);
+    
+    const netPnlPct = (effectiveExit - effectiveEntry) / effectiveEntry;
+    
+    if (netPnlPct <= -SESSION_MAX_LOSS) {
+        console.warn(`[RiskManager] 🛡️ SWISS GUARD TRIGGER: Net PnL is ${(netPnlPct * 100).toFixed(2)}% (Limit: -${(SESSION_MAX_LOSS * 100).toFixed(2)}% | Entry: ${buyPrice} | Bid: ${currentBid})`);
         return true;
     }
     return false;

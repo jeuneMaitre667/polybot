@@ -1357,11 +1357,14 @@ async function executeEmergencyExit(info) {
 
         // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {
-            const remainingValue = info.currentPrice * pos.amount;
+            // v31.0: Real-world Fee Deduction (Approx 1.8% exit fee)
+            const exitFee = 0.018;
+            const remainingValue = (info.currentPrice * (1 - exitFee)) * pos.amount;
+            
             const newBalValue = await updateVirtualBalance(remainingValue);
             const finalBal = typeof newBalValue === 'number' ? newBalValue : (newBalValue?.balance || 0);
 
-            console.log(`[Emergency] SIMULATION EXIT: Price $${info.currentPrice} (Recovery: +$${remainingValue.toFixed(2)})`);
+            console.log(`[Emergency] SIMULATION EXIT: Price $${info.currentPrice} | Recovery: +$${remainingValue.toFixed(2)} (Fees incl.)`);
             
             // v17.53.0: CLEANUP FIRST, ALERT LATER (Robustness)
             activePosition = null;
