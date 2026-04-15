@@ -9,22 +9,19 @@ const SESSION_MAX_LOSS = parseFloat(process.env.MAX_LOSS || '0.10');
 
 let sessionStartingBalance = null;
 
-/**
- * Calculates the next trade size
- * In SAFE MODE v27.7, we strictly use INITIAL_BET_USD to avoid profit miscalculation.
- * @param {number} availableBalance - The current USDC balance
- * @returns {number} The size of the next trade in USD
- */
 export function calculateTradeSize(availableBalance) {
-    // We strictly respect INITIAL_BET_USD. We don't reinvest yet to avoid deposit-bugs.
-    let finalSize = Math.min(INITIAL_BET_USD, MAX_BET_USD, availableBalance);
+    // v30.0: Aggressive Scaling Logic (10% of capital)
+    let scaledSize = availableBalance * 0.10;
     
-    // Safety buffer (don't go to zero)
+    // Respect bounds: Start at 10$ (INITIAL_BET_USD), Max 100$ (MAX_BET_USD)
+    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_BET_USD));
+    
+    // Absolute Safety buffer (don't go to zero)
     if (finalSize > availableBalance * 0.95) {
         finalSize = availableBalance * 0.95;
     }
 
-    console.log('[RiskManager] Mode: SAFE (Fixed) | Balance: $' + availableBalance.toFixed(2) + ' | Next Trade: $' + finalSize.toFixed(2));
+    console.log('[RiskManager] Mode: AGGRESSIVE | Balance: $' + availableBalance.toFixed(2) + ' | Next Trade: $' + finalSize.toFixed(2));
     return finalSize;
 }
 

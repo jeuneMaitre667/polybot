@@ -497,6 +497,9 @@ async function reportingLoop() {
 
         // 1. Get Unified Market State (v17.22.0 Sync)
         const marketState = await getUnifiedMarketState('BTC');
+        // v30.0: Slot Chaining (Simulated resolution release)
+        await checkFastResolution(marketState.bSpot);
+        
         const { bSpot, effectiveStrike, bDeltaPct, source } = marketState;
 
         // v17.20.0: Aggressive Pure Binance Strategy logic remains identical but now uses marketState
@@ -633,7 +636,7 @@ async function reportingLoop() {
                 
                 const officialLabel = polyStrike ? `(Poly:${fmt(polyStrike, 2)})` : '';
                 
-                console.log(`[PIPELINE] | slot:${currentSlotLabel} | ${upLabel}:${fmt(bestAskUp * 100, 1)}% | ${downLabel}:${fmt(bestAskDown * 100, 1)}% | Bal:$${fmt(displayBalance, 2)} | Open:${fmt(effectiveStrike, 2)}${officialLabel} | Spot:${fmt(bSpot, 2)} | Δ:${deltaSign}$${fmt(deltaUsd, 2)} (${deltaSign}${fmt(deltaPct, 3)}%)`);
+                console.log(`[PIPELINE] | T-${secondsLeft}s | slot:${currentSlotLabel} | ${upLabel}:${fmt(bestAskUp * 100, 1)}% | ${downLabel}:${fmt(bestAskDown * 100, 1)}% | Bal:$${fmt(displayBalance, 2)} | Open:${fmt(effectiveStrike, 2)}${officialLabel} | Spot:${fmt(bSpot, 2)} | Δ:${deltaSign}$${fmt(deltaUsd, 2)} (${deltaSign}${fmt(deltaPct, 3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
