@@ -970,13 +970,6 @@ async function mainLoop() {
             // ... (simulation logic same)
             const totalLatency = Date.now() - cycleStart;
             console.log(`[Engine] 🧪 SIMULATION: Order placed | Latency: ${totalLatency}ms`);
-            const currentSimBal = getVirtualBalance();
-            const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🎯\n\n` +
-                                `• Side: ${side} 🏹\n` +
-                                `• Price: $${safePrice.toFixed(3)} (Taker) 💵\n` +
-                                `• Qty: ${safeQty} 📦\n` +
-                                `• Capital: $${currentSimBal.toFixed(2)} 🏦`;
-            try { await sendTelegramAlert(simEntryMsg); } catch (e) {}
         } else {
             const startExec = Date.now();
             let orderData = null;
