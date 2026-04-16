@@ -1082,7 +1082,7 @@ async function mainLoop() {
                 }
                 
                 // v31.6 True North: Accounting Precision
-                const actualCost = safeQty * effectivePrice;
+                const actualCost = safeQty * bestAsk;
                 const change = tradeAmountUsd - actualCost;
                 
                 const result = await updateVirtualBalance(-actualCost);
