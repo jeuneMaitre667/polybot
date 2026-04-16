@@ -15,3 +15,5 @@ sentinel-state.json
 last-trade.json
 *.log
 
+
+virtual-wallet.json
