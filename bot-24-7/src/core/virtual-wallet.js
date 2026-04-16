@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 // On remonte d'un niveau si on est dans src/core
 const WALLET_FILE = path.join(__dirname, '..', '..', 'virtual-wallet.json');
 
-const INITIAL_CAPITAL = 1000.0;
+const INITIAL_CAPITAL = 222.21;
 
 /**
  * Lit le solde virtuel actuel. 
