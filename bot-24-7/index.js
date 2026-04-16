@@ -446,8 +446,9 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
     const strikeTime = slotStart; 
     let bStrike = await getBinanceStrike(asset, strikeTime);
-    const source = bStrike ? 'OFFICIAL' : 'MISSING';
-    const effectiveStrike = bStrike;
+    let pStrike = await fetchStrikeFromPolymarket(asset, strikeTime);
+    const effectiveStrike = pStrike || bStrike;
+    const source = pStrike ? 'POLY-OFFICIAL' : (bStrike ? 'SYNC-BINANCE' : 'MISSING');
     
     // 3. Calculate Delta
     let bDeltaPct = 0;
