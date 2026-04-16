@@ -917,9 +917,22 @@ async function mainLoop() {
         const safetyFactor = 0.98; // Leave a tiny bit for precision safety
         const availableMax = IS_SIMULATION_ENABLED ? getVirtualBalance() : Math.max(0, (userBalance || 0) * safetyFactor);
         
+        // Critical Fix: Prevent $0 trades
+        if (!executionPrice || executionPrice <= 0) {
+            console.error(`[Engine] 🛡️⚠️ ABORT: Price discovery failed ($${executionPrice}). Trade skipped.`);
+            return;
+        }
+
         if (tradeAmountUsd > availableMax) {
             console.log(`[Risk] Capping trade size from $${tradeAmountUsd.toFixed(2)} to $${availableMax.toFixed(2)} due to balance limits.`);
             tradeAmountUsd = availableMax;
+        }
+
+        // v17.0.4.1: HARD SAFETY CAP (Max $100 per position, regardless of balance)
+        const HARD_MAX_STAKE = 100.0;
+        if (tradeAmountUsd > HARD_MAX_STAKE) {
+            console.log(`[Risk] 🛡️🛰️⚓ Safety Guard: Capping stake from $${tradeAmountUsd.toFixed(2)} to $${HARD_MAX_STAKE.toFixed(2)}`);
+            tradeAmountUsd = HARD_MAX_STAKE;
         }
 
         if (tradeAmountUsd < 1.0) {
@@ -1045,7 +1058,7 @@ async function mainLoop() {
             activePosition = {
                 tokenId: String(tokenId), // v34.4: Force String for SL Sentinel reliability
                 conditionId: currentSig.conditionId,
-                buyPrice: bestAsk,
+                buyPrice: executionPrice,
                 strike: currentSig.strike, // Binance reference (Signal)
                 officialStrike: currentSig.strike, // Temp fallback
                 amount: safeQty,
@@ -1067,7 +1080,7 @@ async function mainLoop() {
                 if (lastAlertedSlot !== slotStart) {
                     const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
                                         `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
-                                        `• Price: $${bestAsk} (Taker)\n` +
+                                        `• Price: $${executionPrice} (Taker)\n` +
                                         `• Qty: ${safeQty} 📦\n` +
                                         `• Mise: $${tradeAmountUsd.toFixed(2)} 🏦`;
                     sendTelegramAlert(simEntryMsg);
@@ -1075,7 +1088,7 @@ async function mainLoop() {
                 }
                 
                 // v31.6 True North: Accounting Precision
-                const actualCost = safeQty * bestAsk;
+                const actualCost = safeQty * executionPrice;
                 const change = tradeAmountUsd - actualCost;
                 
                 const result = await updateVirtualBalance(-actualCost);
@@ -1147,9 +1160,27 @@ async function performanceLoop() {
 
         if (window) {
             try {
-                const logs = fs.readFileSync(path.join(process.cwd(), 'orders.log'), 'utf8');
-                const stats = computeMiddayDigestStats(logs, window.startMs, window.endMs);
-                const msg = formatMiddayDigestMessage(stats, { 
+                const logPath = path.join(process.cwd(), 'orders.log');
+                
+                // v34.4.1: CRITICAL RAM SHIELD
+                // Check file size before synchronous read to prevent ffreeze at midnight
+                if (!fs.existsSync(logPath)) {
+                    console.warn(`[Sentinel] Digest skipped: orders.log not found.`);
+                    return;
+                }
+                
+                const stats = fs.statSync(logPath);
+                const sizeMb = stats.size / (1024 * 1024);
+                
+                if (sizeMb > 2.0) {
+                    console.error(`[Sentinel] 🛡️⚠️ DIGEST ABORTED: orders.log is too large (${sizeMb.toFixed(2)}MB). Clear logs to resume reporting.`);
+                    await sendTelegramAlert(`🛡️⚠️ *RAPPORT DESACTIVE* : Le fichier orders.log est trop volumineux (${sizeMb.toFixed(2)}Mo) et risque de faire planter le serveur. Pensez à le vider.`);
+                    return;
+                }
+
+                const logs = fs.readFileSync(logPath, 'utf8');
+                const digestStats = computeMiddayDigestStats(logs, window.startMs, window.endMs);
+                const msg = formatMiddayDigestMessage(digestStats, { 
                     timeZone: tz, 
                     dateStr, 
                     windowLabel: windowName, 
@@ -1158,7 +1189,8 @@ async function performanceLoop() {
                 await sendTelegramAlert(msg);
                 console.log(`[Sentinel] Digest ${windowName} envoyé.`);
             } catch (err) {
-                console.error(`[Sentinel] Erreur digest:`, err.message);
+                console.error(`[Sentinel] Erreur critique digest:`, err.message);
+                // Non-blocking: bot continues trading
             }
         }
     }

@@ -134,12 +134,14 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
 // v24.2.4: High-Speed Memory Cache (Zero Disk Lag)
 const binanceStrikeCache = {};
 const pendingBinanceRequests = {};
+const negativeStrikeCache = {}; // v24.2.6: Anti-Retry Storm (Blacklist failures for 5m)
 
 /**
  * getBinanceStrike(asset, startTime)
  * v2025 : Récupère le prix d'ouverture Binance.
  * v24.2.4 : Cache RAM pour éliminer la latence disque des scans 1Hz.
  * v24.2.5 : Anti-Storm Lock (pendingBinanceRequests) pour éviter les boucles CPU infinies.
+ * v24.2.6 : Negative Caching (Stop retrying dead slots for 5 minutes)
  */
 export const getBinanceStrike = async (asset, startTime) => {
     const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
@@ -149,7 +151,13 @@ export const getBinanceStrike = async (asset, startTime) => {
     // 1. Check RAM first (Fastest)
     if (binanceStrikeCache[cacheKey]) return binanceStrikeCache[cacheKey];
 
-    // 2. ANTI-STORM LOCK: Si une requête est déjà en cours pour ce slot, on attend sa promesse
+    // 2. Check Negative Cache (Blacklist)
+    const negEntry = negativeStrikeCache[cacheKey];
+    if (negEntry && (Date.now() - negEntry < 300000)) { // 5 minutes cooldown
+        return null; 
+    }
+
+    // 3. ANTI-STORM LOCK: Si une requête est déjà en cours pour ce slot, on attend sa promesse
     if (pendingBinanceRequests[cacheKey]) {
         return pendingBinanceRequests[cacheKey];
     }
@@ -188,6 +196,8 @@ export const getBinanceStrike = async (asset, startTime) => {
         } catch (e) {
             // Throttling console warning for backfill failure
             console.warn(`[Strike] Binance Backfill Fail for ${cacheKey}:`, e.message);
+            // v24.2.6: Track failure to avoid instant retry
+            negativeStrikeCache[cacheKey] = Date.now();
         } finally {
             // Release the lock
             delete pendingBinanceRequests[cacheKey];
