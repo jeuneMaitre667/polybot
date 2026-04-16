@@ -189,7 +189,7 @@ async function checkFastResolution(currentPrice) {
                 const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
                 const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
                 
-                const isForced = now > pos.slotEnd + 10000;
+                const isForced = now > pos.slotEnd + 300000;
                 if (gapPct < dynamicSafety && !isForced) continue;
 
                 // ATOMIC CLAIM: Remove from log before resolving to prevent race conditions
