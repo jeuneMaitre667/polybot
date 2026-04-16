@@ -187,7 +187,8 @@ async function checkFastResolution(currentPrice) {
                 const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
                 const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
                 
-                if (gapPct < dynamicSafety) continue;
+                const isForced = now > pos.slotEnd + 10000;
+                if (gapPct < dynamicSafety && !isForced) continue;
 
                 // ATOMIC CLAIM: Remove from log before resolving to prevent race conditions
                 let claimed = false;
@@ -206,19 +207,20 @@ async function checkFastResolution(currentPrice) {
                 const isUp = currentPrice >= usedStrike;
                 const isWin = pos.side === (isUp ? 'YES' : 'NO');
                 const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
+                const resolutionType = isForced ? 'FORCED' : 'ATOMIC';
                 
                 if (isWin) {
                     const payout = pos.amount;
                     const profitNet = payout - (pos.buyPrice * pos.amount);
                     const result = await updateVirtualBalance(payout);
-                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance || 0) : (result || 0));
                     
-                    console.log(`[FastResolution] 🛡️⚓ Atomic Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
-                    await sendTelegramAlert(`🛡️⚓ *FAST COMPOUND* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
+                    console.log(`[FastResolution] 🛡️⚓ ${resolutionType} Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
+                    await sendTelegramAlert(`🛡️⚓ *${resolutionType} COMPOUND* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
                 } else {
                     const bal = await getVirtualBalance();
-                    console.log(`[FastResolution] 🛡️⚓ Atomic Loss Recorded. Balance: ${bal.toFixed(2)}`);
-                    await sendTelegramAlert(`🛡️⚓ *FAST LOSS* 🛡️⚓\n• Solde fixe: ${bal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
+                    console.log(`[FastResolution] 🛡️⚓ ${resolutionType} Loss Recorded. Balance: ${bal.toFixed(2)}`);
+                    await sendTelegramAlert(`🛡️⚓ *${resolutionType} LOSS* 🛡️⚓\n• Solde fixe: ${bal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
                 }
                 
                 if (activePosition && activePosition.tokenId === pos.tokenId) activePosition = null;
