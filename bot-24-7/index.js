@@ -183,51 +183,39 @@ async function checkFastResolution(currentPrice) {
         const now = Date.now();
         
         for (const pos of [...positions]) { // Iteration on clone
-            if (!pos.isSimulated || !pos.slotEnd || !pos.strike) continue;
+            if (!pos.isSimulated || !pos.slotEnd) continue;
             
+            // v34.4: Simplified Binance-Centric Resolution (Zero Patience Mode)
+            // User Request: No SL trigger = Systematic Win for simulation compounding efficiency
             if (now > pos.slotEnd + 2000) {
-                const usedStrike = pos.officialStrike || pos.strike;
-                const gapPct = Math.abs(currentPrice - usedStrike) / usedStrike;
-                const dynamicSafety = (pos.buyPrice > 0.98) ? 0.0001 : 0.0005;
-                
-                const isForced = now > pos.slotEnd + 300000;
-                if (gapPct < dynamicSafety && !isForced) continue;
-
-                // ATOMIC CLAIM: Remove from log before resolving to prevent race conditions
+                // ATOMIC CLAIM: Remove from log before resolving
                 let claimed = false;
                 await runAtomicUpdate(POSITION_LOG, (list = []) => {
-                    const idx = list.findIndex(p => p.tokenId === pos.tokenId);
+                    const idx = list.findIndex(p => String(p.tokenId) === String(pos.tokenId)); // Force string matching
                     if (idx !== -1) {
                         list.splice(idx, 1);
                         claimed = true;
-                        return list;
                     }
                     return list;
                 });
 
-                if (!claimed) continue; // Already resolved by another process or concurrent tick
+                if (!claimed) continue;
 
-                const isUp = currentPrice >= usedStrike;
-                const isWin = pos.side === (isUp ? 'YES' : 'NO');
-                const strikeSource = pos.officialStrike ? 'OFFICIAL' : 'LOCAL-SNAPSHOT';
-                const resolutionType = isForced ? 'FORCED' : 'ATOMIC';
+                // Simplified logic: If we reached expiry without SL, it's a WIN.
+                const isWin = true; 
                 
                 if (isWin) {
                     const payout = pos.amount;
-                    const cost = pos.buyPrice * pos.amount; // v34.3.6: Use precise recorded cost
+                    const cost = parseFloat((pos.buyPrice * pos.amount).toFixed(2));
                     const profitNet = payout - cost;
                     const result = await updateVirtualBalance(payout);
                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance || 0) : (result || 0));
                     
-                    console.log(`[FastResolution] 🛡️⚓ ${resolutionType} Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
-                    await sendTelegramAlert(`🛡️⚓ *${resolutionType} COMPOUND* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
-                } else {
-                    const bal = await getVirtualBalance();
-                    console.log(`[FastResolution] 🛡️⚓ ${resolutionType} Loss Recorded. Balance: ${bal.toFixed(2)}`);
-                    await sendTelegramAlert(`🛡️⚓ *${resolutionType} LOSS* 🛡️⚓\n• Solde fixe: ${bal.toFixed(2)} 🛡️⚓\n• Source: ${strikeSource} 🛡️⚓`);
-                }
+                    console.log(`[FastResolution] 🛡️⚓ ATOMIC Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
+                    await sendTelegramAlert(`🛡️⚓ *SIMULATED WIN (BINANCE)* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Precision: 2 decimals ⚖️`);
+                } 
                 
-                if (activePosition && activePosition.tokenId === pos.tokenId) activePosition = null;
+                if (activePosition && String(activePosition.tokenId) === String(pos.tokenId)) activePosition = null;
             }
         }
     } finally {
@@ -1055,7 +1043,7 @@ async function mainLoop() {
             });
 
             activePosition = {
-                tokenId,
+                tokenId: String(tokenId), // v34.4: Force String for SL Sentinel reliability
                 conditionId: currentSig.conditionId,
                 buyPrice: bestAsk,
                 strike: currentSig.strike, // Binance reference (Signal)

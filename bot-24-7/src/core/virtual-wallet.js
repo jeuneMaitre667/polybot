@@ -26,8 +26,8 @@ export function getVirtualBalance() {
 export async function updateVirtualBalance(deltaUsd) {
     try {
         const result = await runAtomicUpdate(WALLET_FILE, (data) => {
-            const current = data.balance || INITIAL_CAPITAL;
-            const next = Math.max(0, current + deltaUsd);
+            // v34.4: Force 2 decimal precision for zero-drift ROI accounting
+            const next = Math.max(0, parseFloat((current + deltaUsd).toFixed(2)));
             
             console.log(`[Wallet] 💰 Atomic Update: ${current.toFixed(2)} -> ${next.toFixed(2)} (${deltaUsd > 0 ? '+' : ''}${deltaUsd.toFixed(2)})`);
             

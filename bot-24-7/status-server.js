@@ -20,7 +20,7 @@ const PORT = Number(process.env.BOT_STATUS_PORT) || 3001;
 const HOST = '0.0.0.0';
 const SECRET = process.env.BOT_STATUS_SECRET || '';
 const includeActiveWindowLiquidity = process.env.INCLUDE_ACTIVE_WINDOW_LIQUIDITY === 'true';
-const BOT_PM2_NAMES = ['polymarket-bot', 'bot-modular', 'bot-modular-v1'];
+const BOT_PM2_NAMES = ['poly-engine', 'bot-status-server', 'polymarket-bot', 'bot-modular', 'bot-modular-v1'];
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
