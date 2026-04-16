@@ -1095,7 +1095,7 @@ async function mainLoop() {
             // v17.1.0: Launch Stop Loss Sentinel
             const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10"); // Locked at 10%
             SLSentinel.startMonitoring(
-                tokenId, 
+                String(tokenId), 
                 executionPrice, 
                 side, 
                 stopLossPct, 
@@ -1406,8 +1406,8 @@ async function executeEmergencyExit(info) {
         
         // Fetch current quantity from active position
         const positions = loadActivePositions();
-        const pos = positions.find(p => p.tokenId === info.tokenId);
-        if (!pos) throw new Error("Position data not found for exit.");
+        const pos = positions.find(p => String(p.tokenId) === String(info.tokenId));
+        if (!pos) throw new Error(`Position data not found for exit: ${info.tokenId}`);
 
         // v17.36.10: IMMUNE TO NETWORK CALLS IN SIMULATION
         if (pos.isSimulated) {

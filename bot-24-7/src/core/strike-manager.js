@@ -133,11 +133,13 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
 
 // v24.2.4: High-Speed Memory Cache (Zero Disk Lag)
 const binanceStrikeCache = {};
+const pendingBinanceRequests = {};
 
 /**
  * getBinanceStrike(asset, startTime)
  * v2025 : Récupère le prix d'ouverture Binance.
  * v24.2.4 : Cache RAM pour éliminer la latence disque des scans 1Hz.
+ * v24.2.5 : Anti-Storm Lock (pendingBinanceRequests) pour éviter les boucles CPU infinies.
  */
 export const getBinanceStrike = async (asset, startTime) => {
     const ms = startTime < 10000000000 ? startTime * 1000 : startTime;
@@ -147,38 +149,52 @@ export const getBinanceStrike = async (asset, startTime) => {
     // 1. Check RAM first (Fastest)
     if (binanceStrikeCache[cacheKey]) return binanceStrikeCache[cacheKey];
 
-    try {
-        const filePath = path.join(process.cwd(), 'binance-strikes.json');
-        const data = safeReadJson(filePath);
-        
-        if (data && data[cleanAsset]) {
-            const match = data[cleanAsset].find(p => Math.abs(p.at - ms) < 10000);
-            if (match) {
-                binanceStrikeCache[cacheKey] = match.price; // Hydrate cache
-                return match.price;
-            }
-        }
-
-        // --- FALLBACK: Backfill via Binance Klines API ---
-        console.log(`[Strike] [BACKFILL] Fetching ${asset} open price (USDC) for ${new Date(ms).toISOString()}...`);
-        const symbol = `${cleanAsset}USDC`;
-        const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 5000 });
-        
-        if (res.data && res.data[0]) {
-            const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
-            console.log(`[Strike] [BACKFILL] Recovered ${asset} USDC Open: ${openPrice}`);
-            
-            // v24.2.0: PERSISTENCE - Don't ask again!
-            const currentData = safeReadJson(filePath);
-            if (!currentData[cleanAsset]) currentData[cleanAsset] = [];
-            currentData[cleanAsset].push({ at: ms, price: openPrice });
-            atomicWriteJson(filePath, currentData);
-            
-            binanceStrikeCache[cacheKey] = openPrice; // Save in cache
-            return openPrice;
-        }
-    } catch (e) {
-        console.warn('[Strike] Binance Backfill Fail:', e.message);
+    // 2. ANTI-STORM LOCK: Si une requête est déjà en cours pour ce slot, on attend sa promesse
+    if (pendingBinanceRequests[cacheKey]) {
+        return pendingBinanceRequests[cacheKey];
     }
-    return null;
+
+    const fetchTask = (async () => {
+        try {
+            const filePath = path.join(process.cwd(), 'binance-strikes.json');
+            const data = safeReadJson(filePath);
+            
+            if (data && data[cleanAsset]) {
+                const match = data[cleanAsset].find(p => Math.abs(p.at - ms) < 10000);
+                if (match) {
+                    binanceStrikeCache[cacheKey] = match.price; // Hydrate cache
+                    return match.price;
+                }
+            }
+
+            // --- FALLBACK: Backfill via Binance Klines API ---
+            console.log(`[Strike] [BACKFILL] Fetching ${asset} open price (USDC) for ${new Date(ms).toISOString()}...`);
+            const symbol = `${cleanAsset}USDC`;
+            const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 10000 });
+            
+            if (res.data && res.data[0]) {
+                const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
+                console.log(`[Strike] [BACKFILL] Recovered ${asset} USDC Open: ${openPrice}`);
+                
+                // v24.2.0: PERSISTENCE - Don't ask again!
+                const currentData = safeReadJson(filePath);
+                if (!currentData[cleanAsset]) currentData[cleanAsset] = [];
+                currentData[cleanAsset].push({ at: ms, price: openPrice });
+                atomicWriteJson(filePath, currentData);
+                
+                binanceStrikeCache[cacheKey] = openPrice; // Save in cache
+                return openPrice;
+            }
+        } catch (e) {
+            // Throttling console warning for backfill failure
+            console.warn(`[Strike] Binance Backfill Fail for ${cacheKey}:`, e.message);
+        } finally {
+            // Release the lock
+            delete pendingBinanceRequests[cacheKey];
+        }
+        return null;
+    })();
+
+    pendingBinanceRequests[cacheKey] = fetchTask;
+    return fetchTask;
 };
