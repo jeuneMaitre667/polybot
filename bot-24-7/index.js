@@ -506,7 +506,9 @@ async function reportingLoop() {
                     provider.getBalance(wallet.address)
                 ]);
 
-                userBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
+                // v2.11: Master Balance Shield (Ghost-Shield Elite Protocol)
+                const blockchainBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
+                userBalance = getVirtualBalance(); 
                 maticBalance = parseFloat(ethers.utils.formatEther(maticRaw));
                 lastBalanceFetchTime = now;
 
