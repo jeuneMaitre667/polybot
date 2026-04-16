@@ -94,9 +94,11 @@ const RELAYER_URL = "https://relayer-v2.polymarket.com";
 
 // --- STATE ---
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
+let lastAlertedSlot = 0; // v34.3.6: Dedicated alert de-duplicator
 let activePosition = null;
 let isResolving = false; // v33.0 Mutex lock for resolution logic
 let isReporting = false; // v34.0 Mutex lock for Telegram reporting
+let isMainLoopRunning = false; // v34.3.6: Global loop concurrency lock
 const lastResolvedCids = new Set();
  // Track resolved markets to avoid double alerts
 let lastDigestDate = ''; // YYYY-MM-DD
@@ -211,7 +213,8 @@ async function checkFastResolution(currentPrice) {
                 
                 if (isWin) {
                     const payout = pos.amount;
-                    const profitNet = payout - (pos.buyPrice * pos.amount);
+                    const cost = pos.buyPrice * pos.amount; // v34.3.6: Use precise recorded cost
+                    const profitNet = payout - cost;
                     const result = await updateVirtualBalance(payout);
                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance || 0) : (result || 0));
                     
@@ -739,8 +742,11 @@ async function scheduledMainLoop() {
 }
 
 async function mainLoop() {
+    if (isMainLoopRunning) return; // v34.3.6: Prevent parallel execution
+    isMainLoopRunning = true;
+    
     const cycleStart = Date.now();
-    let order = null; // v17.62.9: Global scope for the entire loop
+    let order = null; 
     try {
         // v17.61.0: INDEPENDENT REAL-TIME HEARTBEAT (Bypass NTP Lag)
         const hbNow = Date.now();
@@ -1071,12 +1077,16 @@ async function mainLoop() {
             // v17.58.0: Send Telegram FIRST to ensure delivery even if balance calculation crashes
             const totalLatency = Date.now() - cycleStart;
             if (IS_SIMULATION_ENABLED) {
-                const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
-                                    `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
-                                    `• Price: $${bestAsk} (Taker)\n` +
-                                    `• Qty: ${safeQty} 📦\n` +
-                                    `• Mise: $${tradeAmountUsd.toFixed(2)} 🏦`;
-                sendTelegramAlert(simEntryMsg);
+                // v34.3.6: One alert per slot, period.
+                if (lastAlertedSlot !== slotStart) {
+                    const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${side}* 🧪\n\n` +
+                                        `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
+                                        `• Price: $${bestAsk} (Taker)\n` +
+                                        `• Qty: ${safeQty} 📦\n` +
+                                        `• Mise: $${tradeAmountUsd.toFixed(2)} 🏦`;
+                    sendTelegramAlert(simEntryMsg);
+                    lastAlertedSlot = slotStart;
+                }
                 
                 // v31.6 True North: Accounting Precision
                 const actualCost = safeQty * effectivePrice;
@@ -1086,11 +1096,14 @@ async function mainLoop() {
                 const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                 console.log(`[Engine] 🧪 SIMULATION: Order placed | Cost: $${actualCost.toFixed(3)} | New Bal: $${finalBal.toFixed(2)} (Change kept: $${change.toFixed(3)})`);
             } else {
-                const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                                `• Price: $${bestAsk}\n` +
-                                `• Mise: $${tradeAmountUsd.toFixed(2)}\n` +
-                                `• Latency: ${totalLatency}ms ⚡`;
-                sendTelegramAlert(entryMsg);
+                if (lastAlertedSlot !== slotStart) {
+                    const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
+                                    `• Price: $${bestAsk}\n` +
+                                    `• Mise: $${tradeAmountUsd.toFixed(2)}\n` +
+                                    `• Latency: ${totalLatency}ms ⚡`;
+                    sendTelegramAlert(entryMsg);
+                    lastAlertedSlot = slotStart;
+                }
             }
 
             // v17.1.0: Launch Stop Loss Sentinel
@@ -1108,6 +1121,8 @@ async function mainLoop() {
 
     } catch (e) {
         console.error('[Engine] Main Loop Error:', e.message);
+    } finally {
+        isMainLoopRunning = false; // v34.3.6: Release loop lock
     }
 }
 
