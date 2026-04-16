@@ -1,9 +1,9 @@
 module.exports = {
   apps: [
     {
-      name: 'polymarket-bot',
+      name: 'poly-engine',
       script: 'index.js',
-      cwd: '/home/ubuntu/bot-24-7',
+      cwd: '/home/ubuntu/polybot/bot-24-7',
       env: {
         NODE_ENV: 'production',
       },
@@ -15,9 +15,9 @@ module.exports = {
       merge_logs: true,
     },
     {
-      name: 'status-server',
+      name: 'bot-status-server',
       script: 'status-server.js',
-      cwd: '/home/ubuntu/bot-24-7',
+      cwd: '/home/ubuntu/polybot/bot-24-7',
       env: {
         NODE_ENV: 'production',
         PORT: 3001
