@@ -48,6 +48,7 @@ import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
 import * as SLSentinel from './sl-sentinel.js';
 import * as Analytics from './analytics-engine.js';
+import { getChainlinkPrice, getChainlinkPriceCached } from './chainlink-price.js';
 import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
 import { getVirtualBalance, updateVirtualBalance } from './src/core/virtual-wallet.js'; // v17.36.0
 import { 
@@ -443,12 +444,13 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000, httpsAgent: null }).catch(() => null);
     const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
-    // 2. Fetch or Backfill Strike (v22.1.0: Real-Sync)
+    // 2. Fetch or Backfill Strike (v2.10: Chainlink Mega-Sync)
     const strikeTime = slotStart; 
     let bStrike = await getBinanceStrike(asset, strikeTime);
-    let pStrike = await fetchStrikeFromPolymarket(asset, strikeTime);
-    const effectiveStrike = pStrike || bStrike;
-    const source = pStrike ? 'POLY-OFFICIAL' : (bStrike ? 'SYNC-BINANCE' : 'MISSING');
+    let cResult = await getChainlinkPrice(asset);
+    const cStrike = cResult.price;
+    const effectiveStrike = cStrike || bStrike;
+    const source = cStrike ? 'CHAINLINK-OFFICIAL' : (bStrike ? 'SYNC-BINANCE' : 'MISSING');
     
     // 3. Calculate Delta
     let bDeltaPct = 0;
