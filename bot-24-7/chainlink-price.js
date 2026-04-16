@@ -14,7 +14,12 @@ const DATA_FEEDS = {
 const CHAINLINK_DECIMALS = 8;
 
 const ALCHEMY_RPC = process.env.POLYGON_RPC_URL;
-const FALLBACK_RPCS = (process.env.POLYGON_RPC_FALLBACK || 'https://polygon-rpc.com,https://1rpc.io/matic,https://polygon.llamarpc.com,https://rpc-mainnet.maticvigil.com').split(',').map(u => u.trim()).filter(Boolean);
+// v2.12: Suppression des RPC morts (maticvigil, 1rpc) - Curated fallback list
+const FALLBACK_RPCS = [
+  'https://polygon-bor-rpc.publicnode.com',
+  'https://polygon.llamarpc.com',
+  'https://polygon-rpc.com'
+];
 
 const RPC_ENDPOINTS = ALCHEMY_RPC ? [ALCHEMY_RPC, ...FALLBACK_RPCS] : FALLBACK_RPCS;
 
