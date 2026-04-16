@@ -24,7 +24,7 @@ export const runAtomicUpdate = async (filePath, updateFn) => {
             const updatedData = await updateFn(data);
             
             if (updatedData !== undefined) {
-                atomicWriteJson(filePath, updatedData);
+                await atomicWriteJson(filePath, updatedData);
                 return updatedData;
             }
             return data;
