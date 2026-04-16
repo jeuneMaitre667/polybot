@@ -432,13 +432,13 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000, httpsAgent: null }).catch(() => null);
     const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
-    // 2. Fetch or Backfill Strike (v2.10: Chainlink Mega-Sync)
+    // 2. Fetch or Backfill Strike (v24.3.0: PURE BINANCE REFERENCE)
     const strikeTime = slotStart; 
     let bStrike = await getBinanceStrike(asset, strikeTime);
-    let cResult = await getChainlinkPrice(asset);
-    const cStrike = cResult.price;
-    const effectiveStrike = cStrike || bStrike;
-    const source = cStrike ? 'CHAINLINK-OFFICIAL' : (bStrike ? 'SYNC-BINANCE' : 'MISSING');
+    
+    // v24.3.0: Strategy strictly follows Binance Open for better signal sensitivity
+    const effectiveStrike = bStrike;
+    const source = bStrike ? 'BINANCE-SPOT-OPEN' : 'MISSING';
     
     // 3. Calculate Delta
     let bDeltaPct = 0;
@@ -648,9 +648,9 @@ async function reportingLoop() {
                 }
                 // v21.6.0: Safe Reporting (Null-Safety guard)
                 
-                const officialLabel = polyStrike ? `(Poly:${fmt(polyStrike, 2)})` : '';
+                const officialLabel = ''; 
                 
-                console.log(`[PIPELINE] | T-${secondsLeft}s | slot:${currentSlotLabel} | ${upLabel}:${fmt(bestAskUp * 100, 1)}% | ${downLabel}:${fmt(bestAskDown * 100, 1)}% | Bal:$${fmt(displayBalance, 2)} | Open:${fmt(effectiveStrike, 2)}${officialLabel} | Spot:${fmt(bSpot, 2)} | Δ:${deltaSign}$${fmt(deltaUsd, 2)} (${deltaSign}${fmt(deltaPct, 3)}%)`);
+                console.log(`[PIPELINE] | T-${secondsLeft}s | slot:${currentSlotLabel} | ${upLabel}:${fmt(bestAskUp * 100, 1)}% | ${downLabel}:${fmt(bestAskDown * 100, 1)}% | Bal:$${fmt(displayBalance, 2)} | Open:${fmt(effectiveStrike, 2)} | Spot:${fmt(bSpot, 2)} | Δ:${deltaSign}$${fmt(deltaUsd, 2)} (${deltaSign}${fmt(deltaPct, 3)}%)`);
             } catch (e) {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
