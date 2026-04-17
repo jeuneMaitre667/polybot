@@ -22,6 +22,38 @@ const SECRET = process.env.BOT_STATUS_SECRET || '';
 const includeActiveWindowLiquidity = process.env.INCLUDE_ACTIVE_WINDOW_LIQUIDITY === 'true';
 const BOT_PM2_NAMES = ['poly-engine', 'bot-status-server', 'polymarket-bot', 'bot-modular', 'bot-modular-v1'];
 
+/**
+ * v2026: Cache Manager to prevent CPU Spikes
+ * Avoids reading 12MB of logs on every 1s dashboard poll.
+ */
+class SimpleCache {
+  constructor(ttlMs) {
+    this.ttl = ttlMs;
+    this.data = null;
+    this.lastUpdate = 0;
+  }
+  get() {
+    if (Date.now() - this.lastUpdate < this.ttl) return this.data;
+    return null;
+  }
+  set(data) {
+    this.data = data;
+    this.lastUpdate = Date.now();
+  }
+}
+
+const cache = {
+  pm2: new SimpleCache(5000),
+  stats24h: new SimpleCache(30000),
+  liquidity: new SimpleCache(30000),
+  latency: new SimpleCache(30000),
+  latencyBreakdown: new SimpleCache(30000),
+  cycleLatency: new SimpleCache(30000),
+  signalDecisionLatency: new SimpleCache(30000),
+  signalsInRange: new SimpleCache(10000),
+  decisionFeed: new SimpleCache(5000)
+};
+
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -55,6 +87,8 @@ function getPm2List() {
       uptime: bot?.pm2_env?.pm_uptime ?? null,
       pid: bot?.pid ?? null,
       botName: bot?.name ?? BOT_PM2_NAMES[0],
+      cpu: bot?.monit?.cpu ?? 0,
+      memory: bot?.monit?.memory ?? 0,
     };
     getPm2List._cache = { at: Date.now(), value };
     return value;
@@ -1081,7 +1115,12 @@ const server = http.createServer((req, res) => {
     (async () => {
       try {
         await tick();
-        const pm2 = getPm2List();
+        let pm2 = cache.pm2.get();
+        if (!pm2) {
+          pm2 = getPm2List();
+          cache.pm2.set(pm2);
+        }
+
         await tick();
         const lastOrder = getLastOrder();
         await tick();
@@ -1090,25 +1129,64 @@ const server = http.createServer((req, res) => {
         const balanceHistory = getBalanceHistory();
         await tick();
         const config = getBotConfig();
+        
         await tick();
-        const stats = getStats24h();
+        let stats = cache.stats24h.get();
+        if (!stats) {
+          stats = getStats24h();
+          cache.stats24h.set(stats);
+        }
+
         await tick();
-        const liquidityReport = getLiquidityReport();
-        await tick();
+        let liquidityReport = cache.liquidity.get();
+        if (!liquidityReport) {
+          liquidityReport = getLiquidityReport();
+          cache.liquidity.set(liquidityReport);
+        }
         const liquidityStats = liquidityReport.windows['72h'].all;
         const liquidityStats24h = liquidityReport.windows['24h'].all;
+
         await tick();
-        const tradeLatencyStats = getTradeLatencyStats24h();
+        let tradeLatencyStats = cache.latency.get();
+        if (!tradeLatencyStats) {
+          tradeLatencyStats = getTradeLatencyStats24h();
+          cache.latency.set(tradeLatencyStats);
+        }
+
         await tick();
-        const tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
+        let tradeLatencyBreakdownStats = cache.latencyBreakdown.get();
+        if (!tradeLatencyBreakdownStats) {
+          tradeLatencyBreakdownStats = getTradeLatencyBreakdownStats24h();
+          cache.latencyBreakdown.set(tradeLatencyBreakdownStats);
+        }
+
         await tick();
-        const cycleLatencyStats = getCycleLatencyStats24h();
+        let cycleLatencyStats = cache.cycleLatency.get();
+        if (!cycleLatencyStats) {
+          cycleLatencyStats = getCycleLatencyStats24h();
+          cache.cycleLatency.set(cycleLatencyStats);
+        }
+
         await tick();
-        const signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+        let signalDecisionLatencyStats = cache.signalDecisionLatency.get();
+        if (!signalDecisionLatencyStats) {
+          signalDecisionLatencyStats = getSignalDecisionLatencyStats24h();
+          cache.signalDecisionLatency.set(signalDecisionLatencyStats);
+        }
+
         await tick();
-        const signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
+        let signalInRangeNoOrderRecent = cache.signalsInRange.get();
+        if (!signalInRangeNoOrderRecent) {
+          signalInRangeNoOrderRecent = getSignalInRangeNoOrderRecent();
+          cache.signalsInRange.set(signalInRangeNoOrderRecent);
+        }
+
         await tick();
-        const decisionFeed = getDecisionFeed();
+        let decisionFeed = cache.decisionFeed.get();
+        if (!decisionFeed) {
+          decisionFeed = getDecisionFeed();
+          cache.decisionFeed.set(decisionFeed);
+        }
         const lastDecision = decisionFeed[0] || null;
         await tick();
         const health = getHealth();
@@ -1119,6 +1197,8 @@ const server = http.createServer((req, res) => {
           status: pm2.status,
           uptime: pm2.uptime,
           pid: pm2.pid,
+          cpu: pm2.cpu,
+          memory: pm2.memory,
           balanceUsd,
           lastOrder,
           balanceHistory,

@@ -57,9 +57,22 @@ export default function App() {
         </div>
       </header>
 
-      <div className="bots-row px-4 py-2 border-b border-white/5 bg-white/[0.01]">
-        <div className="flex gap-4">
-          {DEFAULT_BOT_STATUS_URL && <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="SNIPER 5M" refreshIntervalMs={1000} />}
+      <div className="bots-row px-8 py-4 border-b border-white/5 bg-white/[0.02] flex items-center justify-between">
+        <div className="flex gap-6 items-center">
+          {DEFAULT_BOT_STATUS_URL && (
+            <div className="flex items-center gap-4">
+               <BotStatusBadge statusUrl={DEFAULT_BOT_STATUS_URL} label="PRIMARY ENGINE" refreshIntervalMs={1000} />
+               <div className="h-4 w-[1px] bg-white/10" />
+               <div className="flex items-center gap-2">
+                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                 <span className="text-[9px] font-black text-white/30 uppercase tracking-widest">Mainnet Optimized</span>
+               </div>
+            </div>
+          )}
+        </div>
+        <div className="hidden md:flex items-center gap-4">
+           <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.2em]">Ghost Shield Active</span>
+           <div className="w-8 h-[1px] bg-white/5" />
         </div>
       </div>
 

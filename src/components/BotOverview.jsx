@@ -8,6 +8,7 @@ import { PnLAnalyticsCard } from './PnLAnalyticsCard';
 import { LiveMarketView } from './LiveMarketView';
 import { BinanceChartCard } from './BinanceChartCard';
 
+import { SystemHealthCard } from './SystemHealthCard';
 import { SniperLaunchpad } from './SniperLaunchpad';
 
 export function BotOverview() {
@@ -118,16 +119,26 @@ export function BotOverview() {
         </div>
       </div>
 
-      {/* 4. LATENCY & DECISION STREAM */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 relative">
-        <LatencySentinelCards data={data} />
-        <div className="glass-panel border border-white/5 bg-black/40 rounded-[2rem] overflow-hidden h-full max-h-[500px]">
-           <DecisionFeed feed={data?.decisionFeed} />
+      {/* 4. INFRASTRUCTURE & SYSTEM DIAGNOSTICS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 relative">
+        <div className="space-y-12">
+          <LatencySentinelCards data={data} />
+          <SystemHealthCard data={data} />
         </div>
         
-        {/* v17.7.0: Traceability Badge */}
+        <div className="space-y-6">
+          <div className="section-title flex items-center gap-4">
+            <h2 className="text-xl font-black tracking-tighter text-white/90 uppercase">Strategy Decision Flux</h2>
+            <div className="h-[1px] flex-1 bg-gradient-to-r from-blue-500/20 to-transparent" />
+          </div>
+          <div className="glass-panel border border-white/5 bg-black/40 rounded-[2.5rem] overflow-hidden min-h-[500px]">
+             <DecisionFeed feed={data?.decisionFeed} />
+          </div>
+        </div>
+        
+        {/* v17.8.0: Traceability Badge */}
         <div className="absolute bottom-4 right-4 opacity-10 text-[8px] font-mono text-white select-none pointer-events-none uppercase tracking-widest">
-           Core Engine v17.7.0 • Pulse Sync Active
+           Core Engine v17.8.0 • Pulse Sync Active • Dublin Axiom Protocol
         </div>
       </div>
     </div>
