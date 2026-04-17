@@ -1150,11 +1150,12 @@ async function performanceLoop() {
             lastDigestWindow = 'morning';
             lastDigestDate = dateStr;
         }
-        // Minuit (00:00 - 00:15)
-        else if (hour === 0 && minute < 15 && (lastDigestDate !== dateStr || lastDigestWindow !== 'night')) {
+        // Minuit (00:05 - 00:20) - v34.4.2: Offset by 5min to avoid midnight system load (logrotate)
+        else if (hour === 0 && minute >= 5 && minute < 20 && (lastDigestDate !== dateStr || lastDigestWindow !== 'night')) {
             window = getNoonToMidnightWindowMs(tz, dateStr);
             windowName = 'Soir';
             lastDigestWindow = 'night';
+            lastDigestDate = dateStr;
             lastDigestDate = dateStr;
         }
 
@@ -1172,7 +1173,7 @@ async function performanceLoop() {
                 const stats = fs.statSync(logPath);
                 const sizeMb = stats.size / (1024 * 1024);
                 
-                if (sizeMb > 2.0) {
+                if (sizeMb > 1.0) {
                     console.error(`[Sentinel] 🛡️⚠️ DIGEST ABORTED: orders.log is too large (${sizeMb.toFixed(2)}MB). Clear logs to resume reporting.`);
                     await sendTelegramAlert(`🛡️⚠️ *RAPPORT DESACTIVE* : Le fichier orders.log est trop volumineux (${sizeMb.toFixed(2)}Mo) et risque de faire planter le serveur. Pensez à le vider.`);
                     return;
@@ -1188,6 +1189,14 @@ async function performanceLoop() {
                 });
                 await sendTelegramAlert(msg);
                 console.log(`[Sentinel] Digest ${windowName} envoyé.`);
+
+                // v34.4.2: AUTO-TRUNCATE (Keep server lean)
+                try {
+                    fs.writeFileSync(logPath, '', 'utf8');
+                    console.log(`[Sentinel] 🛡️ orders.log truncated after successful digest.`);
+                } catch (truncateErr) {
+                    console.warn(`[Sentinel] 🛡️ Failed to truncate orders.log:`, truncateErr.message);
+                }
             } catch (err) {
                 console.error(`[Sentinel] Erreur critique digest:`, err.message);
                 // Non-blocking: bot continues trading
