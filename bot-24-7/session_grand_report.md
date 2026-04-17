@@ -1,6 +1,6 @@
 # 📊 Session Grand Report - Polymarket Trading Bot
 
-Ce document fait office de rapport opérationnel fusionnant les performances historiques et la session actuelle du 16-17 Avril 2026.
+Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
 
@@ -27,11 +27,15 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
-## 🎯 Objectifs Horizon Lundi (20 Avril - 14h)
+## 🎯 Objectifs & Pronostics (Horizon Lundi 20 Avril - 14h)
 
-Pour le prochain point d'étape, les indicateurs de succès cibles sont :
-- **Win Rate Minimum** : `70 %` 🏆 (Maintenir l'avantage statistique).
-- **Objectif Capital** : **750,00 $** 📈 (Cap des +650% de ROI).
+### 👤 Objectifs Utilisateur
+- **Win Rate Minimum** : `70 %` ✅
+- **Objectif Capital** : **750,00 $** 📈
+
+### 🤖 Prédictions Antigravity (IA - Stats Projections)
+- **Win Rate Prédit** : **74,2 %** 🎯 (Retour à la moyenne historique post-volatilité).
+- **Objectif Capital Prédit** : **925,00 $** 🚀 (Basé sur une fréquence de 150 trades/jour).
 
 ---
 
