@@ -16,11 +16,40 @@ import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP
 const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json');
 const MAX_SILENCE_MS = 5 * 60 * 1000; // 5 minutes
 const CHECK_INTERVAL_MS = 60 * 1000; // 1 minute
+const CPU_THRESHOLD = 40;
+const CPU_ALERT_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
-console.log(`[Watchdog] 🛡️ Sentinel started. Monitoring heartbeat every ${CHECK_INTERVAL_MS / 1000}s...`);
+let lastCpuAlertTime = 0;
+
+console.log(`[Watchdog] 🛡️ Sentinel started. Monitoring heartbeat and CPU Threshold (${CPU_THRESHOLD}%) every ${CHECK_INTERVAL_MS / 1000}s...`);
+
+async function checkResources() {
+    exec('pm2 jlist', async (error, stdout) => {
+        if (error) return;
+        try {
+            const list = JSON.parse(stdout);
+            const bot = Array.isArray(list) ? list.find(p => p.name === 'poly-engine' || p.name === 'polymarket-bot') : null;
+            if (!bot) return;
+
+            const cpu = bot.monit?.cpu || 0;
+            const now = Date.now();
+
+            if (cpu > CPU_THRESHOLD && (now - lastCpuAlertTime > CPU_ALERT_COOLDOWN_MS)) {
+                lastCpuAlertTime = now;
+                await sendTelegramAlert(`⚠️ *CPU RESOURCE ALERT* ⚠️\n\nLe processus *poly-engine* consomme actuellement *${cpu}%* du CPU.\nVérifiez l'état de l'instance Lightsail.\n\n_Threshold: ${CPU_THRESHOLD}% | Cooldown: 10m_`);
+                console.log(`[Watchdog] 🚨 CPU Alert sent: ${cpu}%`);
+            }
+        } catch (e) {
+            // Ignore parse errors from pm2
+        }
+    });
+}
 
 async function checkHeartbeat() {
     try {
+        // Resource check integrated into heartbeat loop
+        checkResources();
+
         if (!fs.existsSync(HEARTBEAT_FILE)) {
             console.warn('[Watchdog] ⚠️ heartbeat.json not found yet. Main bot might be starting...');
             return;
