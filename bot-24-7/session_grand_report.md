@@ -5,24 +5,25 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 📈 Résumé de Performance Globale (Historique)
 
 > [!IMPORTANT]
-> **Statistiques de Vie du Bot** : Le système a franchi le cap symbolique des **200 trades** en moins de 48 heures d'opération continue.
-> **Total des Positions (Vie du Bot)** : `215` 🔵
-> **Total des Victoires** : `166` ✅
-> **Total des Stop Losses (SL)** : `49` ⚓
-> **Win Rate Global** : **77,21 %** 🏆
-> **Nouveau Record Historique (HWM)** : **510,84 $** ✅🚀🌕🏆💎🏆💎
+> **Statistiques de Vie du Bot** : Le système approche la barre des **300 trades**. Malgré une après-midi volatile (13h-00h), la structure de profit reste intacte.
+> **Total des Positions (Vie du Bot)** : `298` 🔵
+> **Total des Victoires** : `214` ✅
+> **Total des Stop Losses (SL)** : `84` ⚓
+> **Win Rate Global** : **71,81 %** 🏆
+> **Dernier Sommet (HWM)** : **510,84 $** 🚀
+> **Solde Actuel (Ancrage 00h28)** : **488,75 $** 💎
 
-*   **Ratio de Survie** : ~3.4/1 (Maintenu dans la zone d'excellence malgré l'accélération).
-*   **Vitesse d'Exécution** : Plus de 200 positions en < 2 jours.
+*   **Ratio de Survie** : ~2.5/1 (Phase de consolidation après un pic agressif).
+*   **Vitesse d'Exécution** : ~300 positions en 2 jours.
 
 ---
 
 ## 💰 Analyse du Capital (Migration & Stabilization)
 
 *   **Capital de Départ (Session)** : 100,00 $
-*   **Sommet Actuel (HWM)** : **510,84 $** ✅🚀🏆🚀🏆🚀🏆🚀🏆🚀🚀🚀🚀
-*   **Bénéfice Net Session** : **+410,84 $**
-*   **ROI Global Session** : **+410,84 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
+*   **Solde Actuel** : **488,75 $** ✅
+*   **Bénéfice Net Session** : **+388,75 $**
+*   **ROI Global Session** : **+388,75 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
 
 ---
 
