@@ -35,9 +35,9 @@ export function telegramBalanceDigestMs() {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Résumés performance Telegram (demi-journées + journée). Désactivable : ALERT_TELEGRAM_MIDDAY_DIGEST=false */
+/** Résumés performance Telegram (demi-journées + journée). Désactivé suite aux crashs de ressources. */
 export function telegramMiddayDigestEnabled() {
-  return telegramAlertsConfigured() && process.env.ALERT_TELEGRAM_MIDDAY_DIGEST === 'true';
+  return false;
 }
 
 function chunkText(text) {
