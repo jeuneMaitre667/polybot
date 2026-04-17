@@ -188,7 +188,7 @@ pm2 set pm2-logrotate:max_size 10M >/dev/null 2>&1 || true
 pm2 set pm2-logrotate:retain 7 >/dev/null 2>&1 || true
 pm2 set pm2-logrotate:compress true >/dev/null 2>&1 || true
 pm2 set pm2-logrotate:workerInterval 30 >/dev/null 2>&1 || true
-pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:rotateInterval '0 3 * * *' >/dev/null 2>&1 || true
 
 echo ""
 echo "=== Redémarrage du bot (PM2) ==="
