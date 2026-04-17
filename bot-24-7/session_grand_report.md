@@ -27,6 +27,14 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
+## 🎯 Objectifs Horizon Lundi (20 Avril - 14h)
+
+Pour le prochain point d'étape, les indicateurs de succès cibles sont :
+- **Win Rate Minimum** : `70 %` 🏆 (Maintenir l'avantage statistique).
+- **Objectif Capital** : **750,00 $** 📈 (Cap des +650% de ROI).
+
+---
+
 ## 🛡️ Journal d'Exécution (Infrastructure & Stability)
 
 #### [INFRA] Sentinel Resource Alert (v20.40)
