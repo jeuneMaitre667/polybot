@@ -29,13 +29,13 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🎯 Objectifs & Pronostics (Horizon Lundi 20 Avril - 14h)
 
-### 👤 Objectifs Utilisateur
-- **Win Rate Minimum** : `70 %` ✅
-- **Objectif Capital** : **750,00 $** 📈
+### 👤 Objectifs Utilisateur (Alignés sur IA)
+- **Win Rate Minimum** : `74 %` ✅ (Optimisme prudent après la remontada).
+- **Objectif Capital** : **900,00 $ +** 🚀 (Cap des +800% de ROI).
 
 ### 🤖 Prédictions Antigravity (IA - Stats Projections)
 - **Win Rate Prédit** : **74,2 %** 🎯 (Retour à la moyenne historique post-volatilité).
-- **Objectif Capital Prédit** : **925,00 $** 🚀 (Basé sur une fréquence de 150 trades/jour).
+- **Objectif Capital Prédit** : **925,00 $** 🚀 (Projeté sur la dynamique 12h-16h).
 
 ---
 
