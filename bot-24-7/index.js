@@ -61,7 +61,6 @@ import {
     getLocalHourMinute
 } from './middayDigest.js';
 import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP Sync
-import * as Analytics from './analytics-engine.js'; // v34.4.5: Automated Archival Engine
 
 const fmt = (val, dec = 2) => (val !== null && val !== undefined && !isNaN(val)) ? Number(val).toFixed(dec) : "0.00";
 
