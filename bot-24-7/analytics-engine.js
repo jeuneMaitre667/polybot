@@ -18,6 +18,8 @@ export function recordTrade(tradeData) {
         id: Date.now(),
         timestamp: new Date().toISOString(),
         asset: tradeData.asset || 'BTC',
+        slug: tradeData.slug || 'N/A',
+        isSimulated: tradeData.isSimulated || false,
         side: tradeData.side,
         entryPrice: tradeData.entryPrice,
         exitPrice: tradeData.exitPrice,
@@ -29,11 +31,11 @@ export function recordTrade(tradeData) {
 
     history.push(entry);
     
-    // Keep last 1000 trades for analysis
-    if (history.length > 1000) history.shift();
+    // Keep last 2000 trades for analysis (increased from 1000)
+    if (history.length > 2000) history.shift();
     
     atomicWriteJson(TRADES_FILE, history);
-    console.log(`[Analytics] Recorded trade: ${entry.side} at ${entry.exitPrice} (PnL: $${entry.pnlUsd.toFixed(2)})`);
+    console.log(`[Analytics] Recorded trade: ${entry.slug} | ${entry.side} at ${entry.exitPrice} (PnL: $${entry.pnlUsd.toFixed(2)})`);
 }
 
 /**

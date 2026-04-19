@@ -61,6 +61,7 @@ import {
     getLocalHourMinute
 } from './middayDigest.js';
 import { timeKeeper } from './src/core/ntp-client.js'; // v17.52.0: Software NTP Sync
+import * as Analytics from './analytics-engine.js'; // v34.4.5: Automated Archival Engine
 
 const fmt = (val, dec = 2) => (val !== null && val !== undefined && !isNaN(val)) ? Number(val).toFixed(dec) : "0.00";
 
@@ -1272,6 +1273,18 @@ async function performanceLoop() {
                                         await sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
                                     }
                                 }
+
+                                // v34.4.5: Automated History Archival (WIN)
+                                Analytics.recordTrade({
+                                    asset: pos.asset || 'BTC',
+                                    slug: pos.slug,
+                                    isSimulated: pos.isSimulated,
+                                    side: pos.side,
+                                    entryPrice: pos.buyPrice,
+                                    exitPrice: 1.0,
+                                    quantity: pos.amount,
+                                    pnlUsd: (1.0 - pos.buyPrice) * pos.amount
+                                });
                             } else {
                                 if (pos.isSimulated) {
                                     const result = await getVirtualBalance();
@@ -1282,6 +1295,21 @@ async function performanceLoop() {
                                     console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}. No redeem needed.`);
                                     await sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: $${(pos.buyPrice * pos.amount).toFixed(2)}`);
                                 }
+                            }
+
+                            // v34.4.5: Automated History Archival (LOSS - Not WIN and Not SL)
+                            // If it reached here without isWin, it's a resolution loss
+                            if (!isWin) {
+                                Analytics.recordTrade({
+                                    asset: pos.asset || 'BTC',
+                                    slug: pos.slug,
+                                    isSimulated: pos.isSimulated,
+                                    side: pos.side,
+                                    entryPrice: pos.buyPrice,
+                                    exitPrice: 0.0,
+                                    quantity: pos.amount,
+                                    pnlUsd: (0.0 - pos.buyPrice) * pos.amount
+                                });
                             }
 
                             lastResolvedCid = pos.tokenId;
@@ -1559,6 +1587,8 @@ async function executeEmergencyExit(info) {
                             
                             Analytics.recordTrade({
                                 asset: pos.asset || 'BTC',
+                                slug: pos.slug || 'BTC-EMERGENCY',
+                                isSimulated: pos.isSimulated || false,
                                 side: pos.side,
                                 entryPrice: pos.buyPrice,
                                 exitPrice: info.currentPrice,
