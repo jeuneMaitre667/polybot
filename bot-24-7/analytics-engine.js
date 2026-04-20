@@ -7,39 +7,50 @@ import path from 'path';
  */
 
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TRADES_FILE = path.join(__dirname, 'trades-history.json');
+const DEBUG_LOG = path.join(__dirname, 'analytics-debug.log');
 
 /**
  * Records a completed trade result.
  */
 export function recordTrade(tradeData) {
-    const history = safeReadJson(TRADES_FILE, []);
-    
-    const entry = {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        asset: tradeData.asset || 'BTC',
-        slug: tradeData.slug || 'N/A',
-        isSimulated: tradeData.isSimulated || false,
-        side: tradeData.side,
-        entryPrice: tradeData.entryPrice,
-        exitPrice: tradeData.exitPrice,
-        quantity: tradeData.quantity,
-        pnlUsd: tradeData.pnlUsd,
-        pnlPct: parseFloat(((tradeData.exitPrice - tradeData.entryPrice) / tradeData.entryPrice * 100).toFixed(2)),
-        isWin: tradeData.pnlUsd > 0
-    };
+    try {
+        const history = safeReadJson(TRADES_FILE, []);
+        
+        const entry = {
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            asset: tradeData.asset || 'BTC',
+            slug: tradeData.slug || 'N/A',
+            isSimulated: tradeData.isSimulated || false,
+            side: tradeData.side,
+            entryPrice: tradeData.entryPrice,
+            exitPrice: tradeData.exitPrice,
+            quantity: tradeData.quantity,
+            pnlUsd: tradeData.pnlUsd,
+            pnlPct: parseFloat(((tradeData.exitPrice - tradeData.entryPrice) / tradeData.entryPrice * 100).toFixed(2)),
+            isWin: tradeData.pnlUsd > 0
+        };
 
-    history.push(entry);
-    
-    // Keep last 2000 trades for analysis (increased from 1000)
-    if (history.length > 2000) history.shift();
-    
-    atomicWriteJson(TRADES_FILE, history);
-    console.log(`[Analytics] Recorded trade: ${entry.slug} | ${entry.side} at ${entry.exitPrice} (PnL: $${entry.pnlUsd.toFixed(2)})`);
+        history.push(entry);
+        
+        // Keep last 2000 trades for analysis
+        if (history.length > 2000) history.shift();
+        
+        atomicWriteJson(TRADES_FILE, history);
+        
+        const logMsg = `[Analytics] Recorded trade: ${entry.slug} | ${entry.side} at ${entry.exitPrice} (PnL: $${entry.pnlUsd.toFixed(2)})\n`;
+        console.log(logMsg.trim());
+        fs.appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${logMsg}`);
+        
+    } catch (err) {
+        fs.appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ❌ ERROR: ${err.message}\n`);
+        console.error('[Analytics] ❌ Failed to record trade:', err.message);
+    }
 }
 
 /**
