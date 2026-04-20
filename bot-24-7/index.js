@@ -1494,7 +1494,20 @@ async function executeRedeemOnChain(conditionId) {
         }
 
     } catch (err) {
-        console.error(`[Redeem] 🛡️⚠️ Relayer Error:`, err.response?.data || err.message);
+        const errorData = err.response?.data?.error || err.response?.data?.message || err.message;
+        
+        // v34.4.11: Smart detection for Polymarket Auto-Redeem coexistence
+        const isRedundant = errorData.toLowerCase().includes("already executed") || 
+                            errorData.toLowerCase().includes("nothing to redeem") ||
+                            errorData.toLowerCase().includes("nonce used");
+
+        if (isRedundant) {
+            console.log(`[Redeem] 🛡️ Info: Position already redeemed manually or via Polymarket Auto-Redeem. Skipping silently.`);
+            return true; // Consider as success to allow archival
+        }
+
+        console.error(`[Redeem] 🛡️⚠️ Relayer Error:`, errorData);
+        throw new Error(errorData); // Real error, escalate to Sentinel
     }
 }
 
