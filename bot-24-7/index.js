@@ -1287,8 +1287,6 @@ async function performanceLoop() {
                                         await sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
                                     }
                                 }
-
-                                }
                             } else {
                                 if (pos.isSimulated) {
                                     const result = await getVirtualBalance();
