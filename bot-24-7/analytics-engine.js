@@ -6,7 +6,11 @@ import path from 'path';
  * Tracks and computes high-level trading metrics.
  */
 
-const TRADES_FILE = path.join(process.cwd(), 'trades-history.json');
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const TRADES_FILE = path.join(__dirname, 'trades-history.json');
 
 /**
  * Records a completed trade result.
