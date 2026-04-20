@@ -10,7 +10,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > **Total des Victoires** : `430` ✅
 > **Total des Stop Losses (SL)** : `153` ⚓
 > **Win Rate Global** : **73,76 %** 🏆
-> **Nouveau Sommet Historique (HWM)** : **1002,36 $** 🚀💎🔥
+> **Nouveau Sommet Historique (HWM)** : **1027,00 $** 🚀💎🔥
 > **Solde Actuel (Ancrage 14h43)** : **991,52 $** 💎
 
 *   **Ratio de Survie** : ~2.9/1 (Stabilité confirmée sur volume massif).
