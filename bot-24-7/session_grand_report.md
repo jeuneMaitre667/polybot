@@ -9,9 +9,12 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > **Total des Positions (Vie du Bot)** : `640` 🔵
 > **Total des Victoires** : `469` ✅
 > **Total des Stop Losses (SL)** : `171` ⚓
-> **Win Rate Global** : **73,28 %** 🏆
-> **Nouveau Sommet Historique (HWM)** : **1028,93 $** 🚀💎🔥
-> **Solde Actuel (Ancrage 01h08)** : **1028,93 $** 💎
+> **Statut Actuel** : `Simulation (Lab Mode)` 🧪
+> **Capital Actuel** : **1 037,41 $** (Nouveau ATH 🚀)
+> **Total Trades** : 642
+> **Win Rate** : 73,36%
+> **Dernière Synchro** : 21/04/2026 à 01h15 (1h15 Paris)
+> **Point d'ancrage** : 21/04/2026 à 01h15 (Slot 01:15 UTC+2)
 
 *   **Ratio de Survie** : ~2.9/1 (Stabilité confirmée sur volume massif).
 *   **Vitesse d'Exécution** : ~500 positions en 5 jours d'opération (100 trades/jour).

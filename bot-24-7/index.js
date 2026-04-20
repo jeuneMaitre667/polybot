@@ -1335,6 +1335,45 @@ async function performanceLoop() {
 }
 
 /**
+ * v34.4.9: Support for Polymarket Relayer V2 Asynchronous Submissions
+ * Polls the relayer until the transactionHash is available (or timeout).
+ */
+async function pollRelayerTransaction(transactionID, maxAttempts = 15, intervalMs = 3000) {
+    if (!transactionID) return null;
+    
+    console.log(`[Relayer] 🛡️🛰️⚓ Starting polling for transactionID: ${transactionID}...`);
+    
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            // endpoint pattern for Polymarket Relayer V2 polling
+            const res = await axios.get(`${RELAYER_URL}/transaction?id=${transactionID}`, {
+                httpsAgent: proxyAgent,
+                timeout: 5000
+            });
+            
+            if (res.data && (res.data.transactionHash || res.data.hash)) {
+                const h = res.data.transactionHash || res.data.hash;
+                console.log(`[Relayer] ✅ Transaction Hash found: ${h} (Attempt ${i+1})`);
+                return h;
+            }
+            
+            if (res.data && res.data.state === 'STATE_FAILED') {
+                console.error(`[Relayer] ❌ Transaction FAILED in Relayer: ${transactionID}`);
+                return null;
+            }
+
+            console.log(`[Relayer] ⏳ Attempt ${i+1}/${maxAttempts}: Still pending...`);
+        } catch (err) {
+            console.warn(`[Relayer] ⚠️ Poll attempt ${i+1} failed: ${err.message}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    
+    console.error(`[Relayer] 💀 Polling timeout for ${transactionID}`);
+    return null;
+}
+
+/**
  * Automate the "Redeem" transaction via Polymarket Gasless Relayer (v17.0.0)
  * Uses EIP-712 Meta-transactions to avoid MATIC fees.
  */
@@ -1436,9 +1475,22 @@ async function executeRedeemOnChain(conditionId) {
 
         if (submitRes.data && (submitRes.data.transactionHash || submitRes.data.hash)) {
             const txHash = submitRes.data.transactionHash || submitRes.data.hash;
-            console.log(`[Relayer] 🛡️🛰️⚓ Redeem transaction submitted: ${txHash}`);
+            console.log(`[Relayer] 🛡️🛰️⚓ Redeem transaction submitted (Sync): ${txHash}`);
+        } else if (submitRes.data && submitRes.data.transactionID) {
+            const tid = submitRes.data.transactionID;
+            console.log(`[Relayer] 🛡️🛰️⚓ Redeem accepted (Async ID: ${tid}). Polling in background...`);
+            
+            // Asynchronous polling to avoid blocking the main Sniper loop
+            pollRelayerTransaction(tid).then(txHash => {
+                if (txHash) {
+                    sendTelegramAlert(`✅ *REDEEM ON-CHAIN CONFIRMED*\nHash: \`${txHash}\``);
+                } else {
+                    sendTelegramAlert(`⚠️ *REDEEM PENDING TIMEOUT*\nID: \`${tid}\` (Check Polyscan manually)`);
+                }
+            });
         } else {
-            console.warn(`[Relayer] 🛡️🛰️⚓ Redeem submitted but response structure unexpected: ${JSON.stringify(submitRes.data)}`);
+            console.warn(`[Relayer] 🛡️🛰️⚓ Redeem submitted but response structure unknown: ${JSON.stringify(submitRes.data)}`);
+            await sendTelegramAlert(`⚠️ *REDEEM UNKNOWN RESPONSE*\nCheck dashboard manually.`);
         }
 
     } catch (err) {
