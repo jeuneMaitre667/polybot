@@ -1253,7 +1253,8 @@ async function performanceLoop() {
                                                    `• Statut: simulation gagnante`;
                                     
                                     console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
-                                    
+                                    await sendTelegramAlert(winMsg);
+
                                     // v34.4.6: Immediate Archival for Simulation WIN
                                     try {
                                         Analytics.recordTrade({
@@ -1268,9 +1269,6 @@ async function performanceLoop() {
                                             isWin: true
                                         });
                                     } catch (e) { console.error('[ArchivalError] WIN Sync failed:', e.message); }
-
-                                    // v34.4.12: ALERT SECOND (Non-blocking Task)
-                                    sendTelegramAlert(winMsg);
                                 } else {
                                     // v20.3.0: REAL TRADE REDEEM via Gasless Relayer
                                     console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
@@ -1283,10 +1281,10 @@ async function performanceLoop() {
                                                        `• Marché: ${pos.slug}\n` +
                                                        `• Profit: +$${profitNet.toFixed(2)}\n` +
                                                        `• Statut: Gasless Redeem ✅`;
-                                        sendTelegramAlert(winMsg);
+                                        await sendTelegramAlert(winMsg);
                                     } catch (redeemErr) {
                                         console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
-                                        sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
+                                        await sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
                                     }
                                 }
                             } else {
@@ -1294,46 +1292,27 @@ async function performanceLoop() {
                                     const result = await getVirtualBalance();
                                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                                     console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${finalBal.toFixed(2)}`);
-                                    
-                                    // v34.4.12: Archival FIRST
-                                    try {
-                                        Analytics.recordTrade({
-                                            asset: pos.asset || 'BTC',
-                                            slug: pos.slug,
-                                            isSimulated: true,
-                                            side: pos.side,
-                                            entryPrice: pos.buyPrice,
-                                            exitPrice: 0.0,
-                                            quantity: pos.amount,
-                                            pnlUsd: -(pos.buyPrice * pos.amount),
-                                            isWin: false
-                                        });
-                                    } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
-
-                                    // v34.4.12: ALERT SECOND (Non-blocking)
-                                    sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde final: $${finalBal.toFixed(2)} 💵`);
+                                    await sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde final: $${finalBal.toFixed(2)} 💵`);
                                 } else {
-                                                                         console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}. No redeem needed.`);
-                                     
-                                     // v34.4.12: Archival FIRST
-                                     try {
-                                         Analytics.recordTrade({
-                                             asset: pos.asset || 'BTC',
-                                             slug: pos.slug,
-                                             isSimulated: false,
-                                             side: pos.side,
-                                             entryPrice: pos.buyPrice,
-                                             exitPrice: 0.0,
-                                             quantity: pos.amount,
-                                             pnlUsd: -(pos.buyPrice * pos.amount),
-                                             isWin: false
-                                         });
-                                     } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
-
-                                     // v34.4.12: ALERT SECOND (Non-blocking)
-                                     sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: ${(pos.buyPrice * pos.amount).toFixed(2)}`);
-                                 }
-                             }
+                                    console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}. No redeem needed.`);
+                                    await sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: $${(pos.buyPrice * pos.amount).toFixed(2)}`);
+                                }
+                                
+                                // v34.4.6: Immediate Archival for LOSS
+                                try {
+                                    Analytics.recordTrade({
+                                        asset: pos.asset || 'BTC',
+                                        slug: pos.slug,
+                                        isSimulated: pos.isSimulated,
+                                        side: pos.side,
+                                        entryPrice: pos.buyPrice,
+                                        exitPrice: 0.0,
+                                        quantity: pos.amount,
+                                        pnlUsd: -(pos.buyPrice * pos.amount),
+                                        isWin: false
+                                    });
+                                } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
+                            }
 
                             lastResolvedCid = pos.tokenId;
                             positions.splice(i, 1);
