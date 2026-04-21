@@ -212,6 +212,23 @@ async function checkFastResolution(currentPrice) {
                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance || 0) : (result || 0));
                     
                     console.log(`[FastResolution] 🛡️⚓ ATOMIC Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
+                    
+                    // v34.4.12: Archival FIRST (Priority #1) - FastResolution WIN
+                    try {
+                        Analytics.recordTrade({
+                            asset: pos.asset || 'BTC',
+                            slug: pos.slug,
+                            isSimulated: true,
+                            side: pos.side,
+                            entryPrice: pos.buyPrice,
+                            exitPrice: 1.0,
+                            quantity: pos.amount,
+                            pnlUsd: profitNet,
+                            isWin: true
+                        });
+                    } catch (e) { console.error('[ArchivalError] FastResolution WIN Sync failed:', e.message); }
+
+                    // ALERT SECOND (Non-blocking)
                     await sendTelegramAlert(`🛡️⚓ *SIMULATED WIN (BINANCE)* 🛡️⚓\n\n• Profit: +${profitNet.toFixed(2)} 🛡️⚓\n• Solde actuel: ${finalBal.toFixed(2)} 🛡️⚓\n• Precision: 2 decimals ⚖️`);
                 } 
                 
