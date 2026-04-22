@@ -1,4 +1,4 @@
-# 📊 Session Grand Report - Polymarket Trading Bot
+﻿# 📊 Session Grand Report - Polymarket Trading Bot
 
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
