@@ -17,7 +17,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > **Capital Actuel** : **897,89 $** (Certifié 🚀)
 > **Dernière Synchro** : 22/04/2026 à 15h43 (Paris)
 > ### ⚓ Point d'Encrage Actuel
-> Dernier trade enregistré : #846 (22/04/2026 - 15h40)
+> Dernier trade enregistré : #846 (22/04/2026 - 15h15)
 > Solde certifié : **897,89 $** 🏦
 
 *   **Ratio de Survie** : ~2.9/1 (Stabilité confirmée sur volume massif).
