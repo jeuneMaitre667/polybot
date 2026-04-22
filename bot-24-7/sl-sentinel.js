@@ -15,11 +15,12 @@ let activeSubscription = null; // { tokenId, buyPrice, side, stopLossThreshold, 
 /**
  * Starts real-time monitoring for a position.
  */
-export function startMonitoring(tokenId, buyPrice, side, stopLossPct, onTrigger) {
+export function startMonitoring(tokenId, buyPrice, side, stopLossPct, entryAssetPrice, onTrigger) {
     activeSubscription = {
         tokenId,
         buyPrice,
         side,
+        entryAssetPrice,
         stopLossThreshold: buyPrice * (1 - stopLossPct),
         onTrigger
     };
@@ -161,7 +162,13 @@ function processOrderBook(book) {
         // console.log(`[SL Sentinel] Spot: ${bestBid} | PnL: ${(pnlPct * 100).toFixed(2)}%`);
     }
 
-    const isTriggered = RiskManager.shouldTriggerStopLoss(activeSubscription.buyPrice, bestBid);
+    const isTriggered = RiskManager.shouldTriggerStopLoss(
+        activeSubscription.buyPrice, 
+        bestBid,
+        activeSubscription.side,
+        activeSubscription.entryAssetPrice,
+        global.lastBinanceSpot
+    );
 
     if (isTriggered) {
         console.warn(`[SL Sentinel] 🚨 SWISS GUARD TRIGGERED at ${bestBid}! (PnL: ${(pnlPct * 100).toFixed(2)}%)`);

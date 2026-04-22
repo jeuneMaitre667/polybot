@@ -802,6 +802,10 @@ async function mainLoop() {
         
         // v17.59.0: Ultra-High-Priority Resolution (Compound Engine)
         const marketState = await getUnifiedMarketState('BTC');
+        if (marketState) {
+            global.lastBinanceSpot = marketState.bSpot; // v35.0.0: Global price sharing for SL Sentinel
+        }
+        
         if (IS_SIMULATION_ENABLED && marketState) {
             await checkFastResolution(marketState.bSpot);
         }
@@ -1129,6 +1133,7 @@ async function mainLoop() {
                 executionPrice, 
                 side, 
                 stopLossPct, 
+                mv.bSpot, // v35.0.0: Entry asset price reference
                 async (info) => {
                     await executeEmergencyExit(info);
                 }
