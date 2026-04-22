@@ -30,3 +30,19 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 *   **ROI GLOBAL SESSION** : **+805,24 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
 
 ---
+
+## 🛡️ Suivi V35 "Binance Shadow" (Post-Maj 15h45)
+
+> [!TIP]
+> Cette section suit spécifiquement les performances depuis l'activation du nouveau Stop Loss hybride (Hard Floor -25% / Shadow 0.03%).
+
+*   **Solde au Lancement** : 905,24 $ 🏦
+*   **Positions V35** : `0` 🔵
+*   **Victoires V35** : `0` ✅
+*   **Pertes (SL) V35** : `0` ❌
+*   **Win Rate V35** : `0.00 %` 🎯
+*   **SL Évités (Shadow)** : `0` 🛡️
+
+---
+
+---
