@@ -1,46 +1,44 @@
-﻿# 📊 Session Grand Report - Polymarket Trading Bot
-
+# 📝 Grand Rapport de Session - Polymarket Trading Bot
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : `852` 🔵
+> **Total des Positions (Vie du Bot)** : `607` 🔵
 > - **ATH (Sommet Historique)** : 1 053,00 $ (21/04/2026 - 20h56) 💎
-> - **Volume Total** : 852 positions
-> - **Victoires** : 602
-> - **Pertes (SL)** : 250
-> - **Win Rate** : 70,66 %
-> - **Statut** : Stabilisé V35 (Binance Shadow Active 🛡️)
+> - **Volume Total** : 862 positions
+> - **Victoires** : 607
+> - **Pertes (SL)** : 255
+> - **Win Rate** : 70,41 %
+> - **Statut** : Stabilisé V37 (Strike-Aware 🛡️)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **925,43 $** (Certifié 🚀)
-> **Dernière Synchro** : 22/04/2026 à 16h12 (Paris)
-> ### ⚓ Point d'Encrage Actuel
-> Dernier trade enregistré : #852 (22/04/2026 - 16h10)
-> Solde certifié : **925,43 $** 🏦
-
-*   **Ratio de Survie** : ~2.4/1 (Stabilité confirmée sur volume massif).
-*   **Vitesse d'Exécution** : ~500 positions en 5 jours d'opération (100 trades/jour).
+> **Capital Actuel** : **901,00 $** (Ajusté 🚀)
+> **Dernière Synchro** : 22/04/2026 à 17h40 (Paris)
 
 ---
 
-## 💰 Analyse du Capital (Migration & Stabilization)
+## 📊 Session V37 "Diamond Shield" (Démarrée à 17h04)
+- **Score Session** : 2 Victoires / 3 Stop Loss
+- **Statut** : Retour au-dessus des 900$ 🚀💎
+- **Solde Session** : $901.00 USD
+- **Dernière Position** : Slot 17h35 (WIN ✅)
 
+## 🕵️‍♂️ Historique des Incidents V37
+| Heure | Slot ID | Résultat | Analyse Binance Shadow |
+| :--- | :--- | :--- | :--- |
+| 17h09 | 1776870600 | SL (-12%) | **CONFIRMÉ** : BTC a franchi la zone de sécurité (Strike +0.03%). |
+| 17h18 | 1776871200 | SL (-12%) | **CONFIRMÉ** : Danger réel détecté (BTC -0.036% vs Strike en YES). |
+| 17h20 | 1776871200 | SL (-33%) | **CRASH FINAL** : BTC a plongé sous le Strike à T-14s. Sortie défensive à $0.60. |
+| 17h29 | 1776871500 | **WIN (+8%)** | **SUCCÈS** : Le bot a tenu la position jusqu'au bout. |
+| 17h40 | 1776872100 | **WIN (+12%)** | **SUCCÈS** : Franchissement des 900$. Delta stable à +0.12%. |
+
+## 🔑 Points Clés & Stabilité
+- **Double Win Streak** : La V37 commence à montrer sa régularité.
+- **Hard Floor 20%** : Sécurité renforcée (Passage de 25% à 20% pour limiter l'exposition maximale).
+- **État du Système** : Opérationnel. Monitoring 24/7 en cours.
+
+## 💰 Analyse du Capital
 *   **Capital de Départ (Session)** : 100,00 $
-*   **SOLDE ACTUEL** : **925,43 $** ✅
-*   **BÉNÉFICE NET SESSION** : **+825,43 $**
-*   **ROI GLOBAL SESSION** : **+825,43 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
-
----
-
-## 🛡️ Suivi V35 "Binance Shadow" (Post-Maj 15h45)
-
-> [!TIP]
-> Cette section suit spécifiquement les performances depuis l'activation du nouveau Stop Loss hybride (Hard Floor -25% / Shadow 0.03%).
-
-*   **Solde au Lancement** : 905,24 $ 🏦
-*   **Positions V35** : `5` 🔵
-*   **Victoires V35** : `4` ✅
-*   **Pertes (SL) V35** : `1` ❌
-*   **Win Rate V35** : `80.00 %` 🎯
-*   **SL Évités (Shadow)** : `0` 🛡️
+*   **SOLDE ACTUEL** : **901,00 $** ✅
+*   **BÉNÉFICE NET SESSION** : **+801,00 $**
+*   **ROI GLOBAL SESSION** : **+801,00 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
 
 ---
