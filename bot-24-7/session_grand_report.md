@@ -44,5 +44,3 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 *   **SL Évités (Shadow)** : `0` 🛡️
 
 ---
-
----
