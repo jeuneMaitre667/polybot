@@ -72,7 +72,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
             if (isDroppingSinceEntry && !isSafeAboveStrike) isConfirmedByBinance = true;
             
             if (isDroppingSinceEntry && isSafeAboveStrike) {
-                if (Math.random() < 0.05) console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance dropped but we are still safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+                console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance dropped but we are still safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
             }
         } else {
             // Confirm loss ONLY if Binance rose since entry AND we are dangerously close to Strike
@@ -87,7 +87,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
             if (isRisingSinceEntry && !isSafeBelowStrike) isConfirmedByBinance = true;
 
             if (isRisingSinceEntry && isSafeBelowStrike) {
-                if (Math.random() < 0.05) console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance rose but we are still safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+                console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance rose but we are still safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
             }
         }
 
