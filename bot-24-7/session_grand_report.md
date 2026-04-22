@@ -3,21 +3,21 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : `847` 🔵
+> **Total des Positions (Vie du Bot)** : `849` 🔵
 > - **ATH (Sommet Historique)** : 1 053,00 $ (21/04/2026 - 20h56) 💎
-> - **Volume Total** : 847 positions
-> - **Victoires** : 598
+> - **Volume Total** : 849 positions
+> - **Victoires** : 600
 > - **Pertes (SL)** : 249
-> - **Win Rate** : 70,60 %
+> - **Win Rate** : 70,67 %
 > - **Statut** : Stabilisé V35 (Binance Shadow Active 🛡️)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **905,24 $** (Certifié 🚀)
-> **Dernière Synchro** : 22/04/2026 à 15h45 (Paris)
+> **Capital Actuel** : **917,23 $** (Certifié 🚀)
+> **Dernière Synchro** : 22/04/2026 à 15h57 (Paris)
 > ### ⚓ Point d'Encrage Actuel
-> Dernier trade enregistré : #847 (22/04/2026 - 15h43)
-> Solde certifié : **905,24 $** 🏦
+> Dernier trade enregistré : #849 (22/04/2026 - 15h53)
+> Solde certifié : **917,23 $** 🏦
 
-*   **Ratio de Survie** : ~2.9/1 (Stabilité confirmée sur volume massif).
+*   **Ratio de Survie** : ~2.4/1 (Stabilité confirmée sur volume massif).
 *   **Vitesse d'Exécution** : ~500 positions en 5 jours d'opération (100 trades/jour).
 
 ---
@@ -25,9 +25,9 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 💰 Analyse du Capital (Migration & Stabilization)
 
 *   **Capital de Départ (Session)** : 100,00 $
-*   **SOLDE ACTUEL** : **905,24 $** ✅
-*   **BÉNÉFICE NET SESSION** : **+805,24 $**
-*   **ROI GLOBAL SESSION** : **+805,24 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
+*   **SOLDE ACTUEL** : **917,23 $** ✅
+*   **BÉNÉFICE NET SESSION** : **+817,23 $**
+*   **ROI GLOBAL SESSION** : **+817,23 %** 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀
 
 ---
 
@@ -37,10 +37,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > Cette section suit spécifiquement les performances depuis l'activation du nouveau Stop Loss hybride (Hard Floor -25% / Shadow 0.03%).
 
 *   **Solde au Lancement** : 905,24 $ 🏦
-*   **Positions V35** : `0` 🔵
-*   **Victoires V35** : `0` ✅
+*   **Positions V35** : `2` 🔵
+*   **Victoires V35** : `2` ✅
 *   **Pertes (SL) V35** : `0` ❌
-*   **Win Rate V35** : `0.00 %` 🎯
+*   **Win Rate V35** : `100.00 %` 🎯
 *   **SL Évités (Shadow)** : `0` 🛡️
 
 ---
