@@ -15,12 +15,13 @@ let activeSubscription = null; // { tokenId, buyPrice, side, stopLossThreshold, 
 /**
  * Starts real-time monitoring for a position.
  */
-export function startMonitoring(tokenId, buyPrice, side, stopLossPct, entryAssetPrice, onTrigger) {
+export function startMonitoring(tokenId, buyPrice, side, stopLossPct, entryAssetPrice, strikePrice, onTrigger) {
     activeSubscription = {
         tokenId,
         buyPrice,
         side,
         entryAssetPrice,
+        strikePrice,
         onTrigger
     };
 
@@ -166,7 +167,8 @@ function processOrderBook(book) {
         bestBid,
         activeSubscription.side,
         activeSubscription.entryAssetPrice,
-        global.lastBinanceSpot
+        global.lastBinanceSpot,
+        activeSubscription.strikePrice
     );
 
     if (isTriggered) {

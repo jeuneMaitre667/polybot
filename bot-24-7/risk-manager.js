@@ -25,12 +25,13 @@ export function calculateTradeSize(availableBalance) {
     return finalSize;
 }
 
-export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice) {
+export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
     
-    // v35.0.0: Binance Shadow & Hard Floor Strategy
+    // v37.0.0: Strike-Aware Binance Shadow Strategy
     const HARD_STOP_LOSS = 0.25; // 25% Absolute Floor
     const BINANCE_SHADOW_THRESHOLD = 0.0003; // 0.03% Confirmation Threshold
+    const STRIKE_SAFETY_BUFFER = 0.0005; // 0.05% Zone of "Indisputable Win"
     
     // v31.0 Swiss Guard: Fee-Aware Net PnL
     const entryFee = 0.018;
@@ -42,7 +43,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
     
     // 1. HARD FLOOR: Absolute exit regardless of Binance
     if (netPnlPct <= -HARD_STOP_LOSS) {
-        console.warn(`[RiskManager] 🚨 HARD FLOOR TRIGGERED: Net PnL is ${(netPnlPct * 100).toFixed(2)}% (Limit: -${(HARD_STOP_LOSS * 100).toFixed(2)}%)`);
+        console.warn(`[RiskManager] 🚨 HARD FLOOR TRIGGERED: Net PnL is ${(netPnlPct * 100).toFixed(2)}%`);
         return true;
     }
 
@@ -52,22 +53,48 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
             return true; // Safety fallback
         }
 
-        const assetDelta = (currentAssetPrice - entryAssetPrice) / entryAssetPrice;
+        const assetDeltaSinceEntry = (currentAssetPrice - entryAssetPrice) / entryAssetPrice;
         
+        // v37.0: Calculate distance to Strike to detect "Safe Wins"
         let isConfirmedByBinance = false;
+        
         if (side === 'YES') {
-            if (assetDelta <= -BINANCE_SHADOW_THRESHOLD) isConfirmedByBinance = true;
+            // Confirm loss ONLY if Binance dropped since entry AND we are dangerously close to Strike
+            const isDroppingSinceEntry = assetDeltaSinceEntry <= -BINANCE_SHADOW_THRESHOLD;
+            
+            // If we have a strike, check if we are still well above it
+            let isSafeAboveStrike = false;
+            if (strikePrice && strikePrice > 0) {
+                const distToStrike = (currentAssetPrice - strikePrice) / strikePrice;
+                if (distToStrike > STRIKE_SAFETY_BUFFER) isSafeAboveStrike = true;
+            }
+
+            if (isDroppingSinceEntry && !isSafeAboveStrike) isConfirmedByBinance = true;
+            
+            if (isDroppingSinceEntry && isSafeAboveStrike) {
+                if (Math.random() < 0.05) console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance dropped but we are still safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+            }
         } else {
-            if (assetDelta >= BINANCE_SHADOW_THRESHOLD) isConfirmedByBinance = true;
+            // Confirm loss ONLY if Binance rose since entry AND we are dangerously close to Strike
+            const isRisingSinceEntry = assetDeltaSinceEntry >= BINANCE_SHADOW_THRESHOLD;
+            
+            let isSafeBelowStrike = false;
+            if (strikePrice && strikePrice > 0) {
+                const distToStrike = (currentAssetPrice - strikePrice) / strikePrice;
+                if (distToStrike < -STRIKE_SAFETY_BUFFER) isSafeBelowStrike = true;
+            }
+
+            if (isRisingSinceEntry && !isSafeBelowStrike) isConfirmedByBinance = true;
+
+            if (isRisingSinceEntry && isSafeBelowStrike) {
+                if (Math.random() < 0.05) console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance rose but we are still safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+            }
         }
 
         if (isConfirmedByBinance) {
-            console.warn(`[RiskManager] 🛡️ SHADOW CONFIRMED: Binance Delta ${ (assetDelta * 100).toFixed(4) }% confirms loss.`);
+            console.warn(`[RiskManager] 🛡️ SHADOW CONFIRMED: Binance Delta ${ (assetDeltaSinceEntry * 100).toFixed(4) }% confirms real danger.`);
             return true;
         } else {
-            if (Math.random() < 0.05) {
-                console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance Delta ${ (assetDelta * 100).toFixed(4) }% ignores noise.`);
-            }
             return false;
         }
     }

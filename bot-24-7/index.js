@@ -629,7 +629,8 @@ async function reportingLoop() {
                         currentBid, 
                         activePosition.side, 
                         activePosition.entryAssetPrice, 
-                        global.lastBinanceSpot
+                        global.lastBinanceSpot,
+                        activePosition.officialStrike
                     );
 
                     if (isTriggered && !activePosition.isExiting) {
@@ -1130,7 +1131,7 @@ async function mainLoop() {
             } else {
                 if (lastAlertedSlot !== slotStart) {
                     const entryMsg = `🎯 *SNIPER ENTRY : BTC ${side}* 🎯\n\n` +
-                                    `• Price: $${bestAsk}\n` +
+                                    `• Price: $${executionPrice}\n` +
                                     `• Mise: $${tradeAmountUsd.toFixed(2)}\n` +
                                     `• Latency: ${totalLatency}ms ⚡`;
                     sendTelegramAlert(entryMsg);
@@ -1138,14 +1139,15 @@ async function mainLoop() {
                 }
             }
 
-            // v17.1.0: Launch Stop Loss Sentinel
+            // v37.0.0: Launch Strike-Aware Stop Loss Sentinel
             const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10"); // Locked at 10%
             SLSentinel.startMonitoring(
                 String(tokenId), 
                 executionPrice, 
                 side, 
                 stopLossPct, 
-                mv.bSpot, // v35.0.0: Entry asset price reference
+                mv.bSpot, 
+                currentSig.strike, 
                 async (info) => {
                     await executeEmergencyExit(info);
                 }
