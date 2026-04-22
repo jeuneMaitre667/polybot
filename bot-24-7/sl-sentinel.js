@@ -21,7 +21,6 @@ export function startMonitoring(tokenId, buyPrice, side, stopLossPct, entryAsset
         buyPrice,
         side,
         entryAssetPrice,
-        stopLossThreshold: buyPrice * (1 - stopLossPct),
         onTrigger
     };
 

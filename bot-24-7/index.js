@@ -449,6 +449,9 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000, httpsAgent: null }).catch(() => null);
     const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
+    // v35.0.0: Global export for SLSentinel & RiskManager
+    global.lastBinanceSpot = bSpot;
+
     // 2. Fetch or Backfill Strike (v24.3.0: PURE BINANCE REFERENCE)
     const strikeTime = slotStart; 
     let bStrike = await getBinanceStrike(asset, strikeTime);
@@ -621,7 +624,15 @@ async function reportingLoop() {
                     const currentBid = activePosition.side === 'YES' ? bestBidUp : bestBidDown;
                     const currentAsk = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
                     
-                    if (RiskManager.shouldTriggerStopLoss(activePosition.buyPrice, currentBid) && !activePosition.isExiting) {
+                    const isTriggered = RiskManager.shouldTriggerStopLoss(
+                        activePosition.buyPrice, 
+                        currentBid, 
+                        activePosition.side, 
+                        activePosition.entryAssetPrice, 
+                        global.lastBinanceSpot
+                    );
+
+                    if (isTriggered && !activePosition.isExiting) {
                         console.warn(`[Risk] 🛡️🛰️⚓ Stop Loss Triggered! Bid:$${currentBid} (Ask:$${currentAsk}) | Exiting...`);
                         activePosition.isExiting = true; 
 
@@ -1082,6 +1093,7 @@ async function mainLoop() {
                 buyPrice: executionPrice,
                 strike: currentSig.strike, // Binance reference (Signal)
                 officialStrike: currentSig.strike, // Temp fallback
+                entryAssetPrice: mv.bSpot, // v35.0.0: Binance Shadow Reference
                 amount: safeQty,
                 slotStart,
                 side,
