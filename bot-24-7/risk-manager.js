@@ -10,7 +10,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
     if (!buyPrice || !currentBid) return false;
     
     // v37.0.0: Strike-Aware Binance Shadow Strategy
-    const HARD_STOP_LOSS = 0.20; // 20% Absolute Floor
+    const HARD_STOP_LOSS = 0.15; // 15% Absolute Floor
     const BINANCE_SHADOW_THRESHOLD = 0.0003; // 0.03% Confirmation Threshold
     const STRIKE_SAFETY_BUFFER = 0.0005; // 0.05% Zone of "Indisputable Win"
     
