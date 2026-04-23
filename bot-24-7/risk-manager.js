@@ -9,78 +9,56 @@ const SESSION_MAX_LOSS = 0.10; // 10% Standard Stop Loss
 export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
     
-    // v37.0.0: Strike-Aware Binance Shadow Strategy
+    // v39.3: Absolute Numeric Enforcement
+    const bPrice = parseFloat(buyPrice);
+    const cBid = parseFloat(currentBid);
+    const sPrice = parseFloat(strikePrice || 0);
+    const aPriceEntry = parseFloat(entryAssetPrice || 0);
+    const aPriceCurrent = parseFloat(currentAssetPrice || 0);
+
     const HARD_STOP_LOSS = 0.15; // 15% Absolute Floor
-    const BINANCE_SHADOW_THRESHOLD = 0.0003; // 0.03% Confirmation Threshold
-    const STRIKE_SAFETY_BUFFER = 0.0005; // 0.05% Zone of "Indisputable Win"
-    
-    // v31.0 Swiss Guard: Fee-Aware Net PnL
+    const SESSION_MAX_LOSS = 0.10; // 10% Standard Alert
+    const BINANCE_SHADOW_THRESHOLD = 0.0003; // 0.03%
+    const STRIKE_SAFETY_BUFFER = 0.0005; // 0.05%
+
     const entryFee = 0.018;
     const exitFee = 0.018;
     
-    const effectiveEntry = buyPrice * (1 + entryFee);
-    const effectiveExit = currentBid * (1 - exitFee);
+    const effectiveEntry = bPrice * (1 + entryFee);
+    const effectiveExit = cBid * (1 - exitFee);
     const netPnlPct = (effectiveExit - effectiveEntry) / effectiveEntry;
-    
-    // 1. HARD FLOOR: Absolute exit regardless of Binance
+
+    // --- 🛡️ STRIKE IMMUNITY CHECK (FIRST LINE OF DEFENSE) ---
+    // If Binance says we are winning, we ignore Polymarket noise entirely
+    if (sPrice > 0 && aPriceCurrent > 0) {
+        const isUp = (side === 'UP' || side === 'YES' || side === 'BUY');
+        const distToStrike = (aPriceCurrent - sPrice) / sPrice;
+
+        if (isUp && distToStrike > STRIKE_SAFETY_BUFFER) {
+            // IMMUNE: We are above strike on an UP trade
+            return false; 
+        }
+        if (!isUp && distToStrike < -STRIKE_SAFETY_BUFFER) {
+            // IMMUNE: We are below strike on a DOWN trade
+            return false;
+        }
+    }
+
+    // --- 🚨 EMERGENCY EXIT (HARD FLOOR) ---
     if (netPnlPct <= -HARD_STOP_LOSS) {
-        console.warn(`[RiskManager] 🚨 HARD FLOOR TRIGGERED: Net PnL is ${(netPnlPct * 100).toFixed(2)}%`);
+        console.warn(`[RiskManager] 🚨 HARD FLOOR TRIGGERED: Net PnL is ${(netPnlPct * 100).toFixed(2)}% (Binance Delta: ${(((aPriceCurrent-aPriceEntry)/aPriceEntry)*100).toFixed(4)}%)`);
         return true;
     }
 
-    // 2. BINANCE SHADOW: Confirmation logic for standard Stop Loss
+    // --- 🛰️ BINANCE SHADOW (STANDARD SL) ---
     if (netPnlPct <= -SESSION_MAX_LOSS) {
-        if (!entryAssetPrice || !currentAssetPrice) {
-            return true; // Safety fallback
-        }
+        if (aPriceEntry <= 0 || aPriceCurrent <= 0) return true; // Safety fallback
 
-        const assetDeltaSinceEntry = (currentAssetPrice - entryAssetPrice) / entryAssetPrice;
-        let isConfirmedByBinance = false;
-        
-        // v38.1: Directional Logic (UP/DOWN)
-        if (side === 'UP' || side === 'YES' || side === 'BUY') {
-            const isDroppingSinceEntry = assetDeltaSinceEntry <= -BINANCE_SHADOW_THRESHOLD;
-            
-            // STRIKE IMMUNITY: If we are safely above strike, we NEVER exit.
-            let isSafeAboveStrike = false;
-            if (strikePrice && strikePrice > 0) {
-                const distToStrike = (currentAssetPrice - strikePrice) / strikePrice;
-                if (distToStrike > STRIKE_SAFETY_BUFFER) isSafeAboveStrike = true;
-            }
+        const assetDelta = (aPriceCurrent - aPriceEntry) / aPriceEntry;
+        const isUp = (side === 'UP' || side === 'YES' || side === 'BUY');
 
-            if (isSafeAboveStrike) {
-                if (Math.random() < 0.1) {
-                    console.log(`[RiskManager] 🛡️ IMMUNITY: Polymarket noise ignored. Binance is safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%).`);
-                }
-                return false; 
-            }
-
-            if (isDroppingSinceEntry) isConfirmedByBinance = true;
-
-        } else {
-            // DOWN / NO Logic
-            const isRisingSinceEntry = assetDeltaSinceEntry >= BINANCE_SHADOW_THRESHOLD;
-            
-            let isSafeBelowStrike = false;
-            if (strikePrice && strikePrice > 0) {
-                const distToStrike = (currentAssetPrice - strikePrice) / strikePrice;
-                if (distToStrike < -STRIKE_SAFETY_BUFFER) isSafeBelowStrike = true;
-            }
-
-            if (isSafeBelowStrike) {
-                if (Math.random() < 0.1) {
-                    console.log(`[RiskManager] 🛡️ IMMUNITY: Polymarket noise ignored. Binance is safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%).`);
-                }
-                return false;
-            }
-
-            if (isRisingSinceEntry) isConfirmedByBinance = true;
-        }
-
-        if (isConfirmedByBinance) {
-            console.warn(`[RiskManager] 🛡️ SHADOW CONFIRMED: Binance Delta ${ (assetDeltaSinceEntry * 100).toFixed(4) }% confirms real danger.`);
-            return true;
-        }
+        if (isUp && assetDelta <= -BINANCE_SHADOW_THRESHOLD) return true;
+        if (!isUp && assetDelta >= BINANCE_SHADOW_THRESHOLD) return true;
     }
     
     return false;
