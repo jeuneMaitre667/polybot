@@ -1045,7 +1045,7 @@ async function mainLoop() {
                         tokenID: tokenId,
                         price: finalPrice,
                         size: safeQty,
-                        side: side === 'YES' ? Side.BUY : Side.SELL
+                        side: Side.BUY
                     },
                     {
                         tickSize: tSize,
