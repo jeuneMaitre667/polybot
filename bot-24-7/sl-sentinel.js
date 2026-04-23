@@ -147,18 +147,34 @@ function processOrderBook(book) {
     // 1. Minimum Liquidity Filter: Ignore bids with < 1 contracts (dust)
     if (bidSize < 1) return;
 
-    // 2. The RiskManager will now handle noise vs crash using Binance data.
+    // v43.0: Depth-Aware Price Calculation (Anti-Ghost Bids)
+    // We find the price where we can actually sell $100 worth of tokens.
+    const MIN_DEPTH_USD = 100.0;
+    let cumulativeValue = 0;
+    let depthAwarePrice = 0;
 
-    const pnlPct = (bestBid - activeSubscription.buyPrice) / activeSubscription.buyPrice;
-    
-    // Debug log status (5% of messages)
-    if (Math.random() < 0.05) {
-        // console.log(`[SL Sentinel] Spot: ${bestBid} | PnL: ${(pnlPct * 100).toFixed(2)}%`);
+    for (const bid of book.bids) {
+        const price = parseFloat(bid.price);
+        const size = parseFloat(bid.size);
+        cumulativeValue += price * size;
+        
+        if (cumulativeValue >= MIN_DEPTH_USD) {
+            depthAwarePrice = price;
+            break;
+        }
     }
+
+    // If depth is not reached (e.g. less than $100 of total bids), we ignore the update
+    // This protects against fake liquidity gaps and ghost bids.
+    if (depthAwarePrice === 0) return;
+
+    if (depthAwarePrice === 0) return;
+
+    const pnlPct = (depthAwarePrice - activeSubscription.buyPrice) / activeSubscription.buyPrice;
 
     const isTriggered = RiskManager.shouldTriggerStopLoss(
         activeSubscription.buyPrice, 
-        bestBid,
+        depthAwarePrice,
         activeSubscription.side,
         activeSubscription.entryAssetPrice,
         global.lastBinanceSpot,
