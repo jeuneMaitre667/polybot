@@ -144,16 +144,10 @@ function processOrderBook(book) {
     // v17.36.21: Advanced Noise & Slippage Protection
     if (!bestBid) return;
 
-    // 1. Minimum Liquidity Filter: Ignore bids with < 10 contracts (dust)
-    if (bidSize < 10) return;
+    // 1. Minimum Liquidity Filter: Ignore bids with < 1 contracts (dust)
+    if (bidSize < 1) return;
 
-    // 2. Sanity check: If we just entered at 0.50+, and bid says 0.01, it's noise.
-    // A drop > 50% in the first few seconds of monitoring is likely a bad WebSocket dump.
-    const instantDrop = (activeSubscription.buyPrice - bestBid) / activeSubscription.buyPrice;
-    if (instantDrop > 0.50 && (bestBid < 0.10)) {
-        // console.log(`[SL Sentinel] 🛡️ Filtered extreme slippage noise: ${bestBid}`);
-        return;
-    }
+    // 2. The RiskManager will now handle noise vs crash using Binance data.
 
     const pnlPct = (bestBid - activeSubscription.buyPrice) / activeSubscription.buyPrice;
     
