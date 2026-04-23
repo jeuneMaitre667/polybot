@@ -171,6 +171,11 @@ function processOrderBook(book) {
     if (depthAwarePrice === 0) return;
 
     const pnlPct = (depthAwarePrice - activeSubscription.buyPrice) / activeSubscription.buyPrice;
+    
+    // DEBUG LOG: See what the sentinel is actually doing
+    if (depthAwarePrice < activeSubscription.buyPrice * 0.90) {
+        console.log(`[SL DEBUG] Potential Trigger! DepthPrice: ${depthAwarePrice} | FirstBid: ${book.bids[0].price} | PnL: ${(pnlPct * 100).toFixed(2)}%`);
+    }
 
     const isTriggered = RiskManager.shouldTriggerStopLoss(
         activeSubscription.buyPrice, 
@@ -182,7 +187,7 @@ function processOrderBook(book) {
     );
 
     if (isTriggered) {
-        console.warn(`[SL Sentinel] 🚨 SWISS GUARD TRIGGERED at ${bestBid}! (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+        console.warn(`[SL Sentinel] 🚨 SWISS GUARD TRIGGERED at DepthPrice: ${depthAwarePrice}! (FirstBid was ${book.bids[0].price})`);
         
         const triggerFn = activeSubscription.onTrigger;
         const info = { ...activeSubscription, currentPrice: bestBid, pnlPct };
