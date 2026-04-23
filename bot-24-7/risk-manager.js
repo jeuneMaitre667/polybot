@@ -1,29 +1,10 @@
 /**
- * v16.16.1: Risk & Capital Management (FIXED v27.7)
- * Logic: Fixed Bet (Safe Mode)
+ * v38.1.0 Iron Sight Risk Manager
+ * Strike-Aware Safety with Total Immunity on Win Zones.
  */
 
-const INITIAL_BET_USD = parseFloat(process.env.ORDER_SIZE_USD || '1.5');
-const MAX_BET_USD = parseFloat(process.env.MAX_STAKE_USD || '100');
-const SESSION_MAX_LOSS = parseFloat(process.env.MAX_LOSS || '0.10');
-
-let sessionStartingBalance = null;
-
-export function calculateTradeSize(availableBalance) {
-    // v31.8: Full Compounding Logic (100% of capital reinvested)
-    let scaledSize = availableBalance; // Reinvest everything
-    
-    // Respect bounds: Start at 10$ (INITIAL_BET_USD), Max 100$ (MAX_BET_USD)
-    let finalSize = Math.max(INITIAL_BET_USD, Math.min(scaledSize, MAX_BET_USD));
-    
-    // Absolute Safety buffer (don't go to zero)
-    if (finalSize > availableBalance * 0.98) {
-        finalSize = availableBalance * 0.98;
-    }
-
-    console.log('[RiskManager] Mode: AGGRESSIVE | Balance: $' + availableBalance.toFixed(2) + ' | Next Trade: $' + finalSize.toFixed(2));
-    return finalSize;
-}
+let sessionStartingBalance = 0;
+const SESSION_MAX_LOSS = 0.10; // 10% Standard Stop Loss
 
 export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
@@ -54,28 +35,30 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
         }
 
         const assetDeltaSinceEntry = (currentAssetPrice - entryAssetPrice) / entryAssetPrice;
-        
-        // v37.0: Calculate distance to Strike to detect "Safe Wins"
         let isConfirmedByBinance = false;
         
-        if (side === 'YES') {
-            // Confirm loss ONLY if Binance dropped since entry AND we are dangerously close to Strike
+        // v38.1: Directional Logic (UP/DOWN)
+        if (side === 'UP' || side === 'YES' || side === 'BUY') {
             const isDroppingSinceEntry = assetDeltaSinceEntry <= -BINANCE_SHADOW_THRESHOLD;
             
-            // If we have a strike, check if we are still well above it
+            // STRIKE IMMUNITY: If we are safely above strike, we NEVER exit.
             let isSafeAboveStrike = false;
             if (strikePrice && strikePrice > 0) {
                 const distToStrike = (currentAssetPrice - strikePrice) / strikePrice;
                 if (distToStrike > STRIKE_SAFETY_BUFFER) isSafeAboveStrike = true;
             }
 
-            if (isDroppingSinceEntry && !isSafeAboveStrike) isConfirmedByBinance = true;
-            
-            if (isDroppingSinceEntry && isSafeAboveStrike) {
-                console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance dropped but we are still safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+            if (isSafeAboveStrike) {
+                if (Math.random() < 0.1) {
+                    console.log(`[RiskManager] 🛡️ IMMUNITY: Polymarket noise ignored. Binance is safely ABOVE Strike (+${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%).`);
+                }
+                return false; 
             }
+
+            if (isDroppingSinceEntry) isConfirmedByBinance = true;
+
         } else {
-            // Confirm loss ONLY if Binance rose since entry AND we are dangerously close to Strike
+            // DOWN / NO Logic
             const isRisingSinceEntry = assetDeltaSinceEntry >= BINANCE_SHADOW_THRESHOLD;
             
             let isSafeBelowStrike = false;
@@ -84,24 +67,24 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
                 if (distToStrike < -STRIKE_SAFETY_BUFFER) isSafeBelowStrike = true;
             }
 
-            if (isRisingSinceEntry && !isSafeBelowStrike) isConfirmedByBinance = true;
-
-            if (isRisingSinceEntry && isSafeBelowStrike) {
-                console.log(`[RiskManager] 🛡️ SHADOW REJECTED: Binance rose but we are still safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%). Ignoring noise.`);
+            if (isSafeBelowStrike) {
+                if (Math.random() < 0.1) {
+                    console.log(`[RiskManager] 🛡️ IMMUNITY: Polymarket noise ignored. Binance is safely BELOW Strike (${((currentAssetPrice-strikePrice)/strikePrice*100).toFixed(3)}%).`);
+                }
+                return false;
             }
+
+            if (isRisingSinceEntry) isConfirmedByBinance = true;
         }
 
         if (isConfirmedByBinance) {
             console.warn(`[RiskManager] 🛡️ SHADOW CONFIRMED: Binance Delta ${ (assetDeltaSinceEntry * 100).toFixed(4) }% confirms real danger.`);
             return true;
-        } else {
-            return false;
         }
     }
     
     return false;
 }
-
 
 export function initSession(initialBalance) {
     sessionStartingBalance = initialBalance;
