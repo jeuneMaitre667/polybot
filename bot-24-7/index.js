@@ -1289,6 +1289,7 @@ async function performanceLoop() {
                                                    `• Statut: simulation gagnante`;
                                     
                                     console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
+                                    SLSentinel.stopMonitoring(); // v39.3.1: Silent exit after win
                                     
                                     // v34.4.6: Immediate Archival for Simulation WIN
                                     try {
