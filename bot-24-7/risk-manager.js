@@ -90,3 +90,17 @@ export function initSession(initialBalance) {
     sessionStartingBalance = initialBalance;
     console.log('[RiskManager] Session Initialized at $' + initialBalance);
 }
+
+/**
+ * Calcule la taille de la mise en fonction du capital.
+ * v39.2: Hard cap à 100$ pour sécurité maximale.
+ */
+export function calculateTradeSize(balance) {
+    const DEFAULT_STAKE = 100.0;
+    const PERCENT_STAKE = 0.10; // 10% du capital
+    
+    let suggestedStake = balance * PERCENT_STAKE;
+    
+    // On prend le min entre 10% du capital et 100$
+    return Math.min(DEFAULT_STAKE, suggestedStake);
+}
