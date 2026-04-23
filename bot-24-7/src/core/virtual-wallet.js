@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 // v17.9.0: Forced Absolute Path for multi-context reliability
 const WALLET_FILE = '/home/ubuntu/polybot/bot-24-7/virtual-wallet.json';
 
-const INITIAL_CAPITAL = 915.0;
+const INITIAL_CAPITAL = 930.0; // Restored with 3 justice wins
 
 /**
  * Lit le solde virtuel actuel. 
