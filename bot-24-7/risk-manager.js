@@ -1,10 +1,7 @@
 /**
- * v41.0 The Tank Risk Manager
- * Pure Price-Based SL with Persistence Filter to ignore fake dips.
+ * v42.0 Lightning SL Risk Manager
+ * Immediate Stop Loss at 12% (No filters, no Binance).
  */
-
-let lastNetPnl = 0;
-let failCount = 0;
 
 export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
@@ -20,19 +17,10 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
     const effectiveExit = cBid * (1 - exitFee);
     const netPnlPct = (effectiveExit - effectiveEntry) / effectiveEntry;
 
-    // --- 🚨 PERSISTENCE FILTER (The Anti-Mèche) ---
-    // The price must be below the SL for at least 2 consecutive checks to trigger.
+    // --- 🚨 IMMEDIATE STOP LOSS (NO FILTERS) ---
     if (netPnlPct <= -FIXED_STOP_LOSS) {
-        failCount++;
-        if (failCount >= 3) { // Requires ~1.5 to 2 seconds of bad price
-            console.warn(`[RiskManager] 🚨 CONFIRMED SL: PnL ${(netPnlPct * 100).toFixed(2)}% (Confirmed over 3 checks)`);
-            return true;
-        } else {
-            console.log(`[RiskManager] 🛡️ Ignoring potential flash-mèche (${(netPnlPct * 100).toFixed(2)}%). Count: ${failCount}`);
-            return false;
-        }
-    } else {
-        failCount = 0; // Reset if price recovers
+        console.warn(`[RiskManager] 🚨 IMMEDIATE SL: PnL ${(netPnlPct * 100).toFixed(2)}%`);
+        return true;
     }
     
     return false;
