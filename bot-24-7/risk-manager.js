@@ -8,7 +8,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPric
     
     const bPrice = parseFloat(buyPrice);
     const cBid = parseFloat(currentBid);
-    const FIXED_STOP_LOSS = 0.12; // 12%
+    const FIXED_STOP_LOSS = 0.10; // 10%
 
     const entryFee = 0.018;
     const exitFee = 0.018;
