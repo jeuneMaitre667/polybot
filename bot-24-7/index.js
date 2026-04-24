@@ -1642,6 +1642,22 @@ async function executeEmergencyExit(info) {
                             `• Recupere : +${remainingValue.toFixed(2)}$\n` +
                             `• Capital actuel : $${finalBal.toFixed(2)}`;
             
+            // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
+            try {
+                Analytics.recordTrade({
+                    asset: pos.asset || 'BTC',
+                    slug: pos.slug,
+                    isSimulated: true,
+                    side: pos.side,
+                    entryPrice: pos.buyPrice,
+                    exitPrice: info.currentPrice,
+                    quantity: pos.amount,
+                    pnlUsd: info.pnlUsd,
+                    pnlPct: info.pnlPct,
+                    isWin: false
+                });
+            } catch (e) { console.error('[ArchivalError] SL Sync failed:', e.message); }
+
             try {
                 await sendTelegramAlert(exitMsg);
             } catch (teleErr) {
@@ -1750,6 +1766,22 @@ async function executeEmergencyExit(info) {
                                             `• Latence: ${exitLatency}ms ⚡\n` +
                                             `• Statut: Sécurisé (Attempt ${attempt})`;
                             
+                            // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
+                            try {
+                                Analytics.recordTrade({
+                                    asset: pos.asset || 'BTC',
+                                    slug: pos.slug,
+                                    isSimulated: false,
+                                    side: pos.side,
+                                    entryPrice: pos.buyPrice,
+                                    exitPrice: tightPrice,
+                                    quantity: pos.amount,
+                                    pnlUsd: info.pnlUsd,
+                                    pnlPct: info.pnlPct,
+                                    isWin: false
+                                });
+                            } catch (e) { console.error('[ArchivalError] Real SL Sync failed:', e.message); }
+
                             await sendTelegramAlert(exitMsg);
                             success = true;
                             break; // EXIT LOOP ON SUCCESS
