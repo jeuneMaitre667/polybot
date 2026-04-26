@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 212** 🔵
+> **Total des Positions (Vie du Bot)** : **1 226** 🔵
 > - **ATH (Sommet Historique)** : **1 362,63 $** (25/04/2026 - 00h38) 💎🚀
-> - **Volume Total** : 1 212 positions
-> - **Victoires** : **897**
-> - **Pertes (SL)** : **315**
-> - **Win Rate** : **74,0 %**
-> - **Statut** : **V46.0 Pure Sniper** (Deep Breath 🕵️‍♂️🌊)
+> - **Volume Total** : 1 226 positions
+> - **Victoires** : **910**
+> - **Pertes (SL)** : **316**
+> - **Win Rate** : **74,2 %**
+> - **Statut** : **V46.0 Pure Sniper** (Deep Breath - SL 20% 🕵️‍♂️🌊)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **1 242,50 $** 
-> **Dernière Synchro** : 26/04/2026 à 20h21 (Paris)
+> **Capital Actuel** : **1 286,78 $** 
+> **Dernière Synchro** : 27/04/2026 à 00h27 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **92 Victoires / 15 Stop Loss** (WR 86%)
-- **Statut** : **REPRISE DU VOLUME** 🚀🔥
-- **Solde Session** : $1242.50 USD
+- **Score Session** : **105 Victoires / 16 Stop Loss** (WR 86%)
+- **Statut** : **ASCENSION VERTICALE** 🚀📈
+- **Solde Session** : $1286.78 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
 - **Anti-Mèche** : Polling 1s (Stabilité Totale ✅)
@@ -43,6 +43,11 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
 | **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
+| **00h27** | **WIN (105-16)** | 105ème victoire (+11.99$). | **RECONQUÊTE** 🔥 |
+| **00h22** | **WIN (104-16)** | 104ème victoire (+7.35$). | **SOLIDE** ⚓ |
+| **00h11** | **WIN (103-16)** | 103ème victoire (+11.99$). | **REPRISE** 🚀 |
+| **00h10** | **UPGRADE** | Stop Loss passé à 20% dans le .env. | **SÉCURISÉ** 🛡️ |
+| **00h00** | **MILESTONE** | 102V / 16SL. Passage de la barre des 100V. | **EN MARCHE** 🚀 |
 | **20h21** | **RÉVEIL** | 9V / 2SL. Le volume revient ce dimanche soir. | **DYNAMIQUE** 🔥 |
 | **14h14** | **COMPRESSION** | 12V / 4SL. Week-end très plat. | **DÉFENSIF** 🛡️ |
 | **21h50** | **WIN (71-9)** | 71ème victoire (+5.10$). | **GRIGNOTAGE** 🐢 |
