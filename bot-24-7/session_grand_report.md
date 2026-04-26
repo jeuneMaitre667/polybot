@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 230** 🔵
+> **Total des Positions (Vie du Bot)** : **1 231** 🔵
 > - **ATH (Sommet Historique)** : **1 362,63 $** (25/04/2026 - 00h38) 💎🚀
-> - **Volume Total** : 1 230 positions
-> - **Victoires** : **914**
+> - **Volume Total** : 1 231 positions
+> - **Victoires** : **915**
 > - **Pertes (SL)** : **316**
 > - **Win Rate** : **74,3 %**
 > - **Statut** : **V46.0 Pure Sniper** (Deep Breath - SL 20% 🕵️‍♂️🌊)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **1 322,03 $** 
-> **Dernière Synchro** : 27/04/2026 à 00h50 (Paris)
+> **Capital Actuel** : **1 328,27 $** 
+> **Dernière Synchro** : 27/04/2026 à 00h55 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **109 Victoires / 16 Stop Loss** (WR 87%)
-- **Statut** : **EN ROUTE VERS L'ATH** 🚀💎
-- **Solde Session** : $1322.03 USD
+- **Score Session** : **110 Victoires / 16 Stop Loss** (WR 87%)
+- **Statut** : **TRAIN D'ENFER** 🚂🔥
+- **Solde Session** : $1328.27 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
 - **Anti-Mèche** : Polling 1s (Stabilité Totale ✅)
@@ -43,6 +43,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
 | **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
+| **00h55** | **WIN (110-16)** | 110ème victoire (+6.24$). | **DOMINATION** 👑 |
 | **00h50** | **WIN (109-16)** | 109ème victoire (+7.35$). | **PULVÉRISATION** 🧨 |
 | **00h45** | **WIN (108-16)** | 108ème victoire (+7.35$). | **ÉLITE** 🎩 |
 | **00h40** | **MILESTONE** | 107ème victoire. Solde > 1300$. | **SUCCÈS** 💎 |
