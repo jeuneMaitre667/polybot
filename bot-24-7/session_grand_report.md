@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 282** 🔵
+> **Total des Positions (Vie du Bot)** : **1 287** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 282 positions
-> - **Victoires** : **951**
+> - **Volume Total** : 1 287 positions
+> - **Victoires** : **956**
 > - **Pertes (SL)** : **331**
-> - **Win Rate** : **74,2 %**
-> - **Statut** : **V46.1.0 Universal Reset** (Secure Momentum 🚀🛡️)
+> - **Win Rate** : **74,3 %**
+> - **Statut** : **V46.1.2 Fixed Base Turbo** (Momentum Active 🚀🛡️)
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 271,73 $** 
-> **Dernière Synchro** : 27/04/2026 à 16h55 (Paris)
+> **Capital Actuel** : **1 324,69 $** 
+> **Dernière Synchro** : 27/04/2026 à 17h40 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **147 Victoires / 32 Stop Loss** (WR 82.1%)
-- **Statut** : **SÉRIE NOIRE (5 SL CONSÉCUTIFS)** 📉🛡️
-- **Solde Session** : $1 271.73 USD
+- **Score Session** : **152 Victoires / 32 Stop Loss** (WR 82.6%)
+- **Statut** : **STREAK 5 ACTIVE (52.96$ Banked)** 🚀💰
+- **Solde Session** : $1 324.69 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Auto-Stop Maintenance** : Demain 28/04 à **08h00 Paris** 🛑
 
@@ -41,6 +41,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **17h40** | **RECOVERY WIN (152-32)** | Série de 5 victoires consécutives. Streak 5. | **RETOUR FORCE** 🔥 |
 | **16h55** | **UNIVERSAL RESET** | Correction du reset streak pour Sim & Réel (v46.1.0). | **DÉPLOYÉ** ✅ |
 | **16h45** | **SÉRIE NOIRE** | 5 Stop Loss consécutifs. Solde : 1271.73$. | **PROTECTION** 🛡️ |
 | **15h55** | **FIXED RESET** | Réparation du reset de streak lors des Stop Loss. | **CORRIGÉ** ✅ |
