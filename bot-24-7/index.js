@@ -1363,7 +1363,8 @@ async function performanceLoop() {
                                         const winMsg = `🏆 *REDEEM SUCCESS (WIN)* 💰\n\n` +
                                                        `• Marché: ${pos.slug}\n` +
                                                        `• Profit: +$${profitNet.toFixed(2)}\n` +
-                                                       `• Statut: Gasless Redeem ✅`;
+                                                       `• Momentum: ${streakCount} Wins (+$${streakProfit.toFixed(2)})\n` +
+                                                        `• Statut: Gasless Redeem ✅`;
                                         sendTelegramAlert(winMsg);
                                     } catch (redeemErr) {
                                         console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
