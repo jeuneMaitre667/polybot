@@ -8,16 +8,16 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **956**
 > - **Pertes (SL)** : **331**
 > - **Win Rate** : **74,3 %**
-> - **Statut** : **V46.1.2 Fixed Base Turbo** (Momentum Active 🚀🛡️)
+> - **Statut** : **V46.2.0 Safe Fixed $100** (Security First 🛡️⚓)
 > **Statut Actuel** : `Trading 24/7` 🤖
 > **Capital Actuel** : **1 324,69 $** 
-> **Dernière Synchro** : 27/04/2026 à 17h40 (Paris)
+> **Dernière Synchro** : 27/04/2026 à 17h45 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
 - **Score Session** : **152 Victoires / 32 Stop Loss** (WR 82.6%)
-- **Statut** : **STREAK 5 ACTIVE (52.96$ Banked)** 🚀💰
+- **Statut** : **SAFE FIXED $100 ACTIVE** 🛡️⚓
 - **Solde Session** : $1 324.69 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Auto-Stop Maintenance** : Demain 28/04 à **08h00 Paris** 🛑
@@ -41,6 +41,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **17h45** | **SAFE ROLLBACK** | Désactivation Turbo. Retour mise fixe 100$ (v46.2.0). | **STABLE** 🛡️ |
 | **17h40** | **RECOVERY WIN (152-32)** | Série de 5 victoires consécutives. Streak 5. | **RETOUR FORCE** 🔥 |
 | **16h55** | **UNIVERSAL RESET** | Correction du reset streak pour Sim & Réel (v46.1.0). | **DÉPLOYÉ** ✅ |
 | **16h45** | **SÉRIE NOIRE** | 5 Stop Loss consécutifs. Solde : 1271.73$. | **PROTECTION** 🛡️ |
