@@ -982,12 +982,7 @@ async function mainLoop() {
         const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
         let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
         
-        // v46.0.4: TURBO-SWITCH LOGIC (Streak >= 3 -> House Money Mode)
-        if (streakCount >= 3) {
-            const extra = streakProfit;
-            console.log(`[Momentum] 🚀🚀 TURBO MODE ACTIVE (Streak: ${streakCount}). Adding streak profit $${extra.toFixed(2)} to base stake.`);
-            tradeAmountUsd += extra; 
-        }
+// v46.2.0: Turbo Mode deactivated. Fixed 100$ active.
         
         // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
         const safetyFactor = 0.98; // Leave a tiny bit for precision safety
