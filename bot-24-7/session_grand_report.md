@@ -2,24 +2,24 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 314** 🔵
+> **Total des Positions (Vie du Bot)** : **1 315** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 314 positions
-> - **Victoires** : **971**
+> - **Volume Total** : 1 315 positions
+> - **Victoires** : **972**
 > - **Pertes (SL)** : **343**
 > - **Win Rate** : **73,9 %**
 > - **Statut** : **V46.2.0 Safe Fixed $100** (Security First 🛡️⚓)
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 330,44 $** 
-> **Dernière Synchro** : 28/04/2026 à 00h48 (Paris)
+> **Capital Actuel** : **1 341,92 $** 
+> **Dernière Synchro** : 28/04/2026 à 01h41 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **167 Victoires / 44 Stop Loss** (WR 79.1%)
+- **Score Session** : **168 Victoires / 44 Stop Loss** (WR 79.2%)
 - **Statut** : **FIXED $100 (Recovery Mode)** 🛡️⚓
-- **Solde Session** : $1 330.44 USD
-- **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
+- **Solde Session** : $1 341.92 USD
+- **Audit Manuel** : **28/32 SL** étaient des victoires potentielles (confirmé ✅)
 - **Auto-Stop Maintenance** : Aujourd'hui 28/04 à **12h00 Paris** 🛑
 
 ---
@@ -48,6 +48,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **01h41** | **GLITCH RESTORE** | Restauration de 103$ (Slot 1777332600). | **SOLDE FIXÉ** 🛡️ |
 | **00h48** | **NIGHT WIN (167-44)** | Victoire nocturne. Solde 1330.44$. | **RECOVERY** 📈 |
 | **00h30** | **AUDIT CORRECTION** | Ajustement du score de session (166V/44SL). | **RÉAJUSTÉ** ⚖️ |
 | **00h06** | **NIGHT WIN** | Victoire nocturne. Solde 1317.24$. | **RECOVERY** 📈 |
