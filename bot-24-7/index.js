@@ -120,24 +120,28 @@ let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
 
-// v46.0.4: Turbo-Switch Momentum Engine
+// v46.0.4: Turbo-Switch Momentum Engine (House Money Mode)
 let streakCount = 0;
+let streakProfit = 0; // v46.0.5: Track profits to bet them back
 const STREAK_FILE = path.join(__dirname, 'streak-state.json');
 try {
     const data = JSON.parse(fs.readFileSync(STREAK_FILE, 'utf8'));
     streakCount = data.streak || 0;
-    console.log(`[Momentum] 🛰️⚓ Streak loaded: ${streakCount}`);
+    streakProfit = data.profit || 0;
+    console.log(`[Momentum] 🛰️⚓ Streak loaded: ${streakCount} | Accumulated Profit: $${streakProfit.toFixed(2)}`);
 } catch (e) {}
 
-function updateStreak(isWin) {
+function updateStreak(isWin, profit = 0) {
     if (isWin) {
         streakCount++;
-        console.log(`[Momentum] 🔥 WIN! Streak: ${streakCount}`);
+        streakProfit += Math.max(0, profit);
+        console.log(`[Momentum] 🔥 WIN! Streak: ${streakCount} | Streak Profit: +$${streakProfit.toFixed(2)}`);
     } else {
         streakCount = 0;
-        console.log(`[Momentum] ❄️ LOSS. Streak reset to 0. Mode: STEADY`);
+        streakProfit = 0;
+        console.log(`[Momentum] ❄️ LOSS. Streak & Profits reset to 0. Mode: STEADY`);
     }
-    try { fs.writeFileSync(STREAK_FILE, JSON.stringify({ streak: streakCount })); } catch (e) {}
+    try { fs.writeFileSync(STREAK_FILE, JSON.stringify({ streak: streakCount, profit: streakProfit })); } catch (e) {}
 }
 
 const AUTO_STOP_TIME = new Date('2026-04-28T06:00:00Z').getTime(); // 08:00 Paris
@@ -236,7 +240,7 @@ async function checkFastResolution(currentPrice) {
                     console.log(`[FastResolution] 🛡️⚓ ATOMIC Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
                     
                     // v34.4.12: Archival FIRST (Priority #1) - FastResolution WIN
-                    updateStreak(true); // v46.0.4
+                    updateStreak(true, profitNet); // v46.0.5: Capture profit for House Money
                     try {
                         Analytics.recordTrade({
                             asset: pos.asset || 'BTC',
@@ -977,10 +981,11 @@ async function mainLoop() {
         const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
         let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
         
-        // v46.0.4: TURBO-SWITCH LOGIC (Streak >= 3 -> All-in)
+        // v46.0.4: TURBO-SWITCH LOGIC (Streak >= 3 -> House Money Mode)
         if (streakCount >= 3) {
-            console.log(`[Momentum] 🚀🚀 TURBO MODE ACTIVE (Streak: ${streakCount}). Escalating stake to ALL-IN.`);
-            tradeAmountUsd = baseBalance * 0.98; // Leave 2% for fees/slippage
+            const extra = streakProfit;
+            console.log(`[Momentum] 🚀🚀 TURBO MODE ACTIVE (Streak: ${streakCount}). Adding streak profit $${extra.toFixed(2)} to base stake.`);
+            tradeAmountUsd += extra; 
         }
         
         // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
@@ -1311,14 +1316,15 @@ async function performanceLoop() {
                             if (winningIndex === 0 && pos.side === 'YES') isWin = true;
                             if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
-                            updateStreak(isWin); // v46.0.4: Unified momentum tracking
+                             const payout = pos.amount; 
+                             const cost = pos.buyPrice * pos.amount;
+                             const profitNet = isWin ? (payout - cost) : 0;
+                             
+                             updateStreak(isWin, profitNet); // v46.0.5: Capture profit for House Money
 
                             if (isWin) {
                                 if (pos.isSimulated) {
                                     // SIMULATION: update virtual balance
-                                    const payout = pos.amount; 
-                                    const cost = pos.buyPrice * pos.amount;
-                                    const profitNet = payout - cost;
                                     const result = await updateVirtualBalance(payout);
                                     const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
                                     
@@ -1352,9 +1358,6 @@ async function performanceLoop() {
                                     console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
                                     try {
                                         await executeRedeemOnChain(pos.conditionId);
-                                        const payout = pos.amount;
-                                        const cost = pos.buyPrice * pos.amount;
-                                        const profitNet = payout - cost;
                                         const winMsg = `🏆 *REDEEM SUCCESS (WIN)* 💰\n\n` +
                                                        `• Marché: ${pos.slug}\n` +
                                                        `• Profit: +$${profitNet.toFixed(2)}\n` +
@@ -1806,7 +1809,7 @@ async function executeEmergencyExit(info) {
                                             `• Statut: Sécurisé (Attempt ${attempt})`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
-                            updateStreak(false); // v46.0.4: RESET ON SL
+                            updateStreak(false, 0); // v46.0.4: RESET ON SL
                             try {
                                 Analytics.recordTrade({
                                     asset: pos.asset || 'BTC',
