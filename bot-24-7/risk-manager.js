@@ -1,6 +1,7 @@
 /**
- * v46.1.0 High-Cap Risk Manager
- * Removed 100$ cap to enable House Money Strategy.
+ * v46.1.2 Fixed Base Risk Manager
+ * Base stake is fixed at 100$ to ensure consistency.
+ * House Money (streakProfit) is added on top in index.js.
  */
 
 export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
@@ -31,9 +32,7 @@ export function initSession(initialBalance) {
 }
 
 export function calculateTradeSize(balance) {
-    const PERCENT_STAKE = 0.10; // 10% pure
-    let finalStake = balance * PERCENT_STAKE;
-    if (finalStake < 5) finalStake = 5;
-    // v46.1.0: Removed the 100$ CAP
-    return parseFloat(finalStake.toFixed(2));
+    // v46.1.2: Fixed base stake at 100$ as per USER request.
+    const FIXED_BASE_STAKE = 100.0;
+    return FIXED_BASE_STAKE;
 }
