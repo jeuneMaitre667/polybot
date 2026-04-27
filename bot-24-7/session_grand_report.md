@@ -2,26 +2,25 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 274** 🔵
+> **Total des Positions (Vie du Bot)** : **1 275** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 274 positions
-> - **Victoires** : **948**
+> - **Volume Total** : 1 275 positions
+> - **Victoires** : **949**
 > - **Pertes (SL)** : **326**
 > - **Win Rate** : **74,4 %**
-> - **Statut** : **V46.0 Pure Sniper** (Deep Breath - SL 20% 🕵️‍♂️🌊)
-> **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **1 368,94 $** 
-> **Dernière Synchro** : 27/04/2026 à 14h50 (Paris)
+> - **Statut** : **V46.0.5 Turbo House Money** (Secure Momentum 🚀🛡️)
+> **Statut Actuel** : `Trading 24/7` 🤖
+> **Capital Actuel** : **1 374,04 $** 
+> **Dernière Synchro** : 27/04/2026 à 15h30 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **143 Victoires / 26 Stop Loss** (WR 84.6%)
-- **Statut** : **SYNCHRONISATION TOTALE** ✅🎯
-- **Solde Session** : $1368.94 USD
+- **Score Session** : **144 Victoires / 26 Stop Loss** (WR 84.7%)
+- **Statut** : **TURBO HOUSE MONEY ACTIVE** 🚀💎
+- **Solde Session** : $1 374.04 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
-- **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
-- **Anti-Mèche** : Polling 1s (Stabilité Totale ✅)
+- **Auto-Stop Maintenance** : Demain 28/04 à **08h00 Paris** 🛑
 
 ---
 
@@ -42,7 +41,8 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
-| **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
+| **15h30** | **UPGRADE V46.0.5** | Intégration mode **House Money** + Arrêt Maintenance. | **ARMÉ** 🚀 |
+| **15h25** | **WIN (144-26)** | 144ème victoire. Solde remonte à 1374.04$. | **MOMENTUM** 🔥 |
 | **14h50** | **SYNC OK** | Rectification session (143-26). Solde 1368.94$. | **PRÉCIS** 🎯 |
 | **13h25** | **RECOVERY** | Remontée vers l'ATH après les SL du matin. | **SOLIDE** ⚓ |
 | **03h20** | **ULTIMATE ATH** | Barre des 1400$ franchie (1402.00$). | **LÉGENDAIRE** 💎 |
