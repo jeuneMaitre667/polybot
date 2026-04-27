@@ -5,9 +5,9 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > **Total des Positions (Vie du Bot)** : **1 313** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
 > - **Volume Total** : 1 313 positions
-> - **Victoires** : **975**
-> - **Pertes (SL)** : **338**
-> - **Win Rate** : **74,3 %**
+> - **Victoires** : **970**
+> - **Pertes (SL)** : **343**
+> - **Win Rate** : **73,9 %**
 > - **Statut** : **V46.2.0 Safe Fixed $100** (Security First 🛡️⚓)
 > **Statut Actuel** : `Trading 24/7` 🤖
 > **Capital Actuel** : **1 317,24 $** 
@@ -16,7 +16,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **171 Victoires / 39 Stop Loss** (WR 81.4%)
+- **Score Session** : **166 Victoires / 44 Stop Loss** (WR 79.0%)
 - **Statut** : **FIXED $100 (Nightly Recovery)** 🛡️⚓
 - **Solde Session** : $1 317.24 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
@@ -41,7 +41,8 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
-| **00h06** | **NIGHT WIN (171-39)** | Victoire nocturne. Solde 1317.24$. | **RECOVERY** 📈 |
+| **00h30** | **AUDIT CORRECTION** | Ajustement du score de session (166V/44SL). | **RÉAJUSTÉ** ⚖️ |
+| **00h06** | **NIGHT WIN** | Victoire nocturne. Solde 1317.24$. | **RECOVERY** 📈 |
 | **00h05** | **NIGHTLY UPDATE** | 170V / 39SL. Solde 1305.25$. Fin de journée. | **STABLE** 🛡️ |
 | **22h00** | **STATS UPDATE** | 169V / 36SL. Solde 1370.77$. Momentum Alerts Off. | **NEAR ATH** 💎 |
 | **17h45** | **SAFE ROLLBACK** | Désactivation Turbo. Retour mise fixe 100$ (v46.2.0). | **STABLE** 🛡️ |
