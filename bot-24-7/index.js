@@ -1797,6 +1797,7 @@ async function executeEmergencyExit(info) {
                                 pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
                             });
 
+                            updateStreak(false); // v46.0.9: Mandatory momentum reset on SL
                             // Cleanup
                             activePosition = null;
                             await saveActivePositions(positions.filter(p => p.tokenId !== info.tokenId));
