@@ -43,7 +43,7 @@ export function recordTrade(tradeData) {
         
         atomicWriteJson(TRADES_FILE, history);
         
-        const logMsg = `[Analytics] Recorded trade: ${entry.slug} | ${entry.side} at ${entry.exitPrice} (PnL: $${entry.pnlUsd.toFixed(2)})\n`;
+        const logMsg = `[Analytics] Recorded trade: ${entry.slug} | ${entry.side} at ${entry.exitPrice} (PnL: $${(entry.pnlUsd || 0).toFixed(2)})\n`;
         console.log(logMsg.trim());
         fs.appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${logMsg}`);
         

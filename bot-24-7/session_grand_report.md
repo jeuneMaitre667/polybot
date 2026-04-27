@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 277** 🔵
+> **Total des Positions (Vie du Bot)** : **1 282** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 277 positions
+> - **Volume Total** : 1 282 positions
 > - **Victoires** : **951**
-> - **Pertes (SL)** : **327**
-> - **Win Rate** : **74,4 %**
-> - **Statut** : **V46.0.9 House Money (Fixed Reset)** (Secure Momentum 🚀🛡️)
+> - **Pertes (SL)** : **331**
+> - **Win Rate** : **74,2 %**
+> - **Statut** : **V46.1.0 Universal Reset** (Secure Momentum 🚀🛡️)
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 366,73 $** 
-> **Dernière Synchro** : 27/04/2026 à 15h55 (Paris)
+> **Capital Actuel** : **1 271,73 $** 
+> **Dernière Synchro** : 27/04/2026 à 16h55 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **146 Victoires / 27 Stop Loss** (WR 84.4%)
-- **Statut** : **RESET MOMENTUM (SL 15h44)** ❄️🛡️
-- **Solde Session** : $1 366.73 USD
+- **Score Session** : **147 Victoires / 32 Stop Loss** (WR 82.1%)
+- **Statut** : **SÉRIE NOIRE (5 SL CONSÉCUTIFS)** 📉🛡️
+- **Solde Session** : $1 271.73 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Auto-Stop Maintenance** : Demain 28/04 à **08h00 Paris** 🛑
 
@@ -41,6 +41,8 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **16h55** | **UNIVERSAL RESET** | Correction du reset streak pour Sim & Réel (v46.1.0). | **DÉPLOYÉ** ✅ |
+| **16h45** | **SÉRIE NOIRE** | 5 Stop Loss consécutifs. Solde : 1271.73$. | **PROTECTION** 🛡️ |
 | **15h55** | **FIXED RESET** | Réparation du reset de streak lors des Stop Loss. | **CORRIGÉ** ✅ |
 | **15h44** | **STOP LOSS (146-27)** | Sortie simulée BTC NO à 0.73$. Solde : 1366.73$. | **SÉCURISÉ** 🛡️ |
 | **15h40** | **WIN (145-26)** | 145ème victoire (+10.80$). Streak 2. | **NEAR ATH** 💎 |
