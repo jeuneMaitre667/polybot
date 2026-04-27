@@ -1,6 +1,6 @@
 /**
- * v42.0 Lightning SL Risk Manager
- * Immediate Stop Loss at 12% (No filters, no Binance).
+ * v46.1.0 High-Cap Risk Manager
+ * Removed 100$ cap to enable House Money Strategy.
  */
 
 export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
@@ -31,10 +31,9 @@ export function initSession(initialBalance) {
 }
 
 export function calculateTradeSize(balance) {
-    const DEFAULT_STAKE = 100.0;
-    const PERCENT_STAKE = 0.10;
-    let suggestedStake = balance * PERCENT_STAKE;
-    let finalStake = Math.min(DEFAULT_STAKE, suggestedStake);
+    const PERCENT_STAKE = 0.10; // 10% pure
+    let finalStake = balance * PERCENT_STAKE;
     if (finalStake < 5) finalStake = 5;
+    // v46.1.0: Removed the 100$ CAP
     return parseFloat(finalStake.toFixed(2));
 }

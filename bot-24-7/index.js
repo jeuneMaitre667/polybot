@@ -1005,11 +1005,7 @@ async function mainLoop() {
         }
 
         // v17.0.4.1: HARD SAFETY CAP (Max $100 per position, regardless of balance)
-        const HARD_MAX_STAKE = 100.0;
-        if (tradeAmountUsd > HARD_MAX_STAKE) {
-            console.log(`[Risk] 🛡️🛰️⚓ Safety Guard: Capping stake from $${tradeAmountUsd.toFixed(2)} to $${HARD_MAX_STAKE.toFixed(2)}`);
-            tradeAmountUsd = HARD_MAX_STAKE;
-        }
+        // v46.1.1: HARD_MAX_STAKE removed for House Money strategy.
 
         if (tradeAmountUsd < 1.0) {
             console.warn(`[Engine] Skip: Balance too low even for minimum trade ($${baseBalance.toFixed(2)})`);
