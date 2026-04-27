@@ -2,25 +2,25 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 308** 🔵
+> **Total des Positions (Vie du Bot)** : **1 312** 🔵
 > - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 308 positions
-> - **Victoires** : **973**
-> - **Pertes (SL)** : **335**
-> - **Win Rate** : **74,4 %**
+> - **Volume Total** : 1 312 positions
+> - **Victoires** : **974**
+> - **Pertes (SL)** : **338**
+> - **Win Rate** : **74,2 %**
 > - **Statut** : **V46.2.0 Safe Fixed $100** (Security First 🛡️⚓)
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 370,77 $** 
-> **Dernière Synchro** : 27/04/2026 à 22h00 (Paris)
+> **Capital Actuel** : **1 305,25 $** 
+> **Dernière Synchro** : 28/04/2026 à 00h05 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **169 Victoires / 36 Stop Loss** (WR 82.4%)
-- **Statut** : **FIXED $100 (Momentum Alerts Disabled)** 🛡️⚓
-- **Solde Session** : $1 370.77 USD
+- **Score Session** : **170 Victoires / 39 Stop Loss** (WR 81.3%)
+- **Statut** : **FIXED $100 (End of Day)** 🛡️⚓
+- **Solde Session** : $1 305.25 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
-- **Auto-Stop Maintenance** : Demain 28/04 à **08h00 Paris** 🛑
+- **Auto-Stop Maintenance** : Aujourd'hui 28/04 à **08h00 Paris** 🛑
 
 ---
 
@@ -41,6 +41,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **00h05** | **NIGHTLY UPDATE** | 170V / 39SL. Solde 1305.25$. Fin de journée. | **STABLE** 🛡️ |
 | **22h00** | **STATS UPDATE** | 169V / 36SL. Solde 1370.77$. Momentum Alerts Off. | **NEAR ATH** 💎 |
 | **17h45** | **SAFE ROLLBACK** | Désactivation Turbo. Retour mise fixe 100$ (v46.2.0). | **STABLE** 🛡️ |
 | **17h40** | **RECOVERY WIN (152-32)** | Série de 5 victoires consécutives. Streak 5. | **RETOUR FORCE** 🔥 |
