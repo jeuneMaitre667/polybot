@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 283** 🔵
-> - **ATH (Sommet Historique)** : **1 402,00 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 283 positions
-> - **Victoires** : **954**
-> - **Pertes (SL)** : **329**
-> - **Win Rate** : **74,3 %**
+> **Total des Positions (Vie du Bot)** : **1 274** 🔵
+> - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
+> - **Volume Total** : 1 274 positions
+> - **Victoires** : **948**
+> - **Pertes (SL)** : **326**
+> - **Win Rate** : **74,4 %**
 > - **Statut** : **V46.0 Pure Sniper** (Deep Breath - SL 20% 🕵️‍♂️🌊)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **1 363,84 $** 
-> **Dernière Synchro** : 27/04/2026 à 13h25 (Paris)
+> **Capital Actuel** : **1 368,94 $** 
+> **Dernière Synchro** : 27/04/2026 à 14h50 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **149 Victoires / 29 Stop Loss** (WR 84%)
-- **Statut** : **CAP DES 1400$ DÉJÀ TOUCHÉ** 🎯💎🔝
-- **Solde Session** : $1363.84 USD
+- **Score Session** : **143 Victoires / 26 Stop Loss** (WR 84.6%)
+- **Statut** : **SYNCHRONISATION TOTALE** ✅🎯
+- **Solde Session** : $1368.94 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
 - **Anti-Mèche** : Polling 1s (Stabilité Totale ✅)
@@ -43,6 +43,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
 | **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
+| **14h50** | **SYNC OK** | Rectification session (143-26). Solde 1368.94$. | **PRÉCIS** 🎯 |
 | **13h25** | **RECOVERY** | Remontée vers l'ATH après les SL du matin. | **SOLIDE** ⚓ |
 | **03h20** | **ULTIMATE ATH** | Barre des 1400$ franchie (1402.00$). | **LÉGENDAIRE** 💎 |
 | **13h20** | **RESISTANCE** | 37V / 12SL ce matin. Solde en profit net. | **ROBUSTE** 🛡️ |
