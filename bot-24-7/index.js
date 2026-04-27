@@ -820,6 +820,7 @@ async function mainLoop() {
             const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
                           `• Window: OPEN 🛡️🛰️⚓\n` +
                           `• Capital: $${currentBal.toFixed(2)} 🛡️🛰️⚓\n` +
+                          `• Momentum: ${streakCount} Wins (+$${streakProfit.toFixed(2)}) 🚀\n` +
                           `• Engine: READY 🛡️🛰️⚓`;
             
             const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
@@ -1330,6 +1331,7 @@ async function performanceLoop() {
                                     
                                     const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
                                                    `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                                   `• Momentum: ${streakCount} Wins (+$${streakProfit.toFixed(2)})\n` +
                                                    `• Capital: $${finalBal.toFixed(2)}\n` +
                                                    `• Statut: simulation gagnante`;
                                     
@@ -1803,6 +1805,7 @@ async function executeEmergencyExit(info) {
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                                             `• Tentative: ${attempt}/4\n` +
                                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
+                                            `• Momentum: RESET (Streak: 0) ❄️\n` +
                                             `• Prix Sortie: $${tightPrice}\n` +
                                             `• Buffer: -${(buffers[attempt-1]*100).toFixed(1)}%\n` +
                                             `• Latence: ${exitLatency}ms ⚡\n` +
