@@ -144,7 +144,7 @@ function updateStreak(isWin, profit = 0) {
     try { fs.writeFileSync(STREAK_FILE, JSON.stringify({ streak: streakCount, profit: streakProfit })); } catch (e) {}
 }
 
-const AUTO_STOP_TIME = new Date('2026-04-28T06:00:00Z').getTime(); // 08:00 Paris
+const AUTO_STOP_TIME = new Date('2026-04-28T10:00:00Z').getTime(); // 12:00 Paris (Maintenance V2)
 
 /**
  * v22.8.0: Manual CLOB Header Generator
@@ -796,7 +796,7 @@ async function mainLoop() {
     // v46.0.4: AUTO-STOP GUARD
     if (Date.now() >= AUTO_STOP_TIME) {
         console.log(`[Master] 🛑 AUTO-STOP REACHED (${new Date(AUTO_STOP_TIME).toLocaleString()}). Shutting down for maintenance.`);
-        await sendTelegramAlert(`🛑 *ARRÊT AUTOMATIQUE*\nLe bot s'est arrêté proprement pour la maintenance de demain (08h00 Paris).`);
+        await sendTelegramAlert(`🛑 *ARRÊT AUTOMATIQUE*\nLe bot s'est arrêté proprement pour la maintenance (12h00 Paris).`);
         process.exit(0);
     }
 

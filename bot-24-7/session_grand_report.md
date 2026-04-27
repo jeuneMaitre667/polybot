@@ -20,7 +20,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Statut** : **FIXED $100 (Recovery Mode)** 🛡️⚓
 - **Solde Session** : $1 330.44 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
-- **Auto-Stop Maintenance** : Aujourd'hui 28/04 à **08h00 Paris** 🛑
+- **Auto-Stop Maintenance** : Aujourd'hui 28/04 à **12h00 Paris** 🛑
 
 ---
 
