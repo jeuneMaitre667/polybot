@@ -24,6 +24,13 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
+## 🎯 Objectifs de la Semaine (V2 Migration)
+- [ ] **Win Rate Session > 80,0 %** (Actuel : 79,0 %) 📈
+- [ ] **Franchir les 1 000 Victoires Historiques** (Actuel : 970) 🏆
+- [ ] **Retour à l'ATH (1 402,03 $)** (Actuel : 1 317,24 $) 💎
+
+---
+
 ## 🏆 Challenge de Prédiction (Samedi 25/04 - Minuit)
 | Participant | Solde Attendu | Win Rate Attendu | Note Stratégique |
 | :--- | :--- | :--- | :--- |
