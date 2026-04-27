@@ -120,6 +120,28 @@ let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
 let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
 
+// v46.0.4: Turbo-Switch Momentum Engine
+let streakCount = 0;
+const STREAK_FILE = path.join(__dirname, 'streak-state.json');
+try {
+    const data = JSON.parse(fs.readFileSync(STREAK_FILE, 'utf8'));
+    streakCount = data.streak || 0;
+    console.log(`[Momentum] 🛰️⚓ Streak loaded: ${streakCount}`);
+} catch (e) {}
+
+function updateStreak(isWin) {
+    if (isWin) {
+        streakCount++;
+        console.log(`[Momentum] 🔥 WIN! Streak: ${streakCount}`);
+    } else {
+        streakCount = 0;
+        console.log(`[Momentum] ❄️ LOSS. Streak reset to 0. Mode: STEADY`);
+    }
+    try { fs.writeFileSync(STREAK_FILE, JSON.stringify({ streak: streakCount })); } catch (e) {}
+}
+
+const AUTO_STOP_TIME = new Date('2026-04-28T06:00:00Z').getTime(); // 08:00 Paris
+
 /**
  * v22.8.0: Manual CLOB Header Generator
  * Bypasses SDK to ensure 100% proxy tunneling and zero IP leaks.
@@ -214,6 +236,7 @@ async function checkFastResolution(currentPrice) {
                     console.log(`[FastResolution] 🛡️⚓ ATOMIC Compound Boost: +${profitNet.toFixed(2)} | Capital Released: ${finalBal.toFixed(2)}`);
                     
                     // v34.4.12: Archival FIRST (Priority #1) - FastResolution WIN
+                    updateStreak(true); // v46.0.4
                     try {
                         Analytics.recordTrade({
                             asset: pos.asset || 'BTC',
@@ -765,6 +788,14 @@ async function scheduledMainLoop() {
 
 async function mainLoop() {
     if (isMainLoopRunning) return; // v34.3.6: Prevent parallel execution
+
+    // v46.0.4: AUTO-STOP GUARD
+    if (Date.now() >= AUTO_STOP_TIME) {
+        console.log(`[Master] 🛑 AUTO-STOP REACHED (${new Date(AUTO_STOP_TIME).toLocaleString()}). Shutting down for maintenance.`);
+        await sendTelegramAlert(`🛑 *ARRÊT AUTOMATIQUE*\nLe bot s'est arrêté proprement pour la maintenance de demain (08h00 Paris).`);
+        process.exit(0);
+    }
+
     isMainLoopRunning = true;
     
     const cycleStart = Date.now();
@@ -945,6 +976,12 @@ async function mainLoop() {
         // 4. Risk & Collateral
         const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
         let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
+        
+        // v46.0.4: TURBO-SWITCH LOGIC (Streak >= 3 -> All-in)
+        if (streakCount >= 3) {
+            console.log(`[Momentum] 🚀🚀 TURBO MODE ACTIVE (Streak: ${streakCount}). Escalating stake to ALL-IN.`);
+            tradeAmountUsd = baseBalance * 0.98; // Leave 2% for fees/slippage
+        }
         
         // v17.0.4: Hard-cap safety (never trade more than actual USDC balance - 0.10 buffer)
         const safetyFactor = 0.98; // Leave a tiny bit for precision safety
@@ -1273,6 +1310,8 @@ async function performanceLoop() {
 
                             if (winningIndex === 0 && pos.side === 'YES') isWin = true;
                             if (winningIndex === 1 && pos.side === 'NO') isWin = true;
+
+                            updateStreak(isWin); // v46.0.4: Unified momentum tracking
 
                             if (isWin) {
                                 if (pos.isSimulated) {
@@ -1767,6 +1806,7 @@ async function executeEmergencyExit(info) {
                                             `• Statut: Sécurisé (Attempt ${attempt})`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
+                            updateStreak(false); // v46.0.4: RESET ON SL
                             try {
                                 Analytics.recordTrade({
                                     asset: pos.asset || 'BTC',
