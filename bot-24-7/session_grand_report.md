@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 233** 🔵
+> **Total des Positions (Vie du Bot)** : **1 282** 🔵
 > - **ATH (Sommet Historique)** : **1 362,63 $** (25/04/2026 - 00h38) 💎🚀
-> - **Volume Total** : 1 233 positions
-> - **Victoires** : **916**
-> - **Pertes (SL)** : **317**
+> - **Volume Total** : 1 282 positions
+> - **Victoires** : **953**
+> - **Pertes (SL)** : **329**
 > - **Win Rate** : **74,3 %**
 > - **Statut** : **V46.0 Pure Sniper** (Deep Breath - SL 20% 🕵️‍♂️🌊)
 > **Statut Actuel** : `Simulation (Lab Mode)` 🧪
-> **Capital Actuel** : **1 316,50 $** 
-> **Dernière Synchro** : 27/04/2026 à 01h15 (Paris)
+> **Capital Actuel** : **1 358,74 $** 
+> **Dernière Synchro** : 27/04/2026 à 13h20 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **111 Victoires / 17 Stop Loss** (WR 86%)
-- **Statut** : **RÉCUPÉRATION EXPRESS** 🏎️💨
-- **Solde Session** : $1316.50 USD
+- **Score Session** : **148 Victoires / 29 Stop Loss** (WR 84%)
+- **Statut** : **RÉSILIENCE LUNDI MATIN** 🛡️🚀
+- **Solde Session** : $1358.74 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
 - **Anti-Mèche** : Polling 1s (Stabilité Totale ✅)
@@ -43,6 +43,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
 | **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
+| **13h20** | **RESISTANCE** | 37V / 12SL ce matin. Solde en profit net. | **ROBUSTE** 🛡️ |
 | **01h15** | **WIN (111-17)** | 111ème victoire (+7.35$). | **REBOND** 📈 |
 | **01h05** | **CONTROLLED SL** | Perte de -19.12$ (~14.5%). | **RÉSISTANT** 🛡️ |
 | **00h55** | **WIN (110-16)** | 110ème victoire (+6.24$). | **DOMINATION** 👑 |
