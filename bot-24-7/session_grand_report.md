@@ -3,7 +3,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 📈 Résumé de Performance Globale (Historique)
 > **Total des Positions (Vie du Bot)** : **1 283** 🔵
-> - **ATH (Sommet Historique)** : **1 363,84 $** (27/04/2026 - 13h25) 💎🚀
+> - **ATH (Sommet Historique)** : **1 402,00 $** (27/04/2026 - 03h20) 💎🚀
 > - **Volume Total** : 1 283 positions
 > - **Victoires** : **954**
 > - **Pertes (SL)** : **329**
@@ -17,7 +17,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
 - **Score Session** : **149 Victoires / 29 Stop Loss** (WR 84%)
-- **Statut** : **NOUVEL ATH ATTEINT** 💎🚀🔝
+- **Statut** : **CAP DES 1400$ DÉJÀ TOUCHÉ** 🎯💎🔝
 - **Solde Session** : $1363.84 USD
 - **Audit Manuel** : **27/31 SL** étaient des victoires potentielles (confirmé ✅)
 - **Fenêtre Sniper** : 0.88$ - 0.95$ (Sélectivité 🎯)
@@ -43,7 +43,8 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
 | **20h26** | **TIGHTEN** | Fenêtre Sniper réduite à 0.88-0.95. | **OPTIMISÉ** 🎯 |
-| **13h25** | **NEW ATH** | Record battu (1363.84$). | **SOMMET** 🔝 |
+| **13h25** | **RECOVERY** | Remontée vers l'ATH après les SL du matin. | **SOLIDE** ⚓ |
+| **03h20** | **ULTIMATE ATH** | Barre des 1400$ franchie (1402.00$). | **LÉGENDAIRE** 💎 |
 | **13h20** | **RESISTANCE** | 37V / 12SL ce matin. Solde en profit net. | **ROBUSTE** 🛡️ |
 | **01h15** | **WIN (111-17)** | 111ème victoire (+7.35$). | **REBOND** 📈 |
 | **01h05** | **CONTROLLED SL** | Perte de -19.12$ (~14.5%). | **RÉSISTANT** 🛡️ |
