@@ -532,9 +532,13 @@ async function reportingLoop() {
                 let pusdBalance = 0;
                 if (!IS_SIMULATION_ENABLED && clobClient) {
                     try {
-                        const balData = await clobClient.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+                        const funder = process.env.CLOB_FUNDER_ADDRESS || wallet.address;
+                        const balData = await clobClient.getBalanceAllowance({ 
+                            asset_type: 'COLLATERAL',
+                            funder: funder
+                        });
                         pusdBalance = parseFloat(balData.balance || 0);
-                        console.log(`[Balance] 🛡️🛰️⚓ pUSD Real Balance: ${pusdBalance.toFixed(2)}`);
+                        console.log(`[Balance] 🛡️🛰️⚓ pUSD Real Balance (Proxy): ${pusdBalance.toFixed(2)}`);
                     } catch (clobBalErr) {
                         console.warn(`[Balance] 🛡️⚠️ CLOB Balance fetch failed, falling back to USDC.e: ${clobBalErr.message}`);
                         pusdBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
