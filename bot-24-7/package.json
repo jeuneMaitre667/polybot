@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.0.0",
-    "axios": "^1.13.6",
+    "axios": "^1.15.2",
     "dotenv": "^16.4.5",
     "ethers": "^5.8.0",
     "got-scraping": "^4.2.1",
