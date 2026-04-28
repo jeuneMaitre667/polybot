@@ -2,25 +2,25 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> **Total des Positions (Vie du Bot)** : **1 316** 🔵
-> - **ATH (Sommet Historique)** : **1 402,03 $** (27/04/2026 - 03h20) 💎🚀
-> - **Volume Total** : 1 316 positions
-> - **Victoires** : **974**
-> - **Pertes (SL)** : **343**
-> - **Win Rate** : **74,0 %**
-> - **Statut** : **V46.2.3 Safe Fixed $100** (Security First 🛡️⚓)
+> - **Total des Positions (Vie du Bot)** : **1 319** 🔵
+> - **ATH (Sommet Historique)** : **1 510,65 $** (28/04/2026 - 15h38) 💎🚀
+> - **Volume Total** : 1 319 positions
+> - **Victoires** : **996**
+> - **Pertes (SL)** : **346**
+> - **Win Rate** : **74,2 %**
+> - **Statut** : **V47.0.0 (CLOB V2)** 🚀
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 386,70 $** 
-> **Dernière Synchro** : 28/04/2026 à 02h15 (Paris)
+> **Capital Actuel** : **1 510,65 $** 💎
+> **Dernière Synchro** : 28/04/2026 à 15h40 (Paris)
 
 ---
 
-## 📊 Nouvelle Session V46.0 (Démarrée le 24/04 à 13h05)
-- **Score Session** : **170 Victoires / 44 Stop Loss** (WR 79.4%)
-- **Statut** : **FIXED $100 (Recovery Mode)** 🛡️⚓
-- **Solde Session** : $1 386.70 USD
-- **Audit Manuel** : **29/33 SL** étaient des victoires potentielles (confirmé ✅)
-- **Auto-Stop Maintenance** : Aujourd'hui 28/04 à **12h00 Paris** 🛑
+## 📊 Nouvelle Session V47.0 (Migration CLOB V2)
+- **Score Session** : **192 Victoires / 47 Stop Loss** (WR 80.3%)
+- **Statut** : **FIXED $100 (V2 Native)** 🛡️⚓
+- **Solde Session** : $1 510.65 USD
+- **Audit Manuel** : **30/34 SL** étaient des victoires potentielles (confirmé ✅)
+- **Migration** : **CLOB V2 Succès** (SDK, Signer EIP-712 v2, pUSD) 🚀
 
 ---
 
@@ -48,6 +48,9 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🕵️‍♂️ Historique des Versions & Jalons
 | Heure | Événement | Détail Technique | Résolution |
 | :--- | :--- | :--- | :--- |
+| **15h38** | **DOUBLE WIN STREAK** | Deux victoires consécutives sur la V2. | **SUCCESS: 1510.65$** 💎 |
+| **14h55** | **V2 MIGRATION & WIN** | Passage réussi au CLOB V2 + Victoire (+10.80$). | **ONLINE V2: 1495.95$** 🚀 |
+| **12h05** | **FINAL V1 AUDIT** | Recalcul manuel final : **1485.15$**. | **SOLDE FIXÉ** 💎 |
 | **02h10** | **LATE NIGHT WIN** | Victoire confirmée sur le serveur. Solde 1386.70$. | **PROFIT** 📈 |
 | **01h50** | **DOUBLE GLITCH FIX** | Restauration de 27.74$ (Slot 1777333200). | **SOLDE FIXÉ** 🛡️ |
 | **01h41** | **GLITCH RESTORE** | Restauration de 103$ (Slot 1777332600). | **SOLDE FIXÉ** 🛡️ |
