@@ -651,29 +651,43 @@ async function reportingLoop() {
                     const currentBid = activePosition.side === 'YES' ? bestBidUp : bestBidDown;
                     const currentAsk = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
                     
-                    const isTriggered = RiskManager.shouldTriggerStopLoss(
+                    const isViolated = RiskManager.shouldTriggerStopLoss(
                         activePosition.buyPrice, 
                         currentBid, 
+                        currentAsk,
                         activePosition.side, 
                         activePosition.entryAssetPrice, 
                         global.lastBinanceSpot,
                         activePosition.officialStrike
                     );
 
-                    if (isTriggered && !activePosition.isExiting) {
-                        console.warn(`[Risk] 🛡️🛰️⚓ Stop Loss Triggered! Bid:$${currentBid} (Ask:$${currentAsk}) | Exiting...`);
-                        activePosition.isExiting = true; 
+                    if (isViolated) {
+                        if (!activePosition.slViolationStart) {
+                            activePosition.slViolationStart = Date.now();
+                            console.log(`[Shield] 🛡️⚓ Violation detected. Starting 1.5s confirmation timer...`);
+                        }
 
-                        try {
-                            const pnlVal = ((currentBid - activePosition.buyPrice) / activePosition.buyPrice * 100);
-                            await executeEmergencyExit({
-                                tokenId: activePosition.tokenId,
-                                currentPrice: currentBid,
-                                pnlPct: pnlVal / 100
-                            });
-                        } catch (err) {
-                            console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
-                            activePosition.isExiting = false; 
+                        const violationDuration = Date.now() - activePosition.slViolationStart;
+                        if (violationDuration >= 1500 && !activePosition.isExiting) {
+                            console.warn(`[Risk] 🚨 Stop Loss CONFIRMED after ${violationDuration}ms! Bid:$${currentBid} | Exiting...`);
+                            activePosition.isExiting = true; 
+
+                            try {
+                                const pnlVal = ((currentBid - activePosition.buyPrice) / activePosition.buyPrice * 100);
+                                await executeEmergencyExit({
+                                    tokenId: activePosition.tokenId,
+                                    currentPrice: currentBid,
+                                    pnlPct: pnlVal / 100
+                                });
+                            } catch (err) {
+                                console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
+                                activePosition.isExiting = false; 
+                            }
+                        }
+                    } else {
+                        if (activePosition.slViolationStart) {
+                            console.log(`[Shield] 🛡️⚓ Price RECOVERED. Timer reset.`);
+                            activePosition.slViolationStart = null;
                         }
                     }
                 }

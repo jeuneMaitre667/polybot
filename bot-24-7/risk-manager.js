@@ -1,34 +1,46 @@
 /**
- * v46.1.2 Fixed Base Risk Manager
+ * v46.2.3 Anti-Glitch Shield (Master Recovery)
  * Base stake is fixed at 100$ to ensure consistency.
- * House Money (streakProfit) is added on top in index.js.
+ * SL tightened to 15% as per USER request.
  */
 
-export function shouldTriggerStopLoss(buyPrice, currentBid, side, entryAssetPrice, currentAssetPrice, strikePrice) {
-    if (!buyPrice || !currentBid) return false;
+const FIXED_STOP_LOSS = 0.15; // 15%
+const MAX_ALLOWED_SPREAD = 0.12; // 12% spread max to allow SL exit
+
+export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, entryAssetPrice, currentAssetPrice, strikePrice) {
+    if (!buyPrice || !currentBid || !currentAsk) return false;
     
     const bPrice = parseFloat(buyPrice);
     const cBid = parseFloat(currentBid);
-    const FIXED_STOP_LOSS = 0.20; // 20%
+    const cAsk = parseFloat(currentAsk);
 
+    // 1. Calculate PnL on the Ticket
     const entryFee = 0.018;
     const exitFee = 0.018;
-    
     const effectiveEntry = bPrice * (1 + entryFee);
     const effectiveExit = cBid * (1 - exitFee);
     const netPnlPct = (effectiveExit - effectiveEntry) / effectiveEntry;
 
-    // --- 🚨 IMMEDIATE STOP LOSS (NO FILTERS) ---
-    if (netPnlPct <= -FIXED_STOP_LOSS) {
-        console.warn(`[RiskManager] 🚨 IMMEDIATE SL: PnL ${(netPnlPct * 100).toFixed(2)}%`);
-        return true;
+    // 2. Ticket Price Violation?
+    const isViolated = netPnlPct <= -FIXED_STOP_LOSS;
+
+    // 3. Spread Filter (Option 3)
+    // If the spread is too wide, we don't trigger SL as the price is likely a glitch/fake.
+    const spreadPct = (cAsk - cBid) / cAsk;
+    const isLiquidityOk = spreadPct <= MAX_ALLOWED_SPREAD;
+
+    if (isViolated && !isLiquidityOk) {
+        if (Math.random() < 0.05) {
+            console.log(`[Shield] 🛡️⚓ Spread too wide (${(spreadPct * 100).toFixed(1)}%). Blocking SL to avoid glitch exit.`);
+        }
+        return false; // Liquidity guard
     }
-    
-    return false;
+
+    return isViolated;
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] Session Initialized at $' + initialBalance);
+    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v46.2.3 (SL 15%) Active. Session: $' + initialBalance);
 }
 
 export function calculateTradeSize(balance) {
@@ -36,3 +48,6 @@ export function calculateTradeSize(balance) {
     const FIXED_BASE_STAKE = 100.0;
     return FIXED_BASE_STAKE;
 }
+
+
+
