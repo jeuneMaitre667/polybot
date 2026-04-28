@@ -530,7 +530,7 @@ async function reportingLoop() {
 
                 // v2.11: Master Balance Shield (Ghost-Shield Elite Protocol)
                 const blockchainBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
-                userBalance = getVirtualBalance(); 
+                userBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : blockchainBalance; 
                 maticBalance = parseFloat(ethers.utils.formatEther(maticRaw));
                 lastBalanceFetchTime = now;
 
