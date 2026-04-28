@@ -1,19 +1,11 @@
-# Simulateur indépendant (non lié au dashboard principal)
+# Simulateur indépendant (V2 Ready)
 
 Ce mini-dashboard est autonome dans `simulator-dashboard/` :
 
-- pas de dépendance au code React existant,
-- configurable (WR, SL, TP, prix d'entrée, frais, slippage, jours, trades/jour),
-- Monte Carlo (distribution + percentiles).
+- **Focus V2** : Analyse de rentabilité pour le protocole pUSD.
+- **Monte Carlo** : Simulations de distribution + percentiles pour valider les stratégies 0.88-0.95.
+- **Configurable** : WR, SL, TP, prix d'entrée, frais, slippage, jours, trades/jour.
 
 ## Lancer
+Ouvrir `simulator-dashboard/index.html` dans le navigateur ou via `npx serve`.
 
-Option la plus simple : ouvrir `simulator-dashboard/index.html` dans le navigateur.
-
-Option serveur local (recommandé) :
-
-```bash
-npx serve simulator-dashboard
-```
-
-Puis ouvrir l'URL locale affichée.

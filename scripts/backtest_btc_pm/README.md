@@ -31,13 +31,12 @@ Variables d’environnement (optionnel) :
 
 | Variable | Défaut | Rôle |
 |----------|--------|------|
-| `SIGNAL_RULE` | `abs_delta` | `abs_delta` ( \|Δ%\| ), `up_move`, `down_move`, `range_pct` (range intraminute) |
-| `SIGNAL_MIN_DELTA_PCT` | `0.01` | Seuil % selon la règle ci-dessus |
-| `ENTRY_MIN_P` / `ENTRY_MAX_P` | `0.77` / `0.78` | Bande entrée PM (mid CLOB) |
-| `SL_TRIGGER_P` | `0.60` | Seuil SL (comparé au mid ou au proxy bid) |
-| `SL_BID_PROXY_FROM_MID` | `true` | Si `true`, détection SL sur **mid − offset** (comme le dashboard) |
-| `SL_BID_OFFSET_P` | `0.007` | Offset mid → bid proxy |
+| `SIGNAL_RULE` | `abs_delta` | `abs_delta` ( |Δ%| ), `up_move`, `down_move` |
+| `SIGNAL_MIN_DELTA_PCT` | `0.07` | Seuil % (Aligné sur Prod) |
+| `ENTRY_MIN_P` / `ENTRY_MAX_P` | `0.88` / `0.95` | Bande entrée PM (Zone Sniper Prod) |
+| `SL_TRIGGER_P` | `0.15` | Seuil SL (PnL relatif de -15%) |
 | `MIN_HOLD_SEC` | `10` | Délai min avant test SL |
+
 
 ## Schéma JSON
 
