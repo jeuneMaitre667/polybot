@@ -1499,7 +1499,7 @@ async function executeRedeemOnChain(conditionId) {
         // 2. Encode CTF Call
         const ctfInterface = new ethers.utils.Interface(CTF_ABI);
         const callData = ctfInterface.encodeFunctionData("redeemPositions", [
-            USDC_E_ADDRESS,
+            PUSD_ADDRESS, // V2: pUSD collateral (was USDC_E_ADDRESS in V1)
             ethers.constants.HashZero,
             conditionId,
             [1, 2]
