@@ -70,11 +70,11 @@ process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') console.err
 
 // --- CONFIG ---
 // ---// v17.56.0: Removed fixed VIRTUAL_BALANCE constant in favor of dynamic getVirtualBalance()
-const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.08"); 
+const SNIPER_DELTA_THRESHOLD_PCT = parseFloat(process.env.SNIPER_DELTA_THRESHOLD_PCT || "0.07"); 
 const SNIPER_WINDOW_START = parseInt(process.env.SNIPER_WINDOW_START_S || "90");
 const SNIPER_WINDOW_END = parseInt(process.env.SNIPER_WINDOW_END_S || "30");
-const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.86");
-const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.96");
+const SNIPER_PRICE_MIN = parseFloat(process.env.SNIPER_PRICE_MIN || "0.88");
+const SNIPER_PRICE_MAX = parseFloat(process.env.SNIPER_PRICE_MAX || "0.95");
 const IS_SIMULATION_ENABLED = (process.env.SIMULATION_TRADE_ENABLED || '').trim() === 'true';
 const BALANCE_REFRESH_MS = parseInt(process.env.BALANCE_REFRESH_MS || "45000");
 const PRIMARY_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';

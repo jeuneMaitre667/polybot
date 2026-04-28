@@ -42,6 +42,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Frais V2** : **Gérés par le protocole** (plus de calcul manuel) ⚡
 - **Balance Sync** : **On-chain pUSD directe** (contrat 0xc011a7e...) ⏳
 - **Mise** : **Fixe $3.00** — Compound si solde < $3 💎
+- **Sniper Settings** : Price [**0.88 - 0.95**] | Delta [**0.07%**] 🎯
 - **Latence Notifications** : **Activée** (Monitorage Telegram) 📡
 - **Processus** : **1 instance unique** (pm2 kill + restart propre) ✅
 
