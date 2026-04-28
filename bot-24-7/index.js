@@ -9,7 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
-import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
+import { ClobClient, Side, OrderType } from '@polymarket/clob-client-v2';
 import { signOrderManual } from './ManualSigner.js';
 import https from 'https';
 import http from 'http';
@@ -87,7 +87,8 @@ const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json'); // v17.51.0: Hear
 const LAST_TRADE_FILE = path.join(__dirname, 'last-trade.json'); // v17.54.0: Total persistence
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
-const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
+const PUSD_ADDRESS = '0x64aE5c4d9c74C8310bCC5C762d2a57d69e281bA3'; // V2: pUSD replaces USDC.e
+const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174'; // Legacy reference
 const CTF_ABI = [
     "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
 ];
@@ -144,7 +145,7 @@ function updateStreak(isWin, profit = 0) {
     try { fs.writeFileSync(STREAK_FILE, JSON.stringify({ streak: streakCount, profit: streakProfit })); } catch (e) {}
 }
 
-const AUTO_STOP_TIME = new Date('2026-04-28T10:00:00Z').getTime(); // 12:00 Paris (Maintenance V2)
+const AUTO_STOP_TIME = null; // V2: Maintenance complete, no auto-stop needed
 
 /**
  * v22.8.0: Manual CLOB Header Generator
@@ -280,22 +281,21 @@ async function ensureClobClient() {
         }
 
         if (!clobClient) {
-            // v18.0.0: Strict Type Enforcement for Signature Type
-            let sigTypeRaw = process.env.CLOB_SIGNATURE_TYPE;
-            let sigType = 0; // Default to EOA
-            
-            if (sigTypeRaw === "1" || sigTypeRaw === "POLY_PROXY") {
-                sigType = 1;
-            } else if (sigTypeRaw === "2" || sigTypeRaw === "POLY_GNOSIS_SAFE") {
-                sigType = 2;
-            }
+            // v47.0.0: CLOB V2 Migration — viem signer + options object constructor
+            const { createWalletClient, http: viemHttp } = await import('viem');
+            const { privateKeyToAccount } = await import('viem/accounts');
+            const { polygon } = await import('viem/chains');
 
-            const funderAddr = (process.env.CLOB_FUNDER_ADDRESS || wallet.address).trim();
-            
-            console.log(`[Audit] 🛡️🛰️⚓ Initializing CLOB Client:`);
+            const account = privateKeyToAccount(process.env.PRIVATE_KEY);
+            const walletClient = createWalletClient({
+                account,
+                chain: polygon,
+                transport: viemHttp()
+            });
+
+            console.log(`[Audit] 🛡️🛰️⚓ Initializing CLOB V2 Client:`);
             console.log(`[Audit] • Signer EOA: ${wallet.address}`);
-            console.log(`[Audit] • Funder: ${funderAddr}`);
-            console.log(`[Audit] • SigType: ${sigType} (${sigType === 1 ? 'Proxy' : 'EOA'})`);
+            console.log(`[Audit] • Protocol: CLOB V2 (pUSD)`);
 
             // v22.5.1: Ghost-Shield - Multi-layer proxy injection
             const proxyUrl = process.env.PROXY_URL;
@@ -305,30 +305,13 @@ async function ensureClobClient() {
                 console.log(`[Audit] 🛡️🛰️⚓ Shielding SDK with Irish Proxy tunnel...`);
             }
 
-            // Shared config to avoid duplication
-            const sdkConfig = {
-                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
-                chainId: 137,
-                signer: wallet,
-                signatureType: sigType,
-                funderAddress: funderAddr,
-                httpAgent: proxyAgent,
-                httpsAgent: proxyAgent // Force both for total coverage
-            };
+            // Step 1: Create initial client for key derivation
+            const tempClient = new ClobClient({
+                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                chain: 137,
+                signer: walletClient
+            });
 
-            clobClient = new ClobClient(
-                sdkConfig.host,
-                sdkConfig.chainId,
-                sdkConfig.signer,
-                undefined,
-                process.env.CLOB_API_KEY,
-                process.env.CLOB_API_SECRET,
-                process.env.CLOB_API_PASSPHRASE,
-                proxyAgent
-            );
-            
-            // v21.2.0: Derive API credentials (required for createAndPostOrder)
-            const tempClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, undefined, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
             let apiCreds;
             try {
                 apiCreds = await tempClient.deriveApiKey();
@@ -344,13 +327,17 @@ async function ensureClobClient() {
                 }
             }
 
-            clobCreds = apiCreds; // Save for manual post fallback
-            clobClient = new ClobClient(sdkConfig.host, sdkConfig.chainId, sdkConfig.signer, apiCreds, sdkConfig.signatureType, sdkConfig.funderAddress, undefined, proxyAgent);
+            clobCreds = apiCreds;
+
+            // Step 2: Create fully authenticated client
+            clobClient = new ClobClient({
+                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                chain: 137,
+                signer: walletClient,
+                creds: apiCreds
+            });
             
-            // Removed legacy monkey patch on getTickSize which broke order validation.
-            clobClient.getFeeRate = async () => '1000'; // Kept fee patching to bypass 404 on unlisted markets
-            
-            console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
+            console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }
         return true;
     } catch (err) {
