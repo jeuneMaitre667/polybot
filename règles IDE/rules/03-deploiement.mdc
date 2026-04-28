@@ -1,0 +1,20 @@
+---
+description: Déploiement et scripts Lightsail / PowerShell
+globs: "**/*.ps1,**/*.sh,.github/**/*"
+alwaysApply: false
+---
+
+# Déploiement & Maintenance (Lightsail)
+
+- **Instance de Production** : IP **`63.34.0.38`**. 
+- **Clé SSH** : `c:\Users\cedpa\polymarket-dashboard\lightsail-keys\LightsailDefaultKey-eu-west-1 nouvelle clé du serveur.pem`.
+- **Processus Unique (CRITIQUE)** : 
+    - Le bot doit s'exécuter **UNIQUEMENT** sous le nom **`polybot-v2`** dans PM2.
+    - Ne jamais relancer `poly-engine`. Si détecté, faire `pm2 delete poly-engine && pm2 save --force`.
+- **Procédure de Mise à jour** :
+    1. Committer et pusher sur GitHub.
+    2. Connexion SSH : `ssh -i "..." ubuntu@63.34.0.38`.
+    3. `cd ~/polybot/bot-24-7 && git pull`.
+    4. `pm2 restart polybot-v2`.
+- **Logs** : Surveiller via `pm2 logs polybot-v2 --lines 100`.
+- **Dashboard** : Le serveur de statut (`bot-status-server`) doit tourner en parallèle sur le port 3001.

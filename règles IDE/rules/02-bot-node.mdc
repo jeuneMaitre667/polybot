@@ -1,0 +1,21 @@
+---
+description: Règles pour le bot 24/7 (bot-24-7/)
+globs: bot-24-7/**/*
+alwaysApply: false
+---
+
+# Bot Node.js 24/7 (V2 Production)
+
+- **Architecture V2** : Utilise `@polymarket/clob-client-v2`. Collatéral = **pUSD** (`0xC011a7E...`). Signature via EIP-712.
+- **Règles de Sniper (Config actuelle)** :
+    - **Price Range** : `[0.88 - 0.95]`. Ne jamais tirer en dehors.
+    - **Delta Seuil** : `0.07%` (Arrivée de Binance avant Polymarket).
+    - **Mise Fixe** : `$3.00` pUSD par position.
+- **Gestion des Sorties (SL/Redeem)** :
+    - **Stop-Loss** : -15% PnL net.
+    - **Smart Sweep Exit** : La sortie lit le carnet d'ordres réel (Orderbook Sweep) pour garantir l'exécution au meilleur prix (parité Simulation/Réel).
+    - **Anti-Glitch Shield** : Si le Delta sous-jacent (BTC) progresse de >0.3%, le SL est bloqué pour éviter les flash-crashes.
+    - **Redeem** : Gère l'erreur "Already Redeemed" gracieusement (conflit avec l'auto-redeem Polymarket).
+- **Module** : ESM uniquement (`import`/`export`). Node 18+.
+- **Fichiers écrits** : `balance.json`, `active_positions.json`, `trades-history-final.json`. Toujours utiliser `path.resolve(__dirname)` pour la persistance PM2.
+
