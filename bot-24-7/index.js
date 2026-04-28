@@ -307,7 +307,7 @@ async function ensureClobClient() {
 
             // Step 1: Create initial client for key derivation
             const tempClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
                 chain: 137,
                 signer: walletClient
             });
@@ -331,7 +331,7 @@ async function ensureClobClient() {
 
             // Step 2: Create fully authenticated client
             clobClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
                 chain: 137,
                 signer: walletClient,
                 creds: apiCreds
