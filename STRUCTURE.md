@@ -1,180 +1,80 @@
-# Structure du projet — Polymarket Dashboard & Bot
+# Structure du projet — Polymarket V2 Sniper ⚓🚀
 
-Arborescence classée et décrite. Fichiers à ne pas committer : `.env`, `*.pem` (voir `.gitignore`).
+Arborescence classée et décrite. Fichiers à ne pas committer : `.env`, `*.pem`.
 
 ---
 
-## Racine du projet
+## 🏗️ Racine du projet
 
 | Fichier | Rôle |
 |--------|------|
 | `package.json` | Dépendances et scripts du **dashboard** (Vite, React). |
-| `package-lock.json` | Versions figées des paquets npm. |
-| `index.html` | Point d’entrée HTML du dashboard. |
 | `vite.config.js` | Configuration Vite (build, dev server). |
-| `tailwind.config.js` | Configuration Tailwind CSS. |
-| `postcss.config.js` | PostCSS (pour Tailwind). |
-| `eslint.config.js` | Règles ESLint. |
-| `jsconfig.json` | Configuration JS (chemins, etc.). |
-| `tsconfig.json` | Configuration TypeScript (composants UI .tsx). |
-| `components.json` | Config shadcn/ui. |
-| `.env.example` | Exemple de variables d’environnement (ex. `VITE_BOT_STATUS_URL`). |
-| `.gitignore` | Fichiers ignorés par Git (`.env`, `*.pem`, `node_modules`, etc.). |
-| `README.md` | Présentation du projet, démarrage rapide. |
+| `README.md` | Présentation V2, démarrage rapide et specs Prod. |
 | `STRUCTURE.md` | Ce fichier — structure et classement des fichiers. |
+| `RUNBOOK.md` | Manuel opératoire pour la maintenance V2. |
+| `.env.example` | Template des variables globales. |
 
-### Scripts de déploiement (Windows / PowerShell)
-
+### 🛰️ Scripts de gestion (PowerShell)
 | Fichier | Rôle |
 |--------|------|
-| `deploy-bot.ps1` | Envoie `bot-24-7` sur Lightsail (SCP) et lance `setup-remote.sh` en SSH. |
-| `setup-lightsail-git.ps1` | Configure le repo Git sur Lightsail et exécute le premier redéploiement. |
-| `setup-github-secrets.ps1` | Enregistre les secrets GitHub (clé SSH, IP) pour l’Action de redéploiement auto. |
-| `deploy-et-setup-git.ps1` | Script tout-en-un (déploiement + config Git). |
-| `tout-faire-lightsail.ps1` | Enchaîne déploiement + config + commandes sur Lightsail. |
-
-### Documentation déploiement
-
-| Fichier | Rôle |
-|--------|------|
-| `DEPLOI-BOT-LIGHTSAIL.md` | Guide de déploiement du bot sur Lightsail. |
-| `GITHUB-SETUP.md` | Configuration GitHub (repo, secrets, Actions). |
+| `deploy-bot.ps1` | Envoi sécurisé du bot vers Lightsail. |
+| `tout-faire-lightsail.ps1` | Automatisation complète (déploiement + setup). |
 
 ---
 
-## `src/` — Dashboard React (Vite)
+## 🤖 `bot-24-7/` — Moteur Sniper V2 (Node.js)
 
-### Entrées et style
-
+### 🧠 Logique de Trading (Core)
 | Fichier | Rôle |
 |--------|------|
-| `main.jsx` | Point d’entrée React, rendu dans `#root`. |
-| `App.jsx` | Composant racine : header (titre, BotStatusBadge), main (stratégie, historique, calculateur). |
-| `index.css` | Styles globaux et imports Tailwind. |
+| `index.js` | Moteur principal : boucle sniper, CLOB V2, arbitrage Binance. |
+| `risk-manager.js` | **Gestionnaire de Risque** : Anti-Glitch Shield, Stop-Loss dynamique, Fixed Stake. |
+| `analytics-engine.js` | Moteur d'analyse : calcul des performances et archivage des trades. |
+| `ManualSigner.js` | Utilitaire de signature EIP-712 pour les transactions pUSD. |
+| `ecosystem.config.cjs` | Configuration PM2 pour instance unique (`polybot-v2`). |
 
-### Composants (`src/components/`)
-
+### 🛠️ Utilitaires & Maintenance
 | Fichier | Rôle |
 |--------|------|
-| `BotStatus.jsx` | Hook `useBotStatus` + composant `BotStatusBadge` (header : statut, uptime, marché·3s, solde, dernier ordre). |
-| `BitcoinUpDownStrategy.jsx` | Carte « Stratégie Bitcoin Up or Down » : règles, connexion wallet, résultats 24h, moyenne d’entrée, paramètres, simulateur. |
-| `TradeHistory.jsx` | Affichage de l’historique des trades (Polymarket). |
-| `CompoundInterestCalculator.jsx` | Calculateur d’intérêts composés. |
-| `MarketCard.jsx` | Carte d’affichage d’un marché (réutilisable). |
-| `FilterBar.jsx` | Barre de filtres. |
-| `StatsHeader.jsx` | En-tête de statistiques. |
-| `LoadingSpinner.jsx` | Indicateur de chargement. |
-
-### Composants UI (`src/components/ui/`) — shadcn/ui
-
-| Fichier | Rôle |
-|--------|------|
-| `button.tsx` | Bouton. |
-| *(supprimé)* `card.tsx` | Remplacé par des `<div className="card">` + `.card-content` dans `index.css`. |
-| `badge.tsx` | Badge. |
-| `checkbox.tsx` | Case à cocher. |
-| `label.tsx` | Label. |
-| `select.tsx` | Liste déroulante. |
-| `slider.tsx` | Slider. |
-
-### Contexte et hooks
-
-| Fichier | Rôle |
-|--------|------|
-| `context/WalletContext.jsx` | Contexte wallet (connexion MetaMask, Polygon, signer). |
-| `hooks/useBitcoinUpDownSignals.js` | Récupère les signaux 96,8–97 % (Gamma), polling 5 s. |
-| `hooks/useBitcoinUpDownResolved.js` | Récupère les créneaux Bitcoin Up or Down résolus + simulation bot. |
-| `hooks/useTradeHistory.js` | Historique des trades (API Data). |
-| `hooks/useMarkets.js` | Marchés Polymarket (optionnel). |
-
-### Librairies et utilitaires
-
-| Fichier | Rôle |
-|--------|------|
-| `lib/polymarketOrder.js` | Placement d’ordres CLOB (marché / limite) via `@polymarket/clob-client`. |
-| `lib/utils.ts` | Utilitaires (ex. `cn()` pour classes). |
-| `utils/formatters.js` | Formatage (argent, dates, etc.). |
+| `status-server.js` | API de monitoring (port 3001) pour le dashboard. |
+| `redeploy.sh` | Script de mise à jour à chaud via Git Pull sur le serveur. |
+| `health-v17.json` | Bulletin de santé temps réel (latence, slots, performance). |
+| `session_grand_report.md` | Rapport d'audit de session (trades réels vs simu). |
+| `trades-history-final.json` | Registre officiel de tous les trades exécutés. |
 
 ---
 
-## `bot-24-7/` — Bot Node.js 24/7
-
-### Script principal et serveur de statut
+## 🎨 `src/` — Dashboard React (Monitoring)
 
 | Fichier | Rôle |
 |--------|------|
-| `index.js` | Boucle principale : signaux Gamma, placement d’ordres CLOB (marché/limite), écriture `balance.json` et `last-order.json`. |
-| `status-server.js` | Serveur HTTP (port 3001) : expose `/api/bot-status` (PM2, solde, dernier ordre, config, _debug). |
-
-### Scripts shell (à exécuter sur Lightsail)
-
-| Fichier | Rôle |
-|--------|------|
-| `redeploy.sh` | Git pull (repo configuré), copie du code dans `~/bot-24-7`, mise à jour `.env` (USE_MARKET_ORDER, POLL_INTERVAL_SEC), npm install, pm2 restart bot + status-server. |
-| `update-and-restart.sh` | Appelle `redeploy.sh` (alias pour « tout mettre à jour et redémarrer »). |
-| `fix-and-redeploy.sh` | Déplace `balance.json` / `last-order.json` du home vers `~/bot-24-7` si présents, puis lance `redeploy.sh`. |
-| `setup-remote.sh` | Installation initiale sur le serveur (Node, npm install, création `.env`). |
-| `start-pm2.sh` | Démarrage du bot avec PM2. |
-| `pm2-startup.sh` | Configuration de PM2 pour redémarrage au boot. |
-| `backup-env.sh` | Sauvegarde du `.env` (clé masquée). |
-| `check-bot-health.sh` | Vérification que le bot tourne ; envoi d’alerte (Discord/Telegram) si down. |
-
-### Config et doc du bot
-
-| Fichier | Rôle |
-|--------|------|
-| `package.json` | Dépendances du bot (ethers, axios, clob-client, dotenv). |
-| `.env.example` | Exemple de variables (PRIVATE_KEY, USE_MARKET_ORDER, POLL_INTERVAL_SEC, etc.). |
-| `.gitignore` | Ignorer `.env`, `node_modules`, etc. dans le sous-dossier. |
-| `README.md` | Doc du bot : installation, variables, PM2, géobloc, rate limits. |
-| `STATUS-SERVER.md` | Doc du serveur de statut (port 3001, CORS, optionnel token). |
-| `REDEPLOY-LIGHTSAIL.md` | Redéploiement depuis Lightsail (GitHub Actions ou manuel). |
-| `ALERTES.md` | Configuration des alertes (Discord / Telegram) si le bot plante. |
+| `App.jsx` | Interface principale avec BotStatusBadge et Analytics. |
+| `context/WalletContext.jsx` | Gestion de la connexion Polygon (MetaMask). |
+| `hooks/useBotStatus.js` | Récupère la santé et le solde pUSD du bot via le serveur de statut. |
+| `lib/polymarketOrder.js` | Logique d'ordre partagée avec le dashboard. |
 
 ---
 
-## `public/`
+## 📜 `règles IDE/` — Configuration IA (Cursor)
 
 | Fichier | Rôle |
 |--------|------|
-| `icons.svg` | Icônes (assets statiques). |
+| `00-conventions.mdc` | Règles de codage et conventions de langue. |
+| `02-bot-node.mdc` | Spécifications Sniper (Range 0.88-0.95, Delta 0.07%). |
+| `03-deploiement.mdc` | Procédures PM2 et accès SSH Lightsail (63.34.0.38). |
 
 ---
 
-## `.github/`
-
-| Fichier | Rôle |
-|--------|------|
-| `workflows/redeploy-bot-lightsail.yml` | Action GitHub : redéploiement automatique du bot sur Lightsail (sur push, avec secrets SSH). |
-| `workflows/README-REDEPLOY-AUTO.md` | Explication de l’Action (secrets à configurer). |
+## 📂 Autres dossiers
+- `scripts/` — Scripts utilitaires (backtest, audits spécifiques).
+- `simulator-dashboard/` — Simulateur Monte Carlo indépendant.
+- `public/data/` — Caches et données de backtest.
 
 ---
 
-## `.cursor/rules/` — Règles Cursor (IA)
+## 🚀 Résumé Maintenance
+- **Mise à jour** : `git push` puis SSH `bash ~/polybot/bot-24-7/redeploy.sh`.
+- **Relance** : `pm2 restart polybot-v2`.
+- **Audit** : Consulter `bot-24-7/session_grand_report.md`.
 
-| Fichier | Quand ça s’applique | Rôle |
-|--------|----------------------|------|
-| `00-conventions.mdc` | Toujours | Langue (français), structure, secrets, stack, SSH. |
-| `01-dashboard-react.mdc` | Fichiers `src/**/*.jsx`, `*.js`, `*.css` | Composants React, Tailwind, wallet, API bot. |
-| `02-bot-node.mdc` | Fichiers `bot-24-7/**/*` | ESM, .env, BOT_DIR, scripts shell, status-server. |
-| `03-deploiement.mdc` | Fichiers `*.ps1`, `*.sh`, `.github/**/*` | Lightsail, redeploy, clé SSH, port 3001. |
-
----
-
-## Fichiers hors repo (à ne pas committer)
-
-| Fichier | Rôle |
-|--------|------|
-| `.env` | Variables d’environnement du dashboard (ex. `VITE_BOT_STATUS_URL=http://IP:3001`). |
-| `*.pem` | Clé SSH Lightsail (ex. `LightsailDefaultKey-eu-west-1.pem`) — utilisée par les scripts PowerShell et pour SSH depuis le PC. |
-
----
-
-## Résumé par usage
-
-- **Lancer le dashboard en local** : `npm run dev` (racine).
-- **Lancer le bot en local** : `cd bot-24-7 && npm start`.
-- **Déployer le bot sur Lightsail** : `.\deploy-bot.ps1` ou `.\setup-lightsail-git.ps1` (puis en SSH : `bash ~/bot-24-7/redeploy.sh`).
-- **Mettre à jour le bot sur Lightsail** : en SSH `bash ~/bot-24-7/redeploy.sh` ou `bash ~/bot-24-7/update-and-restart.sh`.
-- **Voir le statut du bot** : dashboard (header) ou `http://localhost:3001/api/bot-status` (via bridge).
-- **Relier le Dashboard au Serveur** : Lancez `npm run bot:connect` localement pour ouvrir le tunnel SSH (Port Forwarding 3001).
