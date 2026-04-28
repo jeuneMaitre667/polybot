@@ -87,7 +87,7 @@ const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json'); // v17.51.0: Hear
 const LAST_TRADE_FILE = path.join(__dirname, 'last-trade.json'); // v17.54.0: Total persistence
 
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
-const PUSD_ADDRESS = '0x64aE5c4d9c74C8310bCC5C762d2a57d69e281bA3'; // V2: pUSD replaces USDC.e
+const PUSD_ADDRESS = '0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb'; // V2: pUSD (Polymarket USD) - verified on PolygonScan
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174'; // Legacy reference
 const CTF_ABI = [
     "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
@@ -520,29 +520,18 @@ async function reportingLoop() {
             try {
                 const rpcUrl = PRIMARY_RPC;
                 const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, 137);
-                const usdc = new ethers.Contract(USDC_E_ADDRESS, ["function balanceOf(address owner) view returns (uint256)"], provider);
-                
                 const funder = process.env.CLOB_FUNDER_ADDRESS || wallet.address;
-                const [usdcRaw, maticRaw] = await Promise.all([
-                    usdc.balanceOf(funder),
+
+                // v47.3.0: Direct on-chain pUSD balance read (no SDK auth needed)
+                const pusd = new ethers.Contract(PUSD_ADDRESS, ["function balanceOf(address owner) view returns (uint256)"], provider);
+                const [pusdRaw, maticRaw] = await Promise.all([
+                    pusd.balanceOf(funder),
                     provider.getBalance(wallet.address)
                 ]);
+                const pusdBalance = parseFloat(ethers.utils.formatUnits(pusdRaw, 6));
 
-                // v47.2.0: CLOB V2 pUSD Balance Integration
-                let pusdBalance = 0;
-                if (!IS_SIMULATION_ENABLED && clobClient) {
-                    try {
-                        const funder = process.env.CLOB_FUNDER_ADDRESS || wallet.address;
-                        const balData = await clobClient.getBalanceAllowance({ 
-                            asset_type: 'COLLATERAL',
-                            funder: funder
-                        });
-                        pusdBalance = parseFloat(balData.balance || 0);
-                        console.log(`[Balance] 🛡️🛰️⚓ pUSD Real Balance (Proxy): ${pusdBalance.toFixed(2)}`);
-                    } catch (clobBalErr) {
-                        console.warn(`[Balance] 🛡️⚠️ CLOB Balance fetch failed, falling back to USDC.e: ${clobBalErr.message}`);
-                        pusdBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
-                    }
+                if (!IS_SIMULATION_ENABLED && Math.random() < 0.05) {
+                    console.log(`[Balance] 🛡️🛰️⚓ pUSD On-Chain Balance: ${pusdBalance.toFixed(6)} (Proxy: ${funder})`);
                 }
 
                 userBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : pusdBalance; 
