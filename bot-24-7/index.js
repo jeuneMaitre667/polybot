@@ -795,7 +795,7 @@ async function mainLoop() {
     if (isMainLoopRunning) return; // v34.3.6: Prevent parallel execution
 
     // v46.0.4: AUTO-STOP GUARD
-    if (Date.now() >= AUTO_STOP_TIME) {
+    if (AUTO_STOP_TIME && Date.now() >= AUTO_STOP_TIME) {
         console.log(`[Master] 🛑 AUTO-STOP REACHED (${new Date(AUTO_STOP_TIME).toLocaleString()}). Shutting down for maintenance.`);
         await sendTelegramAlert(`🛑 *ARRÊT AUTOMATIQUE*\nLe bot s'est arrêté proprement pour la maintenance (12h00 Paris).`);
         process.exit(0);
