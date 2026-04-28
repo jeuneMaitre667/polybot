@@ -25,6 +25,17 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
+## 🎯 Suivi Trading RÉEL (Production pUSD)
+> *Démarré le 29/04/2026 à 00h53*
+- **Positions Réelles** : **0** 🟢
+- **Victoires (Cash)** : **0** 💰
+- **Pertes (SL Cash)** : **0** 📉
+- **Win Rate Réel** : **-%**
+- **Profit Session** : **$0.00**
+- **Mise Actuelle** : **$3.00 Fixed**
+
+---
+
 ## 🛡️ Anti-Glitch & Monitoring (CLOB V2)
 - **Mode Sniper** : **Activé** (T-90s à T-30s) 🏹
 - **Protection SL** : **Bouclier Delta (0.30%)** + Confirmation 1.5s 🛡️⚓
@@ -57,7 +68,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🔧 Dernière Ligne Pipeline (Preuve de Fonctionnement)
 ```
-[PIPELINE] | T-102s | slot:1777416600 | 🛡️🛰️⚓ UP:28.0% | 🛡️🛰️⚓ DOWN:73.0% | Bal:$3.61 | Open:76280.40 | Spot:76267.01 | Δ:$-13.39 (-0.018%)
+[PIPELINE] | T-22s | slot:1777416900 | 🛡️🛰️⚓ UP:99.0% | 🛡️🛰️⚓ DOWN:2.0% | Bal:$3.61 | Open:76227.10 | Spot:76244.36 | Δ:+$17.26 (+0.023%)
 ```
 
 ---
