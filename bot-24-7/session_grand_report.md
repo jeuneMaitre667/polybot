@@ -2,24 +2,24 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 324** 🔵
-> - **ATH (Sommet Historique)** : **1 510,65 $** (28/04/2026) 💎🚀
-> - **Volume Total** : 1 324 positions
-> - **Victoires** : **999**
-> - **Pertes (SL)** : **348**
-> - **Win Rate** : **75,5 %**
+> - **Total des Positions (Vie du Bot)** : **1 344** 🔵
+> - **ATH (Sommet Historique)** : **1 580,48 $** (29/04/2026) 💎🚀
+> - **Volume Total** : 1 344 positions
+> - **Victoires** : **1 017**
+> - **Pertes (SL)** : **350**
+> - **Win Rate** : **75,7 %**
 > - **Statut** : **V47.0.0 (CLOB V2)** 🚀
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 494,79 $** 📈
-> **Dernière Synchro** : 28/04/2026 à 16h30 (Paris)
+> **Capital Actuel** : **1 580,48 $** 💎🚀
+> **Dernière Synchro** : 29/04/2026 à 00h00 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V47.0 (Migration CLOB V2)
-- **Score Session** : **195 Victoires / 49 Stop Loss** (WR 79.9%)
+- **Score Session** : **213 Victoires / 51 Stop Loss** (WR 80.7%)
 - **Statut** : **FIXED $100 (V2 Native)** 🛡️⚓
-- **Solde Session** : $1 494.79 USD
-- **ATH Session** : $1 510.65 USD (Atteint le 28/04)
+- **Solde Session** : $1 580.48 USD
+- **ATH Session** : $1 580.48 USD (Atteint le 29/04)
 - **Audit Manuel** : **30/34 SL** étaient des victoires potentielles (confirmé ✅)
 - **Migration** : **CLOB V2 Succès** (SDK, Signer EIP-712 v2, pUSD) 🚀
 
@@ -38,6 +38,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **00h00** | **MIDNIGHT DIGEST** | 18V / 2SL. Passage du cap des 1000 victoires globales. | **ATH REACHED** 🚀 |
 | **16h25** | **TRIPLE WIN STREAK** | Troisième victoire consécutive. Près du cap des 1000V. | **PROFIT** 🚀 |
 | **16h20** | **DOUBLE WIN STREAK** | Deuxième victoire consécutive après migration. | **PROFIT** 🚀 |
 | **16h15** | **AFTERNOON WIN** | Victoire simulée confirmée (BTC DOWN). | **PROFIT** 🚀 |
@@ -46,8 +47,6 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | **20h21** | **RÉVEIL** | 9V / 2SL. Le volume revient ce dimanche soir. | **DYNAMIQUE** 🔥 |
 | **14h14** | **COMPRESSION** | 12V / 4SL. Week-end très plat. | **DÉFENSIF** 🛡️ |
 | **21h50** | **WIN (71-9)** | 71ème victoire (+5.10$). | **GRIGNOTAGE** 🐢 |
-| **21h46** | **STABLE** | 6V / 1SL. Marché très calme. | **SOLIDE** ⚓ |
-| **13h20** | **CONSOLIDATION** | 8V / 2SL. Matinée calme sur BTC. | **STABLE** ⚓ |
 
 ---
 
