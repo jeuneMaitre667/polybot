@@ -2,23 +2,23 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 319** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 321** 🔵
 > - **ATH (Sommet Historique)** : **1 510,65 $** (28/04/2026 - 15h38) 💎🚀
-> - **Volume Total** : 1 319 positions
+> - **Volume Total** : 1 321 positions
 > - **Victoires** : **996**
-> - **Pertes (SL)** : **346**
-> - **Win Rate** : **74,2 %**
+> - **Pertes (SL)** : **348**
+> - **Win Rate** : **74,1 %**
 > - **Statut** : **V47.0.0 (CLOB V2)** 🚀
 > **Statut Actuel** : `Trading 24/7` 🤖
-> **Capital Actuel** : **1 510,65 $** 💎
-> **Dernière Synchro** : 28/04/2026 à 15h40 (Paris)
+> **Capital Actuel** : **1 469,29 $** 📉
+> **Dernière Synchro** : 28/04/2026 à 15h55 (Paris)
 
 ---
 
 ## 📊 Nouvelle Session V47.0 (Migration CLOB V2)
-- **Score Session** : **192 Victoires / 47 Stop Loss** (WR 80.3%)
+- **Score Session** : **192 Victoires / 49 Stop Loss** (WR 79.6%)
 - **Statut** : **FIXED $100 (V2 Native)** 🛡️⚓
-- **Solde Session** : $1 510.65 USD
+- **Solde Session** : $1 469.29 USD
 - **Audit Manuel** : **30/34 SL** étaient des victoires potentielles (confirmé ✅)
 - **Migration** : **CLOB V2 Succès** (SDK, Signer EIP-712 v2, pUSD) 🚀
 
