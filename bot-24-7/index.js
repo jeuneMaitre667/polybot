@@ -1143,6 +1143,9 @@ async function mainLoop() {
 
             // v17.58.0: Send Telegram FIRST to ensure delivery even if balance calculation crashes
             const totalLatency = Date.now() - cycleStart;
+            if (IS_SIMULATION_ENABLED) {
+                // v34.3.6: One alert per slot, period.
+                if (lastAlertedSlot !== slotStart) {
                     const sideLabel = side === 'YES' ? 'UP' : 'DOWN';
                     const simEntryMsg = `🧪 *SIMULATION ENTRY : BTC ${sideLabel}* 🧪\n\n` +
                                         `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +

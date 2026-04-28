@@ -2,11 +2,11 @@
  * v46.2.5 Delta-Shield (Final V1 Patch)
  * Base stake is fixed at 100$ to ensure consistency.
  * SL 15% + 1.5s Timer.
- * NEW: SL blocked if Delta > 0.6% (Underlying confirmation).
+ * NEW: SL blocked if Delta > 0.3% (Underlying confirmation).
  */
 
 const FIXED_STOP_LOSS = 0.15; // 15%
-const CONFIRMATION_DELTA_PCT = 0.6; // 0.6% underlying gain blocks SL
+const CONFIRMATION_DELTA_PCT = 0.3; // 0.3% underlying gain blocks SL
 
 export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
@@ -49,7 +49,7 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v46.2.5 (Delta 0.6%) Active.');
+    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v46.2.5 (Delta 0.3%) Active.');
 }
 
 export function calculateTradeSize(balance) {
