@@ -49,12 +49,16 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v46.2.5 (Delta 0.3%) Active.');
+    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $3.00 Stake Active.');
+    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v47.0.0 (Delta 0.3%) Active.');
 }
 
 export function calculateTradeSize(balance) {
-    const FIXED_BASE_STAKE = 100.0;
-    return FIXED_BASE_STAKE;
+    // v47.1.0: Real Trading Transition. Fixed $3.00 stake.
+    // If balance < $3, we use the remaining amount (compound).
+    const baseStake = 3.0;
+    const finalStake = Math.min(baseStake, parseFloat(balance || 0));
+    return finalStake;
 }
 
 
