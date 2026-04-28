@@ -528,9 +528,20 @@ async function reportingLoop() {
                     provider.getBalance(wallet.address)
                 ]);
 
-                // v2.11: Master Balance Shield (Ghost-Shield Elite Protocol)
-                const blockchainBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
-                userBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : blockchainBalance; 
+                // v47.2.0: CLOB V2 pUSD Balance Integration
+                let pusdBalance = 0;
+                if (!IS_SIMULATION_ENABLED && clobClient) {
+                    try {
+                        const balData = await clobClient.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+                        pusdBalance = parseFloat(balData.balance || 0);
+                        console.log(`[Balance] 🛡️🛰️⚓ pUSD Real Balance: ${pusdBalance.toFixed(2)}`);
+                    } catch (clobBalErr) {
+                        console.warn(`[Balance] 🛡️⚠️ CLOB Balance fetch failed, falling back to USDC.e: ${clobBalErr.message}`);
+                        pusdBalance = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
+                    }
+                }
+
+                userBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : pusdBalance; 
                 maticBalance = parseFloat(ethers.utils.formatEther(maticRaw));
                 lastBalanceFetchTime = now;
 
