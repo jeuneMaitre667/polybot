@@ -1740,37 +1740,39 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v32.0: Smart Sweep Integration
-                let sweepPrice = null;
-                try {
-                    const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
-                    const bids = book?.bids || [];
-                    sweepPrice = calculateSellSweepPrice(safeQty, bids);
-                    if (sweepPrice) {
-                        console.log(`[Emergency] 🎯 Smart Sweep Price calculated: $${sweepPrice} for ${safeQty} units`);
-                    }
-                } catch (e) {
-                    console.warn(`[Emergency] Orderbook fetch failed for sweep pricing. Falling back to sentinel price.`);
-                }
-
-                // Base price for buffers
-                const basePrice = sweepPrice || info.currentPrice;
-
-                // v29.1: Aggressive Flash Retry Policy (4 attempts)
+                // v48.0: Smart Orderbook Exit (same behavior as simulation)
+                // Read the orderbook, find the exact sweep price, and exit at best available price
                 let success = false;
-                const buffers = [0, 0.002, 0.005, 0.01]; // v32.0: Much tighter buffers (0%, -0.2%, -0.5%, -1% from sweep)
-                for (let attempt = 1; attempt <= 4; attempt++) {
-                    const priceBuffer = 1 - buffers[attempt - 1];
-                    // v32.0: Fix eFinalPrice Reference Error + Apply smarter buffer
-                    const tightPrice = Math.max(0.01, parseFloat((basePrice * priceBuffer).toFixed(4)));
-                    
-                    console.log(`[Emergency] 🚀 Attempt ${attempt}/4 | Price: $${tightPrice} (Buffer: -${(buffers[attempt-1]*100).toFixed(2)}%)`);
-
+                const maxAttempts = 3; // 3 attempts with fresh orderbook reads
+                
+                for (let attempt = 1; attempt <= maxAttempts; attempt++) {
                     try {
+                        // Fresh orderbook read on each attempt
+                        const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
+                        const bids = book?.bids || [];
+                        
+                        if (bids.length === 0) {
+                            console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts}: Orderbook empty. Retrying in 500ms...`);
+                            if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 500));
+                            continue;
+                        }
+
+                        // Calculate sweep price: the worst price level needed to fill our entire quantity
+                        const sweepPrice = calculateSellSweepPrice(safeQty, bids);
+                        // Also get the best bid for logging
+                        const bestBid = parseFloat(bids[0].price);
+                        
+                        // Use sweep price with a tiny 0.5% safety margin to ensure FOK fill
+                        const exitPrice = sweepPrice 
+                            ? Math.max(0.01, parseFloat((sweepPrice * 0.995).toFixed(4)))
+                            : Math.max(0.01, parseFloat((bestBid * 0.99).toFixed(4)));
+                        
+                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | BestBid: $${bestBid} | Sweep: $${sweepPrice || 'N/A'} | Exit: $${exitPrice} | Qty: ${safeQty}`);
+
                         const response = await clobClient.createAndPostOrder(
                             {
                                 tokenID: pos.tokenId,
-                                price: tightPrice,
+                                price: exitPrice,
                                 size: safeQty,
                                 side: pos.side === 'YES' ? Side.SELL : Side.BUY
                             },
@@ -1784,17 +1786,6 @@ async function executeEmergencyExit(info) {
                         if (response && response.orderID) {
                             console.log(`[Emergency] ✅ OFFICIAL EXIT ACCEPTED on attempt ${attempt}: ${response.orderID}`);
                             
-                            Analytics.recordTrade({
-                                asset: pos.asset || 'BTC',
-                                slug: pos.slug || 'BTC-EMERGENCY',
-                                isSimulated: pos.isSimulated || false,
-                                side: pos.side,
-                                entryPrice: pos.buyPrice,
-                                exitPrice: info.currentPrice,
-                                quantity: pos.amount,
-                                pnlUsd: (info.currentPrice - pos.buyPrice) * pos.amount
-                            });
-
                             updateStreak(false); // v46.0.9: Mandatory momentum reset on SL
                             // Cleanup
                             activePosition = null;
@@ -1803,12 +1794,12 @@ async function executeEmergencyExit(info) {
                             
                             const exitLatency = Date.now() - exitStart;
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
-                                            `• Tentative: ${attempt}/4\n` +
+                                            `• Tentative: ${attempt}/${maxAttempts}\n` +
                                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                                            `• Prix Sortie: $${tightPrice}\n` +
-                                            `• Buffer: -${(buffers[attempt-1]*100).toFixed(1)}%\n` +
+                                            `• Best Bid: $${bestBid}\n` +
+                                            `• Prix Sortie: $${exitPrice}\n` +
                                             `• Latence: ${exitLatency}ms ⚡\n` +
-                                            `• Statut: Sécurisé (Attempt ${attempt})`;
+                                            `• Statut: Sécurisé (Orderbook Sweep)`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
                             updateStreak(false, 0); // v46.0.4: RESET ON SL
@@ -1819,7 +1810,7 @@ async function executeEmergencyExit(info) {
                                     isSimulated: false,
                                     side: pos.side,
                                     entryPrice: pos.buyPrice,
-                                    exitPrice: tightPrice,
+                                    exitPrice: exitPrice,
                                     quantity: pos.amount,
                                     pnlUsd: info.pnlUsd,
                                     pnlPct: info.pnlPct,
@@ -1832,14 +1823,13 @@ async function executeEmergencyExit(info) {
                             break; // EXIT LOOP ON SUCCESS
                         }
                     } catch (attemptErr) {
-                        console.warn(`[Emergency] ⚠️ Attempt ${attempt}/4 FAILED: ${attemptErr.message}`);
-                        // Small delay if not the last attempt
-                        if (attempt < 4) await new Promise(r => setTimeout(r, 100));
+                        console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts} FAILED: ${attemptErr.message}`);
+                        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 300));
                     }
                 }
 
                 if (!success) {
-                    throw new Error("All 4 immediate exit attempts failed. Falling back to next loop cycle.");
+                    throw new Error("All exit attempts failed after orderbook sweep. Falling back to next loop cycle.");
                 }
         } catch (err) {
             console.error(`[Emergency] 🛡️⚠️ SDK Exit Failed:`, err.message);
