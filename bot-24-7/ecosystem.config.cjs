@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'poly-engine',
+      name: 'polybot-v2',
       script: 'index.js',
       cwd: '/home/ubuntu/polybot/bot-24-7',
       env: {
@@ -10,8 +10,8 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
-      error_file: '/home/ubuntu/.pm2/logs/polymarket-bot-error.log',
-      out_file: '/home/ubuntu/.pm2/logs/polymarket-bot-out.log',
+      error_file: '/home/ubuntu/.pm2/logs/polybot-v2-error.log',
+      out_file: '/home/ubuntu/.pm2/logs/polybot-v2-out.log',
       merge_logs: true,
     },
     {
