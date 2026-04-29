@@ -854,10 +854,11 @@ async function mainLoop() {
             
             const hbBal = await updateVirtualBalance(0); // Force fresh check or return current
             const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : 0));
+            const engineStatus = (userBalance === null && !IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
             const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
                           `• Window: OPEN 🛡️🛰️⚓\n` +
-                          `• Capital: $${currentBal.toFixed(2)} 🛡️🛰️⚓\n` +
-                          `• Engine: READY 🛡️🛰️⚓`;
+                          `• Capital: $${(userBalance === null && !IS_SIMULATION_ENABLED) ? "---" : currentBal.toFixed(2)} 🛡️🛰️⚓\n` +
+                          `• Engine: ${engineStatus}`;
             
             const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
             const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
@@ -1062,6 +1063,17 @@ async function mainLoop() {
         if (safeQty <= 0) {
             console.warn(`[Engine] Skip: Amount too low after fees to purchase even 1 contract.`);
             return;
+        }
+
+        // v49.1.11: Margin Shield - Verify balance can afford the 5-contract minimum
+        if (!IS_SIMULATION_ENABLED) {
+            const currentBal = userBalance !== null ? userBalance : 0;
+            const estimatedCost = safeQty * finalPrice; // v49.1.11: safeQty is already at least 5
+            if (currentBal < estimatedCost) {
+                console.error(`[Engine] 🛡️⚠️ INSUFFICIENT FUNDS for V2 Minimum: Bal $${currentBal.toFixed(2)} < Needed $${estimatedCost.toFixed(2)} (Qty: ${safeQty} @ $${finalPrice.toFixed(2)})`);
+                sendTelegramAlert(`⚠️ *INSUFFICIENT FUNDS* ⚠️\n\nVotre solde ($${currentBal.toFixed(2)}) est insuffisant pour acheter le minimum V2 de 5 contrats au prix actuel ($${finalPrice.toFixed(2)}).\nBesoin de ~$${estimatedCost.toFixed(2)}.`);
+                return;
+            }
         }
 
         if (!IS_SIMULATION_ENABLED) {
