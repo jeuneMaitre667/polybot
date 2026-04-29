@@ -7,56 +7,60 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 024**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,7 %**
-> - **Statut** : **V49.6.0 (GHOST-PROTECT / SPREAD-FILTER)** 🚀
+> - **Statut** : **V49.8.0 (HYPER-SHIELD - SPREAD AGNOSTIC)** 🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **2,59 $** (Attente actualisation) 💰
-> **Dernière Synchro** : 29/04/2026 à 23h32 (Paris)
+> **Capital Réel (pUSD)** : **2,69 $** 💰
+> **Dernière Synchro** : 29/04/2026 à 23h49 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
 - **Score Session** : **220 Victoires / 52 Stop Loss** (WR 80.8%)
-- **Statut** : **ACTIF (v49.6.0 - GHOST-PROTECT) ✅**
-- **Solde Réel (pUSD)** : **$2.59** (9 victoires / 1 perte)
+- **Statut** : **ACTIF (v49.8.0 - HYPER-SHIELD) ✅**
+- **Solde Réel (pUSD)** : **$2.69** ✅ (9 victoires / 1 perte)
 - **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
-- **Migration V2** : **SPREAD-FILTER + ULTRA-SHIELD** — V2-GHOST ✅🚀
+- **Migration V2** : **HYPER-SHIELD 0.03% (SPREAD AGNOSTIC)** — V2-ULTIMATE ✅🚀
 
 ---
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
 - **Positions Réelles** : **10** ✅
-- **Victoires (Cash)** : **9** 💰 (Vente manuelle sécurisée)
+- **Victoires (Cash)** : **9** 💰
 - **Pertes (SL Cash)** : **1** 📉 (Échec SL v49.2)
 - **Win Rate Réel** : **90.0%** 🏆
-- **Profit Session** : **-$0.93** (Remontée en cours)
+- **Profit Session** : **-$0.83** (Remontée en cours)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
 ---
 
-## 🛡️ Architecture Technique (V48.0.3)
+## 🛡️ Architecture Technique (V49.7.0)
 | Composant | Valeur |
 | :--- | :--- |
 | **Wallet Signer** | Phantom `0x3a804...` (EIP-712) |
 | **Proxy Safe (Fonds)** | `0x6C8b...` (CLOB_FUNDER_ADDRESS) |
 | **Signature Type** | `2` (Gasless / Safe Wallet) |
-| **pUSD Contract** | `0xc011a7e...` (Polygon) |
+| **Monitoring SL** | **1Hz (Ultra-Réactif)** |
+| **Seuil SL** | **14% (Base Bid Réel)** |
+| **Delta Shield** | **Hyper-Shield (0.03%)** |
 | **Relayer** | `BYPASSED` (T-10s Strategy) |
 | **CLOB** | `clob.polymarket.com` |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v49.2.0) ✅ |
+| **Processus PM2** | `poly-engine` (v49.7.0) ✅ |
 
 ---
 
-## 🛡️ Sécurités & Correctifs Appliqués (V48)
+## 🛡️ Sécurités & Correctifs Appliqués (V49)
+- **Hyper-Shield (0.03%)** : Verrouille le SL si Binance confirme le mouvement ✅
+- **Spread Agnostic** : Filtre de spread désactivé (v49.8.0) 🚀
+- **Bid-Based SL** : Calcul de perte basé sur la liquidité réelle (Best Bid) ✅
+- **Early Exit (T-10s)** : Vente forcée avant résolution pour éviter les lags de relayer ✅
+- **Strict Token ID** : Identification infaillible du token YES/NO via ID unique ✅
 - **False-Failure Shield** : Si `sum of matched orders` → trade enregistré comme succès ✅
 - **SL Side Fix** : Stop Loss force `Side.SELL` quelle que soit la direction (YES/NO) ✅
-- **Auto-Redeem Full Auto** : Gasless Relayer déclenché sans signature Phantom requise ✅
 - **Anti-Doublon Résolution** : `lastResolvedCids.add()` + `positions.splice()` ✅
-- **Erreurs 400 Silencieuses** : `updateBalanceAllowance` 400 ignoré (non-bloquant) ✅
-- **Anti-Spam Boucle** : Positions résolues retirées immédiatement de `active-positions.json` ✅
-- **Processus Unique** : `poly-engine` supprimé + dump PM2 nettoyé (`pm2 save --force`) ✅
+- **Processus Unique** : `poly-engine` nettoyé et dump PM2 purgé (`pm2 save`) ✅
 - **Mode Sniper** : Activé T-90s à T-30s | Price [0.88 - 0.95] | Delta [0.07%] 🎯
 
 ---

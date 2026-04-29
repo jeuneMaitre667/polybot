@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.6.0 GHOST-PROTECT)
+ * Master Controller (v2025 MODULAR - v49.8.0 HYPER-SHIELD)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -989,9 +989,8 @@ async function mainLoop() {
         const liveClobPrice = bestAsk;
         const staleGammaPrice = side === 'YES' ? parseFloat(currentSig.priceUp || 0) : parseFloat(currentSig.priceDown || 0);
         
-        // v49.6.0: SPREAD SHIELD (Anti-Glitch Entry Filter)
-        // Ensure we have a valid Bid-Ask spread before entering. 
-        // If we buy at 0.94 and can only sell at 0.01, it's a trap.
+        // v49.8.0: Spread Filter Removed per user request. 
+        // We still fetch currentBestBid for logging/sync purposes.
         let currentBestBid = 0;
         try {
             const book = await clobClient.getOrderBook(tokenId).catch(() => null);
@@ -999,14 +998,6 @@ async function mainLoop() {
                 currentBestBid = parseFloat(book.bids[0].price);
             }
         } catch (e) {}
-
-        const spreadPct = currentBestBid > 0 ? (dashboardPrice - currentBestBid) / dashboardPrice : 1;
-        if (spreadPct > 0.15) { // 15% maximum spread allowed at entry
-            if (now % 20000 < 1000) {
-                console.warn(`[Engine] Skip: Extreme Spread detected (${(spreadPct*100).toFixed(1)}%). Liquidity too thin for safe entry.`);
-            }
-            return;
-        }
 
         console.log(`[Engine] 🛡️🛰️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)}`);
 
