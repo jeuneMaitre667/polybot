@@ -1349,10 +1349,16 @@ async function performanceLoop() {
                             // V2 API compatibility: winningOutcomeIndex is deprecated, use outcomePrices
                             let winningIndex = parseInt(market.winningOutcomeIndex);
                             if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
-                                winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00");
+                                winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
                             }
-                            let isWin = false;
+                            
+                            // v49.1.5: Resolution Guard. If no winner found yet, do NOT resolve/archive.
+                            if (winningIndex === -1 && !market.resolved) {
+                                console.log(`[Sentinel] ⏳ Market ${pos.slug} closed but not yet resolved. Waiting...`);
+                                continue; 
+                            }
 
+                            let isWin = false;
                             if (winningIndex === 0 && pos.side === 'YES') isWin = true;
                             if (winningIndex === 1 && pos.side === 'NO') isWin = true;
 
