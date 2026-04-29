@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.5.0 BID-SHIELD)
+ * Master Controller (v2025 MODULAR - v49.6.0 GHOST-PROTECT)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -989,10 +989,26 @@ async function mainLoop() {
         const liveClobPrice = bestAsk;
         const staleGammaPrice = side === 'YES' ? parseFloat(currentSig.priceUp || 0) : parseFloat(currentSig.priceDown || 0);
         
-        // We prioritize live orderbook, but fallback to dashboard if book is thin
-        const dashboardPrice = (liveClobPrice > 0) ? liveClobPrice : staleGammaPrice;
+        // v49.6.0: SPREAD SHIELD (Anti-Glitch Entry Filter)
+        // Ensure we have a valid Bid-Ask spread before entering. 
+        // If we buy at 0.94 and can only sell at 0.01, it's a trap.
+        let currentBestBid = 0;
+        try {
+            const book = await clobClient.getOrderBook(tokenId).catch(() => null);
+            if (book && book.bids && book.bids.length > 0) {
+                currentBestBid = parseFloat(book.bids[0].price);
+            }
+        } catch (e) {}
 
-        console.log(`[Engine] 🛡️🛰️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
+        const spreadPct = currentBestBid > 0 ? (dashboardPrice - currentBestBid) / dashboardPrice : 1;
+        if (spreadPct > 0.15) { // 15% maximum spread allowed at entry
+            if (now % 20000 < 1000) {
+                console.warn(`[Engine] Skip: Extreme Spread detected (${(spreadPct*100).toFixed(1)}%). Liquidity too thin for safe entry.`);
+            }
+            return;
+        }
+
+        console.log(`[Engine] 🛡️🛰️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)}`);
 
         // v22.4.1: CRITICAL TRIGGER DECISION (Non-blocking fallback)
         if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
