@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.3.0 SL RECOVERY)
+ * Master Controller (v2025 MODULAR - v49.4.0 SHIELD+1HZ)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -435,7 +435,7 @@ async function init() {
     // Start the loops with organic timing
     setTimeout(scheduledMainLoop, getJitter(500, 100));
     reportingLoop();
-    setInterval(performanceLoop, 10000); // v24.1.4: 6x faster resolution check (10s)
+    setInterval(performanceLoop, 1000); // v49.4.0: 10x faster resolution/SL check (1s)
     
     // Initial triggers
     mainLoop();
@@ -1313,16 +1313,29 @@ async function performanceLoop() {
                     const pos = positions[i];
                     if (pos.resolved || pos.redeemed) continue;
 
-                    // v49.3.0: UNIFIED MONITORING (SL + EARLY EXIT)
+                    // v49.4.0: UNIFIED MONITORING (SL + DELTA SHIELD + EARLY EXIT)
                     try {
                         const mInfo = await clobClient.getMarket(pos.conditionId);
                         const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
-                        const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
-                        const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.14");
+                        
+                        // Fetch fresh Spot price for Delta Shield
+                        const mv = await getUnifiedMarketState('BTC').catch(() => null);
+                        const bSpot = mv ? mv.bSpot : 0;
 
-                        // 1. STOP LOSS CHECK (Active Monitoring)
-                        if (pnlPct <= -stopLossPct) {
-                            console.log(`[Sentinel] 🚨 STOP LOSS TRIGGERED for ${pos.slug} | Price: $${currentPrice} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+                        // 1. STOP LOSS CHECK (With Delta Shield Confirmation)
+                        const shouldExit = RiskManager.shouldTriggerStopLoss(
+                            pos.buyPrice,
+                            currentPrice, // Treat current price as Bid for SL calculation
+                            currentPrice,
+                            pos.side,
+                            pos.entryAssetPrice,
+                            bSpot,
+                            pos.strike
+                        );
+
+                        if (shouldExit) {
+                            const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
+                            console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Price: $${currentPrice} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
                             await executeEmergencyExit({
                                 tokenId: pos.tokenId,
                                 currentPrice: currentPrice,

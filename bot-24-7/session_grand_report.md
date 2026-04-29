@@ -65,7 +65,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
-| **23h05** | **FIX SL CRITIQUE** | Intégration monitoring prix actif (10s) dans Sentinel | **STABLE (v49.3.0)** 🛡️ |
+| **23h05** | **FIX SL CRITIQUE** | Intégration monitoring prix actif (10s) à 14% dans Sentinel | **STABLE (v49.3.0)** 🛡️ |
 | **17h15** | **VICTOIRE RÉELLE (6/6)** | BTC DOWN @ $0.90 -> $1.00 (Redeem Auto) | **PROFIT +$0.28** 🏆 |
 | **16h40** | **VICTOIRE CLOB V2** | Résolution automatique `btc-updown-5m-1777473000` (Down) | **PROFIT +$0.15** 🏆 |
 | **15h59** | **TRADING EN PAUSE** | Instabilité Polymarket détectée (Erreur 425 Service Not Ready) | **SÉCURISÉ** ⚠️ |
