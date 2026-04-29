@@ -334,12 +334,15 @@ async function ensureClobClient() {
 
             // Step 2: Create fully authenticated client
             clobClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com', // v49.1.7: Unified Stable Host
                 chain: 137,
                 signer: walletClient,
                 creds: apiCreds,
                 signatureType: parseInt(process.env.CLOB_SIGNATURE_TYPE || '2'),
-                funderAddress: process.env.CLOB_FUNDER_ADDRESS
+                funderAddress: process.env.CLOB_FUNDER_ADDRESS,
+                // v49.1.7: FORCE PROXY ROUTING (Shield SDK from Geoblock 405/403)
+                httpAgent: proxyAgent,
+                httpsAgent: proxyAgent
             });
             
             // v49.1.3: Removed legacy updateBalanceAllowance() (V2 incompatible)
