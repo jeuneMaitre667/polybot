@@ -26,12 +26,12 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
 - **Positions Réelles** : **4** ✅
-- **Victoires (Cash)** : **4** 💰 (Total: +$0.66 net)
+- **Victoires (Cash)** : **4** 💰 (Total: +$0.80 net)
 - **Pertes (SL Cash)** : **0** 📉
 - **Win Rate Réel** : **100%** 🏆
-- **Profit Session** : **+$0.66** (ROI cumulé)
+- **Profit Session** : **+$0.80** (ROI cumulé)
 - **Mise Actuelle** : **$3.00 Fixed**
-- **Capital de Départ** : **$3.66** (Initial Deposit)
+- **Capital de Départ** : **$3.52** (Initial Deposit)
 
 ---
 
