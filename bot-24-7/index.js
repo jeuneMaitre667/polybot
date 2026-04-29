@@ -1330,8 +1330,8 @@ async function performanceLoop() {
             const pos = positions[i];
             if (pos.resolved || pos.redeemed) continue;
 
-            // v17.44.2: Support multiple redeems per slot if accidentally duplicated
-            if (pos.slotEnd && (now > pos.slotEnd + 2000)) { 
+            // v49.1.6: Wait 55s before checking resolution (Polymarket lag optimization)
+            if (pos.slotEnd && (now > pos.slotEnd + 55000)) { 
                 const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}&closed=true`;
                 const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
                 
