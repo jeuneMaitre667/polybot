@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v49.8.0 SPREAD-AGNOSTIC ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v49.8.1 SPREAD-AGNOSTIC ONLINE ===");
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
@@ -999,7 +999,9 @@ async function mainLoop() {
             }
         } catch (e) {}
 
-        console.log(`[Engine] 🛡️🛰️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)}`);
+        // v49.8.1: Restore dashboardPrice definition (Critical fix for entry regression)
+        const dashboardPrice = (liveClobPrice > 0) ? liveClobPrice : staleGammaPrice;
+        console.log(`[Engine] 🛡️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
 
         // v22.4.1: CRITICAL TRIGGER DECISION (Non-blocking fallback)
         if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
