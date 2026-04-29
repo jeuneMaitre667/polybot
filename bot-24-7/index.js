@@ -334,9 +334,19 @@ async function ensureClobClient() {
                 host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
                 chain: 137,
                 signer: walletClient,
-                creds: apiCreds
+                creds: apiCreds,
+                signatureType: parseInt(process.env.CLOB_SIGNATURE_TYPE || '2'),
+                funderAddress: process.env.CLOB_FUNDER_ADDRESS
             });
             
+            console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation du solde de trading en cours...`);
+            try {
+                await clobClient.updateBalanceAllowance();
+                console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation CLOB V2 réussie (Solde activé).`);
+            } catch (syncErr) {
+                console.warn(`[Self-Healing] ⚠️ Échec de la synchronisation du solde (non critique) : ${syncErr.message}`);
+            }
+
             console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }
         return true;
