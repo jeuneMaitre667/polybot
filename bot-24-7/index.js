@@ -499,7 +499,8 @@ async function getUnifiedMarketState(asset = 'BTC') {
     
     // v24.3.0: Strategy strictly follows Binance Open for better signal sensitivity
     const effectiveStrike = bStrike;
-    const source = bStrike ? 'BINANCE-SPOT-OPEN' : 'MISSING';
+    const strikeSource = bStrike ? 'BINANCE-SPOT-OPEN' : 'MISSING';
+    source = `${strikeSource} (${source})`;
     
     // 3. Calculate Delta
     let bDeltaPct = 0;
