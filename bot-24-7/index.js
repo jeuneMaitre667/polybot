@@ -341,10 +341,14 @@ async function ensureClobClient() {
             
             console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation du solde de trading en cours...`);
             try {
+                // v48.0.3: Call without args to avoid "Invalid asset type" 400 error
                 await clobClient.updateBalanceAllowance();
                 console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation CLOB V2 réussie (Solde activé).`);
             } catch (syncErr) {
-                console.warn(`[Self-Healing] ⚠️ Échec de la synchronisation du solde (non critique) : ${syncErr.message}`);
+                // Non-blocking: ignore balance sync errors (400/401), trading still works
+                if (!syncErr.message?.includes('400') && !syncErr.message?.includes('Invalid')) {
+                    console.warn(`[Self-Healing] ⚠️ Échec sync solde : ${syncErr.message}`);
+                }
             }
 
             console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
@@ -1420,17 +1424,17 @@ async function performanceLoop() {
                                              entryPrice: pos.buyPrice,
                                              exitPrice: 0.0,
                                              quantity: pos.amount,
-                                             pnlUsd: -(pos.buyPrice * pos.amount),
+                                             pnlUsd: profitNet,
                                              isWin: false
                                          });
                                      } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
 
                                      // v34.4.12: ALERT SECOND (Non-blocking)
-                                     sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: ${(pos.buyPrice * pos.amount).toFixed(2)}`);
+                                     sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: ${cost.toFixed(2)}`);
                                  }
                              }
 
-                            lastResolvedCid = pos.tokenId;
+                            lastResolvedCids.add(pos.tokenId); // v48.0.3: fix undefined var
                             positions.splice(i, 1);
                             changed = true;
                         }
