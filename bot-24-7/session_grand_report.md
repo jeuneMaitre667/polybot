@@ -2,34 +2,34 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 347** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 348** 🔵
 > - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 020**
+> - **Victoires** : **1 021**
 > - **Pertes (SL)** : **350**
-> - **Win Rate** : **75,7 %**
-> - **Statut** : **V49.1.9 (CLOB V2 PRODUCTION STABLE)** 🚀
+> - **Win Rate** : **75,8 %**
+> - **Statut** : **V49.2.0 (EARLY EXIT T-10s)** 🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **4,46 $** 💰
-> **Dernière Synchro** : 29/04/2026 à 16h47 (Paris)
+> **Capital Réel (pUSD)** : **4,74 $** 💰
+> **Dernière Synchro** : 29/04/2026 à 17h31 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
-- **Score Session** : **216 Victoires / 51 Stop Loss** (WR 80.9%)
-- **Statut** : **ACTIF (V49.1.9 - CLOB V2 FIXED) ✅**
-- **Solde Réel (pUSD)** : **$4.46** ✅ (5 victoires encaissées)
+- **Score Session** : **217 Victoires / 51 Stop Loss** (WR 80.9%)
+- **Statut** : **ACTIF (V49.2.0 - EARLY EXIT T-10s) ✅**
+- **Solde Réel (pUSD)** : **$4.74** ✅ (6 victoires encaissées)
 - **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
-- **Migration V2** : **SYNCHRO FRAIS DYNAMIQUES OK** — V2-MIGRATED ✅🚀
+- **Migration V2** : **STRATÉGIE T-10s (BYPASS REDEEM) OK** — V2-STABLE ✅🚀
 
 ---
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **5** ✅
-- **Victoires (Cash)** : **5** 💰 (Total: +$0.94 net)
+- **Positions Réelles** : **6** ✅
+- **Victoires (Cash)** : **6** 💰 (Total: +$1.22 net)
 - **Pertes (SL Cash)** : **0** 📉
 - **Win Rate Réel** : **100%** 🏆
-- **Profit Session** : **+$0.94** (ROI cumulé)
+- **Profit Session** : **+$1.22** (ROI cumulé)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
@@ -42,10 +42,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | **Proxy Safe (Fonds)** | `0x6C8b...` (CLOB_FUNDER_ADDRESS) |
 | **Signature Type** | `2` (Gasless / Safe Wallet) |
 | **pUSD Contract** | `0xc011a7e...` (Polygon) |
-| **Relayer** | `relayer-v2.polymarket.com` |
+| **Relayer** | `BYPASSED` (T-10s Strategy) |
 | **CLOB** | `clob.polymarket.com` |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (unique) ✅ |
+| **Processus PM2** | `poly-engine` (v49.2.0) ✅ |
 
 ---
 
@@ -65,6 +65,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **17h15** | **VICTOIRE RÉELLE (6/6)** | BTC DOWN @ $0.90 -> $1.00 (Redeem Auto) | **PROFIT +$0.28** 🏆 |
 | **16h40** | **VICTOIRE CLOB V2** | Résolution automatique `btc-updown-5m-1777473000` (Down) | **PROFIT +$0.15** 🏆 |
 | **15h59** | **TRADING EN PAUSE** | Instabilité Polymarket détectée (Erreur 425 Service Not Ready) | **SÉCURISÉ** ⚠️ |
 | **15h55** | **DOUBLE VICTOIRE** | Ajout de 2 succès manuels / validés post-instabilité | **PROFIT +$0.33** 💰 |

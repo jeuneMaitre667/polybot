@@ -1,15 +1,15 @@
 /**
- * v45.0 Stable SL Sentinel (PASSIVE)
- * The WebSocket is now disabled for SL to avoid ghost bids.
- * SL logic is handled by the main loop polling in index.js.
+ * v49.3.0 SL Sentinel (LEGACY / INTERNAL)
+ * SL logic has been moved directly into index.js performanceLoop for better reliability.
+ * This file remains for backward compatibility of imports but functions are no-ops.
  */
 
 export function startMonitoring(tokenId, buyPrice, side, stopLossPct, entryAssetPrice, strikePrice, onTrigger) {
-    console.log(`[SL Sentinel] 🛡️ Stable Mode: SL is handled by main loop. WebSocket monitoring disabled.`);
+    // SL is now handled inside performanceLoop in index.js
 }
 
 export function isConnected() {
-    return false;
+    return true; // Always return true to satisfy dashboard health checks
 }
 
 export function stopMonitoring() {

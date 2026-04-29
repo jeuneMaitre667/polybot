@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.2.0 EARLY EXIT)
+ * Master Controller (v2025 MODULAR - v49.3.0 SL RECOVERY)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -1313,21 +1313,34 @@ async function performanceLoop() {
                     const pos = positions[i];
                     if (pos.resolved || pos.redeemed) continue;
 
-                    // v49.2.0: EARLY EXIT STRATEGY (T-10s)
-                    // Sell everything 10 seconds before slot end to capture value without needing redeem
-                    const timeUntilEnd = pos.slotEnd - now;
-                    
-                    if (timeUntilEnd <= 10000 && timeUntilEnd > -300000) {
-                        console.log(`[Sentinel] 🚀 Early Exit Triggered for ${pos.slug} (T-${Math.round(timeUntilEnd/1000)}s). Selling...`);
-                        try {
-                            const tokenIdToSell = pos.tokenId;
-                            
-                            // Fetch current market price for analytics accuracy
-                            const mInfo = await clobClient.getMarket(pos.conditionId);
-                            const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
+                    // v49.3.0: UNIFIED MONITORING (SL + EARLY EXIT)
+                    try {
+                        const mInfo = await clobClient.getMarket(pos.conditionId);
+                        const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
+                        const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
+                        const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
+
+                        // 1. STOP LOSS CHECK (Active Monitoring)
+                        if (pnlPct <= -stopLossPct) {
+                            console.log(`[Sentinel] 🚨 STOP LOSS TRIGGERED for ${pos.slug} | Price: $${currentPrice} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+                            await executeEmergencyExit({
+                                tokenId: pos.tokenId,
+                                currentPrice: currentPrice,
+                                pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
+                                pnlPct: pnlPct
+                            });
+                            positions.splice(i, 1);
+                            changed = true;
+                            continue;
+                        }
+
+                        // 2. EARLY EXIT STRATEGY (T-10s)
+                        const timeUntilEnd = pos.slotEnd - now;
+                        if (timeUntilEnd <= 10000 && timeUntilEnd > -300000) {
+                            console.log(`[Sentinel] 🚀 Early Exit Triggered for ${pos.slug} (T-${Math.round(timeUntilEnd/1000)}s). Selling...`);
                             
                             const response = await clobClient.createAndPostOrder({
-                                tokenID: tokenIdToSell,
+                                tokenID: pos.tokenId,
                                 price: 0.01, // Market-style sell (aggressive)
                                 size: pos.amount,
                                 side: Side.SELL
@@ -1335,37 +1348,32 @@ async function performanceLoop() {
 
                             console.log(`[Sentinel] ✅ Early Exit SOLD: ${pos.slug} | Order: ${response.orderID}`);
                             
-                            // Record as finished trade
-                            const isWin = currentPrice > 0.5; // Heuristic for early exit
-                            const profitNet = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
-                            
                             Analytics.recordTrade({
                                 asset: pos.asset || 'BTC',
                                 slug: pos.slug,
-                                isSimulated: false,
+                                isSimulated: !!pos.isSimulated,
                                 side: pos.side,
                                 entryPrice: pos.buyPrice,
                                 exitPrice: currentPrice,
                                 quantity: pos.amount,
-                                pnlUsd: profitNet,
-                                isWin: isWin,
+                                pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
+                                isWin: currentPrice > 0.5,
                                 note: "EARLY_EXIT_T10"
                             });
                             
                             positions.splice(i, 1);
                             changed = true;
                             continue;
-                        } catch (exitErr) {
-                            console.error(`[Sentinel] 🚨 Early Exit Failed for ${pos.slug}:`, exitErr.message);
                         }
+                    } catch (mErr) {
+                        console.error(`[Sentinel] Monitor Error for ${pos.slug}:`, mErr.message);
                     }
-                    
-                    // Fallback: Emergency Archive if resolution delay > 10m (v49.1.13)
+
+                    // Fallback: Emergency Archive if resolution delay > 10m
                     if (now > pos.slotEnd + 600000) {
                         console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug} (Expired)`);
                         positions.splice(i, 1);
                         changed = true;
-                        continue;
                     }
                 }
 
