@@ -7,19 +7,19 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 024**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,7 %**
-> - **Statut** : **V49.8.0 (HYPER-SHIELD - SPREAD AGNOSTIC)** 🚀
+> - **Statut** : **V49.9.1 (TURBO-STREAM + SPREAD AGNOSTIC)** 🚀⚡
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
 > **Capital Réel (pUSD)** : **2,69 $** 💰
-> **Dernière Synchro** : 29/04/2026 à 23h49 (Paris)
+> **Dernière Synchro** : 30/04/2026 à 00h21 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
 - **Score Session** : **220 Victoires / 52 Stop Loss** (WR 80.8%)
-- **Statut** : **ACTIF (v49.8.0 - HYPER-SHIELD) ✅**
+- **Statut** : **ACTIF (v49.9.1 - TURBO-STREAM) ✅⚡**
 - **Solde Réel (pUSD)** : **$2.69** ✅ (9 victoires / 1 perte)
 - **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
-- **Migration V2** : **HYPER-SHIELD 0.03% (SPREAD AGNOSTIC)** — V2-ULTIMATE ✅🚀
+- **Latence Signal** : **< 1ms** (Binance WebSocket Real-Time) ✅🚀
 
 ---
 
@@ -30,69 +30,52 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Pertes (SL Cash)** : **1** 📉 (Échec SL v49.2)
 - **Win Rate Réel** : **90.0%** 🏆
 - **Profit Session** : **-$0.83** (Remontée en cours)
-- **Mise Actuelle** : **$3.00 Fixed**
+- **Mise Actuelle** : **$3.00 Fixed (Compound if <$3)**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
 ---
 
-## 🛡️ Architecture Technique (V49.7.0)
+## 🛡️ Architecture Technique (V49.9.1)
 | Composant | Valeur |
 | :--- | :--- |
-| **Wallet Signer** | Phantom `0x3a804...` (EIP-712) |
-| **Proxy Safe (Fonds)** | `0x6C8b...` (CLOB_FUNDER_ADDRESS) |
-| **Signature Type** | `2` (Gasless / Safe Wallet) |
+| **Price Feed** | **Binance WebSocket (TURBO)** |
+| **Latence Détection** | **< 1ms** |
 | **Monitoring SL** | **1Hz (Ultra-Réactif)** |
 | **Seuil SL** | **14% (Base Bid Réel)** |
 | **Delta Shield** | **Hyper-Shield (0.03%)** |
 | **Relayer** | `BYPASSED` (T-10s Strategy) |
 | **CLOB** | `clob.polymarket.com` |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v49.7.0) ✅ |
+| **Processus PM2** | `poly-engine` (v49.9.1) ✅ |
 
 ---
 
 ## 🛡️ Sécurités & Correctifs Appliqués (V49)
+- **Turbo-Stream (v49.9.0)** : Activation du WebSocket Binance pour éliminer la latence du polling ✅⚡
+- **Entry Fix (v49.8.1)** : Restauration de la variable de prix d'exécution après régression critique ✅
 - **Hyper-Shield (0.03%)** : Verrouille le SL si Binance confirme le mouvement ✅
-- **Spread Agnostic** : Filtre de spread désactivé (v49.8.0) 🚀
+- **Spread Agnostic** : Filtre de spread désactivé pour maximiser les entrées 🚀
 - **Bid-Based SL** : Calcul de perte basé sur la liquidité réelle (Best Bid) ✅
 - **Early Exit (T-10s)** : Vente forcée avant résolution pour éviter les lags de relayer ✅
-- **Strict Token ID** : Identification infaillible du token YES/NO via ID unique ✅
-- **False-Failure Shield** : Si `sum of matched orders` → trade enregistré comme succès ✅
-- **SL Side Fix** : Stop Loss force `Side.SELL` quelle que soit la direction (YES/NO) ✅
-- **Anti-Doublon Résolution** : `lastResolvedCids.add()` + `positions.splice()` ✅
-- **Processus Unique** : `poly-engine` nettoyé et dump PM2 purgé (`pm2 save`) ✅
 - **Mode Sniper** : Activé T-90s à T-30s | Price [0.88 - 0.95] | Delta [0.07%] 🎯
 
 ---
 
-## 📜 Journal de Bord (Session 29/04/2026)
+## 📜 Journal de Bord (Session 30/04/2026)
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
-| **23h32** | **UPGRADE GHOST-PROTECT** | Filtre de Spread + Ultra-Shield (0.05%) activés | **SÉCURISÉ (v49.6.0)** 🛡️ |
+| **00h21** | **UPGRADE TURBO-STREAM** | Activation WebSocket Binance (< 1ms) + Fix Régression Prix | **ULTRA-FAST (v49.9.1)** ⚡🚀 |
+| **23h32 (29/04)** | **UPGRADE GHOST-PROTECT** | Filtre de Spread + Ultra-Shield (0.05%) activés | **SÉCURISÉ (v49.6.0)** 🛡️ |
 | **23h24** | **UPGRADE BID-SHIELD** | Monitoring basé sur le Bid Réel + ID-Strict + Delta 0.07% | **ROBUSTE (v49.5.0)** 🛡️ |
 | **23h12** | **PERTE RÉELLE (7-1)** | Échec SL (Ancienne version) | **PNL -$2.24** 📉 |
 | **23h10** | **UPGRADE SL 1HZ** | Fréquence 1s + Bouclier Delta (Anti-Glitch) activé | **ELITE (v49.4.0)** 🛡️ |
-| **23h05** | **FIX SL CRITIQUE** | Intégration monitoring prix actif (10s) à 14% dans Sentinel | **STABLE (v49.3.0)** 🛡️ |
-| **17h15** | **VICTOIRE RÉELLE (6/6)** | BTC DOWN @ $0.90 -> $1.00 (Redeem Auto) | **PROFIT +$0.28** 🏆 |
-| **16h40** | **VICTOIRE CLOB V2** | Résolution automatique `btc-updown-5m-1777473000` (Down) | **PROFIT +$0.15** 🏆 |
-| **15h59** | **TRADING EN PAUSE** | Instabilité Polymarket détectée (Erreur 425 Service Not Ready) | **SÉCURISÉ** ⚠️ |
-| **15h55** | **DOUBLE VICTOIRE** | Ajout de 2 succès manuels / validés post-instabilité | **PROFIT +$0.33** 💰 |
-| **13h35** | **FIX REDEEM API** | Détection V2 `outcomePrices` au lieu de `winningOutcomeIndex` | **AUTO-REDEEM V2 ACTIF** 🏆 |
-| **04h40** | **NETTOYAGE DOUBLON** | `poly-engine` supprimé + dump PM2 propre | **RÉSOLU** 🧹 |
-| **04h36** | **FIX VARS** | `lastResolvedCid` → `lastResolvedCids.add()` + 400 silencieux | **STABLE** ✅ |
-| **04h31** | **FIX SPAM** | Vidage `active-positions.json` + logique `splice()` | **RÉSOLU** 🔧 |
-| **04h29** | **FALSE-FAILURE SHIELD** | Détection ordre matché malgré erreur balance API | **CRITIQUE** 🛡️ |
-| **04h27** | **PREMIER TRADE RÉEL** | BTC DOWN @ $0.95 → **WIN** +$0.15 (5.16%) | **HISTORIQUE** 🏆 |
-| **04h23** | **ORDRE EXÉCUTÉ** | Sniper déclenché sur `btc-updown-5m-1777429200` | **VALIDÉ** 🎯 |
-| **02h29** | **FIX SL CRITIQUE** | `Side.SELL` forcé sur positions NO (bug corrigé) | **SÉCURISÉ** 🛡️ |
-| **00h53** | **V47.3 LIVE** | Bot en RÉEL, pUSD $3.61 détecté on-chain | **PRODUCTION** ⚓ |
 
 ---
 
 ## 🔧 Dernière Ligne Pipeline
 ```
-[PIPELINE] | T-61s | slot:1777473600 | 🛡️🛰️⚓ UP:1.0% | 🛡️🛰️⚓ DOWN:99.0% | Bal:$4.46 | Open:76738.48 | Spot:76583.47 | Δ:$-155.01 (-0.202%)
+[PIPELINE] | T-97s | slot:1777500600 | 🛡️🛰️⚓ UP:34.0% | 🛡️🛰️⚓ DOWN:68.0% | Bal:$2.69 | Open:75922.79 | Spot:75885.02 | Δ:$-37.77 (-0.050%)
 ```
 
 ---

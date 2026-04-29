@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.9.0 TURBO-STREAM)
+ * Master Controller (v2025 MODULAR - v49.9.2 TURBO-STREAM)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v49.9.0 TURBO-STREAM ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v49.9.2 TURBO-STREAM ONLINE ===");
     
     // v49.9.0: Activate Binance Real-Time Stream
     BinanceWS.start();
@@ -1391,10 +1391,14 @@ async function performanceLoop() {
                             continue;
                         }
 
-                        // 3. EARLY EXIT STRATEGY (T-10s)
+                        // 3. INSTANT TAKE PROFIT / EARLY EXIT STRATEGY
                         const timeUntilEnd = pos.slotEnd - now;
-                        if (timeUntilEnd <= 10000 && timeUntilEnd > -300000) {
-                            console.log(`[Sentinel] 🚀 Early Exit Triggered for ${pos.slug} (T-${Math.round(timeUntilEnd/1000)}s). Selling...`);
+                        const isInstantTP = currentPrice >= 0.99;
+                        const isTimeExit = (timeUntilEnd <= 10000 && timeUntilEnd > -300000);
+
+                        if (isInstantTP || isTimeExit) {
+                            const reason = isInstantTP ? "INSTANT_TP_99" : `EARLY_EXIT_T${Math.round(timeUntilEnd/1000)}s`;
+                            console.log(`[Sentinel] 🚀 ${reason} Triggered for ${pos.slug}. Selling at $${currentPrice}...`);
                             
                             const response = await clobClient.createAndPostOrder({
                                 tokenID: pos.tokenId,
@@ -1403,8 +1407,17 @@ async function performanceLoop() {
                                 side: Side.SELL
                             });
 
-                            console.log(`[Sentinel] ✅ Early Exit SOLD: ${pos.slug} | Order: ${response.orderID}`);
+                            console.log(`[Sentinel] ✅ SOLD (${reason}): ${pos.slug} | Order: ${response.orderID}`);
                             
+                            // v49.9.2: Telegram Alert for Early Exit
+                            const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
+                            const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
+                            await sendTelegramAlert(`🚀 *VENTE AUTO (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
+                                `📦 *Market*: ${pos.slug}\n` +
+                                `💰 *Prix*: $${currentPrice.toFixed(3)}\n` +
+                                `📈 *PnL*: +$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
+                                `🆔 *Order*: \`${response.orderID}\``);
+
                             Analytics.recordTrade({
                                 asset: pos.asset || 'BTC',
                                 slug: pos.slug,
@@ -1413,9 +1426,9 @@ async function performanceLoop() {
                                 entryPrice: pos.buyPrice,
                                 exitPrice: currentPrice,
                                 quantity: pos.amount,
-                                pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
+                                pnlUsd: pnlUsd,
                                 isWin: currentPrice > 0.5,
-                                note: "EARLY_EXIT_T10"
+                                note: reason
                             });
                             
                             positions.splice(i, 1);
