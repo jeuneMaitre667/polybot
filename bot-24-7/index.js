@@ -1258,236 +1258,177 @@ async function performanceLoop() {
     
     try {
         const tz = process.env.TELEGRAM_MIDDAY_DIGEST_TZ || 'Europe/Paris';
-    const { hour, minute } = getLocalHourMinute(tz);
-    const dateStr = getCalendarDateYmd(tz);
+        const { hour, minute } = getLocalHourMinute(tz);
+        const dateStr = getCalendarDateYmd(tz);
 
-    // --- 📊 12H DIGEST SCHEDULER ---
-    if (telegramMiddayDigestEnabled()) {
-        let window = null;
-        let windowName = '';
+        // --- 📊 12H DIGEST SCHEDULER ---
+        if (telegramMiddayDigestEnabled()) {
+            let window = null;
+            let windowName = '';
 
-        // Midi (12:00 - 12:15)
-        if (hour === 12 && minute < 15 && (lastDigestDate !== dateStr || lastDigestWindow !== 'morning')) {
-            window = getMidnightToNoonWindowMs(tz, dateStr);
-            windowName = 'Matin';
-            lastDigestWindow = 'morning';
-            lastDigestDate = dateStr;
-        }
-        // Minuit (00:05 - 00:20) - v34.4.2: Offset by 5min to avoid midnight system load (logrotate)
-        else if (hour === 0 && minute >= 5 && minute < 20 && (lastDigestDate !== dateStr || lastDigestWindow !== 'night')) {
-            window = getNoonToMidnightWindowMs(tz, dateStr);
-            windowName = 'Soir';
-            lastDigestWindow = 'night';
-            lastDigestDate = dateStr;
-            lastDigestDate = dateStr;
-        }
+            // Midi (12:00 - 12:15)
+            if (hour === 12 && minute < 15 && (lastDigestDate !== dateStr || lastDigestWindow !== 'morning')) {
+                window = getMidnightToNoonWindowMs(tz, dateStr);
+                windowName = 'Matin';
+                lastDigestWindow = 'morning';
+                lastDigestDate = dateStr;
+            }
+            // Minuit (00:05 - 00:20)
+            else if (hour === 0 && minute >= 5 && minute < 20 && (lastDigestDate !== dateStr || lastDigestWindow !== 'night')) {
+                window = getNoonToMidnightWindowMs(tz, dateStr);
+                windowName = 'Soir';
+                lastDigestWindow = 'night';
+                lastDigestDate = dateStr;
+            }
 
-        if (window) {
-            try {
-                const logPath = path.join(process.cwd(), 'orders.log');
-                
-                // v34.4.1: CRITICAL RAM SHIELD
-                // Check file size before synchronous read to prevent ffreeze at midnight
-                if (!fs.existsSync(logPath)) {
-                    console.warn(`[Sentinel] Digest skipped: orders.log not found.`);
-                    return;
-                }
-                
-                const stats = fs.statSync(logPath);
-                const sizeMb = stats.size / (1024 * 1024);
-                
-                if (sizeMb > 1.0) {
-                    console.error(`[Sentinel] 🛡️⚠️ DIGEST ABORTED: orders.log is too large (${sizeMb.toFixed(2)}MB). Clear logs to resume reporting.`);
-
-                    await sendTelegramAlert(`🛡️⚠️ *RAPPORT DESACTIVE* : Le fichier orders.log est trop volumineux (${sizeMb.toFixed(2)}Mo) et risque de faire planter le serveur. Pensez à le vider.`);
-                    return;
-                }
-
-                const logs = fs.readFileSync(logPath, 'utf8');
-                const digestStats = computeMiddayDigestStats(logs, window.startMs, window.endMs);
-                const msg = formatMiddayDigestMessage(digestStats, { 
-                    timeZone: tz, 
-                    dateStr, 
-                    windowLabel: windowName, 
-                    streakContextLabel: lastDigestWindow === 'morning' ? 'midi' : 'minuit' 
-                });
-                await sendTelegramAlert(msg);
-                console.log(`[Sentinel] Digest ${windowName} envoyé.`);
-
-                // v34.4.2: AUTO-TRUNCATE (Keep server lean)
+            if (window) {
                 try {
-                    fs.writeFileSync(logPath, '', 'utf8');
-                    console.log(`[Sentinel] 🛡️ orders.log truncated after successful digest.`);
-                } catch (truncateErr) {
-                    console.warn(`[Sentinel] 🛡️ Failed to truncate orders.log:`, truncateErr.message);
+                    const logPath = path.join(process.cwd(), 'orders.log');
+                    if (fs.existsSync(logPath)) {
+                        const stats = fs.statSync(logPath);
+                        const sizeMb = stats.size / (1024 * 1024);
+                        if (sizeMb < 1.0) {
+                            const logs = fs.readFileSync(logPath, 'utf8');
+                            const digestStats = computeMiddayDigestStats(logs, window.startMs, window.endMs);
+                            const msg = formatMiddayDigestMessage(digestStats, { 
+                                timeZone: tz, 
+                                dateStr, 
+                                windowLabel: windowName, 
+                                streakContextLabel: lastDigestWindow === 'morning' ? 'midi' : 'minuit' 
+                            });
+                            await sendTelegramAlert(msg);
+                            fs.writeFileSync(logPath, '', 'utf8');
+                            console.log(`[Sentinel] Digest ${windowName} envoyé et logs tronqués.`);
+                        }
+                    }
+                } catch (digestErr) {
+                    console.error(`[Sentinel] Erreur digest:`, digestErr.message);
                 }
-            } catch (err) {
-                console.error(`[Sentinel] Erreur critique digest:`, err.message);
-                // Non-blocking: bot continues trading
             }
         }
-    }
 
-    // --- 🏆 WINNER WATCHER (REDEEM) ---
-    try {
-        const positions = loadActivePositions();
-        if (positions.length === 0) return;
+        // --- 🏆 WINNER WATCHER (REDEEM) ---
+        try {
+            const positions = loadActivePositions();
+            if (positions.length > 0) {
+                const now = Date.now();
+                let changed = false;
 
-        const now = Date.now();
-        let changed = false;
+                for (let i = positions.length - 1; i >= 0; i--) {
+                    const pos = positions[i];
+                    if (pos.resolved || pos.redeemed) continue;
 
-        for (let i = positions.length - 1; i >= 0; i--) {
-            const pos = positions[i];
-            if (pos.resolved || pos.redeemed) continue;
-
-            // v49.1.9: Query MARKET status instead of EVENT for faster/more reliable resolution detection
-            if (pos.slotEnd && (now > pos.slotEnd + 55000)) { 
-                const url = `https://gamma-api.polymarket.com/markets?slug=${pos.slug}`;
-                const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
-                
-                if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
-                    const market = res.data[0];
-                    
-                    if (market.resolved) {
-                        console.log(`[Sentinel] 🏁 Resolution Found for ${pos.slug}`);
+                    if (pos.slotEnd && (now > pos.slotEnd + 55000)) { 
+                        const url = `https://gamma-api.polymarket.com/markets?slug=${pos.slug}`;
+                        const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
                         
-                        // V2 API compatibility: winningOutcomeIndex is sometimes null, use outcomePrices
-                        let winningIndex = parseInt(market.winningOutcomeIndex);
-                        if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
-                            winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
-                        }
-                            
-                            // v49.1.5: Resolution Guard. If no winner found yet, do NOT resolve/archive.
-                            if (winningIndex === -1 && !market.resolved) {
-                                console.log(`[Sentinel] ⏳ Market ${pos.slug} closed but not yet resolved. Waiting...`);
-                                continue; 
-                            }
+                        if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
+                            const market = res.data[0];
+                            if (market.resolved) {
+                                console.log(`[Sentinel] 🏁 Resolution Found for ${pos.slug}`);
+                                
+                                let winningIndex = parseInt(market.winningOutcomeIndex);
+                                if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
+                                    winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
+                                }
+                                
+                                console.log(`[Sentinel] 📊 Market Info: ${pos.slug} | WinnerIndex: ${winningIndex} | Prices: ${JSON.stringify(market.outcomePrices)}`);
+                                
+                                if (winningIndex === -1 && !market.resolved) {
+                                    console.log(`[Sentinel] ⏳ Market ${pos.slug} not yet resolved. Waiting...`);
+                                    continue; 
+                                }
 
-                            let isWin = false;
-                            if (winningIndex === 0 && pos.side === 'YES') isWin = true;
-                            if (winningIndex === 1 && pos.side === 'NO') isWin = true;
-
-                             const payout = pos.amount; 
-                             const cost = pos.buyPrice * pos.amount;
-                             const profitNet = isWin ? (payout - cost) : 0;
-                             
-                             updateStreak(isWin, profitNet); // v46.0.5: Capture profit for House Money
-
-                            if (isWin) {
-                                if (pos.isSimulated) {
-                                    // SIMULATION: update virtual balance
-                                    const result = await updateVirtualBalance(payout);
-                                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
+                                // v49.1.9: Robust outcome detection (Label-aware)
+                                let isWin = false;
+                                try {
+                                    const outcomes = JSON.parse(market.outcomes || "[]");
+                                    const winningLabel = outcomes[winningIndex] || "";
                                     
-                                    const winMsg = `🧪 *SIMULATED REDEEM (WIN)* 💰\n\n` +
-                                                   `• Profit: +$${profitNet.toFixed(2)}\n` +
-                                                   `• Capital: $${finalBal.toFixed(2)}\n` +
-                                                   `• Statut: simulation gagnante`;
+                                    if (pos.side === 'YES') {
+                                        // YES wins if label is "Yes" or "Up" (or starts with them)
+                                        if (winningLabel.toLowerCase().startsWith('yes') || winningLabel.toLowerCase().startsWith('up')) isWin = true;
+                                    } else if (pos.side === 'NO') {
+                                        // NO wins if label is "No" or "Down"
+                                        if (winningLabel.toLowerCase().startsWith('no') || winningLabel.toLowerCase().startsWith('down')) isWin = true;
+                                    }
                                     
-                                    console.log(`[VirtualRedeem] 🏆 Simulated WIN. New Balance: $${finalBal.toFixed(2)}`);
-                                    SLSentinel.stopMonitoring(); // v39.3.1: Silent exit after win
-                                    
-                                    // v34.4.6: Immediate Archival for Simulation WIN
-                                    try {
-                                        Analytics.recordTrade({
-                                            asset: pos.asset || 'BTC',
-                                            slug: pos.slug,
-                                            isSimulated: true,
-                                            side: pos.side,
-                                            entryPrice: pos.buyPrice,
-                                            exitPrice: 1.0,
-                                            quantity: pos.amount,
-                                            pnlUsd: profitNet,
-                                            isWin: true
-                                        });
-                                    } catch (e) { console.error('[ArchivalError] WIN Sync failed:', e.message); }
+                                    // Fallback to legacy index if labels are missing/empty
+                                    if (!winningLabel) {
+                                        if (winningIndex === 0 && pos.side === 'YES') isWin = true;
+                                        if (winningIndex === 1 && pos.side === 'NO') isWin = true;
+                                    }
+                                } catch (e) {
+                                    // Extreme fallback
+                                    if (winningIndex === 0 && pos.side === 'YES') isWin = true;
+                                    if (winningIndex === 1 && pos.side === 'NO') isWin = true;
+                                }
 
-                                    // v34.4.12: ALERT SECOND (Non-blocking Task)
-                                    sendTelegramAlert(winMsg);
+                                const payout = pos.amount; 
+                                const cost = pos.buyPrice * pos.amount;
+                                const profitNet = isWin ? (payout - cost) : 0;
+                                
+                                updateStreak(isWin, profitNet);
+
+                                if (isWin) {
+                                    if (pos.isSimulated) {
+                                        const result = await updateVirtualBalance(payout);
+                                        const finalBal = (typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0);
+                                        sendTelegramAlert(`🧪 *SIMULATED REDEEM (WIN)* 💰\n• Profit: +$${profitNet.toFixed(2)}\n• Capital: $${parseFloat(finalBal).toFixed(2)}`);
+                                    } else {
+                                        console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
+                                        try {
+                                            await executeRedeemOnChain(pos.conditionId);
+                                            sendTelegramAlert(`🏆 *REDEEM SUCCESS (WIN)* 💰\n• Marché: ${pos.slug}\n• Profit: +$${profitNet.toFixed(2)}`);
+                                        } catch (redeemErr) {
+                                            console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
+                                            sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}`);
+                                        }
+                                    }
                                 } else {
-                                    // v20.3.0: REAL TRADE REDEEM via Gasless Relayer
-                                    console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
-                                    try {
-                                        await executeRedeemOnChain(pos.conditionId);
-                                        const winMsg = `🏆 *REDEEM SUCCESS (WIN)* 💰\n\n` +
-                                                       `• Marché: ${pos.slug}\n` +
-                                                       `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
-                                                       `• Profit: +$${profitNet.toFixed(2)} 💵\n` +
-                                                       `• Mise: $${cost.toFixed(2)}\n` +
-                                                       `• Statut: Gasless Redeem ✅`;
-                                        sendTelegramAlert(winMsg);
-                                    } catch (redeemErr) {
-                                        console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
-                                        sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}\nRéclamez manuellement sur polymarket.com`);
+                                    if (pos.isSimulated) {
+                                        const result = await getVirtualBalance();
+                                        const finalBal = (typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0);
+                                        sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde: $${parseFloat(finalBal).toFixed(2)}`);
+                                    } else {
+                                        console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}.`);
+                                        sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise: $${cost.toFixed(2)}`);
                                     }
                                 }
-                            } else {
-                                if (pos.isSimulated) {
-                                    const result = await getVirtualBalance();
-                                    const finalBal = parseFloat((typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0));
-                                    console.log(`[VirtualRedeem] 💀 Simulated LOSS. Balance: $${finalBal.toFixed(2)}`);
-                                    
-                                    // v34.4.12: Archival FIRST
-                                    try {
-                                        Analytics.recordTrade({
-                                            asset: pos.asset || 'BTC',
-                                            slug: pos.slug,
-                                            isSimulated: true,
-                                            side: pos.side,
-                                            entryPrice: pos.buyPrice,
-                                            exitPrice: 0.0,
-                                            quantity: pos.amount,
-                                            pnlUsd: -(pos.buyPrice * pos.amount),
-                                            isWin: false
-                                        });
-                                    } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
 
-                                    // v34.4.12: ALERT SECOND (Non-blocking)
-                                    sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde final: $${finalBal.toFixed(2)} 💵`);
-                                } else {
-                                                                         console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}. No redeem needed.`);
-                                     
-                                     // v34.4.12: Archival FIRST
-                                     try {
-                                         Analytics.recordTrade({
-                                             asset: pos.asset || 'BTC',
-                                             slug: pos.slug,
-                                             isSimulated: false,
-                                             side: pos.side,
-                                             entryPrice: pos.buyPrice,
-                                             exitPrice: 0.0,
-                                             quantity: pos.amount,
-                                             pnlUsd: profitNet,
-                                             isWin: false
-                                         });
-                                     } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
+                                try {
+                                    Analytics.recordTrade({
+                                        asset: pos.asset || 'BTC',
+                                        slug: pos.slug,
+                                        isSimulated: !!pos.isSimulated,
+                                        side: pos.side,
+                                        entryPrice: pos.buyPrice,
+                                        exitPrice: isWin ? 1.0 : 0.0,
+                                        quantity: pos.amount,
+                                        pnlUsd: isWin ? profitNet : -cost,
+                                        isWin: isWin
+                                    });
+                                } catch (e) {}
 
-                                     // v34.4.12: ALERT SECOND (Non-blocking)
-                                     sendTelegramAlert(`🛑 *LOSS* 💀\n\n` +
-                                                       `• Marché: ${pos.slug}\n` +
-                                                       `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
-                                                       `• Entry: $${pos.buyPrice}\n` +
-                                                       `• Mise perdue: $${cost.toFixed(2)} 💸`);
-                                 }
-                             }
-
-                            lastResolvedCids.add(pos.tokenId); // v48.0.3: fix undefined var
-                            positions.splice(i, 1);
-                            changed = true;
+                                lastResolvedCids.add(pos.tokenId);
+                                positions.splice(i, 1);
+                                changed = true;
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        if (changed) {
-            saveActivePositions(positions);
+                if (changed) {
+                    saveActivePositions(positions);
+                }
+            }
+        } catch (watcherErr) {
+            console.error(`[Sentinel] Resolution Error:`, watcherErr.message);
         }
-    } catch (err) {
-        console.error(`[Sentinel] Resolution Error:`, err.message);
-    }
-} finally {
-        isPerformanceLoopRunning = false; // v24.2.0: Release lock after completion
+    } catch (globalErr) {
+        console.error(`[Sentinel] Global Loop Error:`, globalErr.message);
+    } finally {
+        isPerformanceLoopRunning = false;
     }
 }
 
