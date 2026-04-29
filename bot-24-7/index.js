@@ -1784,7 +1784,7 @@ async function executeEmergencyExit(info) {
                                 tokenID: pos.tokenId,
                                 price: exitPrice,
                                 size: safeQty,
-                                side: pos.side === 'YES' ? Side.SELL : Side.BUY
+                                side: Side.SELL
                             },
                             {
                                 tickSize: emergencyTickSize,
