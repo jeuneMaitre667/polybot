@@ -2,34 +2,34 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 351** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 352** 🔵
 > - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 023**
+> - **Victoires** : **1 024**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,7 %**
-> - **Statut** : **V49.5.0 (BID-BASED MONITOR / ID-STRICT)** 🚀
+> - **Statut** : **V49.6.0 (GHOST-PROTECT / SPREAD-FILTER)** 🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **2,50 $** (Attente actualisation) 💰
-> **Dernière Synchro** : 29/04/2026 à 23h24 (Paris)
+> **Capital Réel (pUSD)** : **2,59 $** (Attente actualisation) 💰
+> **Dernière Synchro** : 29/04/2026 à 23h32 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
-- **Score Session** : **219 Victoires / 52 Stop Loss** (WR 80.8%)
-- **Statut** : **ACTIF (v49.5.0 - BID-SHIELD) ✅**
-- **Solde Réel (pUSD)** : **$2.50** (8 victoires / 1 perte)
+- **Score Session** : **220 Victoires / 52 Stop Loss** (WR 80.8%)
+- **Statut** : **ACTIF (v49.6.0 - GHOST-PROTECT) ✅**
+- **Solde Réel (pUSD)** : **$2.59** (9 victoires / 1 perte)
 - **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
-- **Migration V2** : **BID-BASED SL + ID-STRICT** — V2-ROBUST ✅🚀
+- **Migration V2** : **SPREAD-FILTER + ULTRA-SHIELD** — V2-GHOST ✅🚀
 
 ---
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **9** ✅
-- **Victoires (Cash)** : **8** 💰 (Redeem manuel validé)
+- **Positions Réelles** : **10** ✅
+- **Victoires (Cash)** : **9** 💰 (Vente manuelle sécurisée)
 - **Pertes (SL Cash)** : **1** 📉 (Échec SL v49.2)
-- **Win Rate Réel** : **88.9%** 🏆
-- **Profit Session** : **-$1.02** (Attente synchro solde)
+- **Win Rate Réel** : **90.0%** 🏆
+- **Profit Session** : **-$0.93** (Remontée en cours)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
@@ -65,6 +65,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **23h32** | **UPGRADE GHOST-PROTECT** | Filtre de Spread + Ultra-Shield (0.05%) activés | **SÉCURISÉ (v49.6.0)** 🛡️ |
 | **23h24** | **UPGRADE BID-SHIELD** | Monitoring basé sur le Bid Réel + ID-Strict + Delta 0.07% | **ROBUSTE (v49.5.0)** 🛡️ |
 | **23h12** | **PERTE RÉELLE (7-1)** | Échec SL (Ancienne version) | **PNL -$2.24** 📉 |
 | **23h10** | **UPGRADE SL 1HZ** | Fréquence 1s + Bouclier Delta (Anti-Glitch) activé | **ELITE (v49.4.0)** 🛡️ |
