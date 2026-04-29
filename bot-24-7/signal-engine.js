@@ -36,50 +36,39 @@ export async function fetchSignals(asset, context = {}) {
         if (now - c.ts < cacheMs) return c.data;
     }
 
-    // v17.31.0: Utilisation de l'ID de série stable (10684 pour BTC) pour une découverte sans faille
-    const seriesId = asset === 'BTC' ? '10684' : '10685'; // 10685 supposé pour ETH, à vérifier.
+    // v49.0.0: DIRECT SLUG DISCOVERY — Remplace keyset?series_id qui ne retourne que les 20 premiers marchés
+    // et rate tous les marchés récents. On construit le slug directement depuis l'heure UTC actuelle.
     const targetSeriesSlug = asset === 'BTC' ? 'btc-up-or-down-5m' : `${asset.toLowerCase()}-up-or-down-5m`;
-    const discoveryUrl = `https://gamma-api.polymarket.com/events/keyset?series_id=${seriesId}&active=true&closed=false`;
+    const nowMs = Date.now();
+    const SLOT_MS = 300000; // 5 minutes
+    // Cherche les 3 prochains slots (slot courant + 2 slots suivants)
+    const slotsToFetch = [0, 1, 2].map(offset => Math.floor(nowMs / SLOT_MS) * SLOT_MS + offset * SLOT_MS);
     
     const startFetch = Date.now();
     try {
-        const stealthOpts = getStealthProfile();
+        // Requêtes parallèles pour les 3 slugs cibles
+        const slugRequests = slotsToFetch.map(slotMs => {
+            const slotSec = Math.floor(slotMs / 1000);
+            const slug = `btc-updown-5m-${slotSec}`;
+            const url = `https://gamma-api.polymarket.com/events?slug=${slug}`;
+            return axios.get(url, { timeout: 5000, httpsAgent: null })
+                .then(r => r.data?.[0] || null)
+                .catch(() => null);
+        });
         
-        // v34.3.3: Direct connection for discovery ONLY. 
-        // Force-omit proxyUrl to avoid 'received type null' validation errors in got-scraping.
-        const resGot = await gotScraping.get(discoveryUrl, {
-            ...stealthOpts,
-            retry: { limit: 2 }
-        });
+        const results = await Promise.all(slugRequests);
+        const events = results.filter(Boolean); // Filtre les slugs non encore publiés
 
-        const resData = resGot.body;
-        const events = resData?.events || resData;
-        if (!events || !Array.isArray(events) || events.length === 0) {
-            console.warn(`[${asset}] No active events found via discovery.`);
+        if (events.length === 0) {
+            console.warn(`[${asset}] 🛡️ SCAN RESULTS: Direct slug discovery found no active markets for slots: ${slotsToFetch.map(s => Math.floor(s/1000)).join(', ')}`);
             return { signals: [], slug: null, hasEvent: false };
         }
 
-        // v17.30.0: Filtrage laser multi-critères (Le "Viseur Sniper")
-        const nowMs = Date.now();
-        const maxFutureMs = 15 * 60 * 1000; 
-
+        // Filtre supplémentaire: on n'accepte que les marchés qui se terminent dans le futur
         const validEvents = events.filter(e => {
-            // v17.32.0: Filtrage par série (stable) et verrou temporel (sécurité capital)
             const endMs = new Date(e.endDate).getTime();
-            const timeDiff = endMs - nowMs;
-            const seriesMatch = e.seriesSlug === targetSeriesSlug;
-
-            // On rejette si on n'est pas sur la bonne série ou si le marché est trop loin (2026/2027)
-            if (!seriesMatch || timeDiff <= 0 || timeDiff > maxFutureMs) {
-                return false;
-            }
-            return true;
+            return endMs > nowMs;
         });
-
-        if (validEvents.length === 0) {
-            console.warn(`[${asset}] 🛡️ SCAN RESULTS: ${events.length} events found in Series ${seriesId}, but NONE matched the temporal security window (15m).`);
-            return { signals: [], slug: null, hasEvent: false };
-        }
 
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
         const primaryEvent = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
