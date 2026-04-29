@@ -1054,27 +1054,14 @@ async function mainLoop() {
         const theta = (globalFeeRate / 0.5) || 0.072; // Recover raw feeRate from SL percentage
         const effectivePrice = safePrice * (1 + (theta * (1 - safePrice)));
         // v49.1.9: Enforcement of Polymarket V2 Minimum Order Size (5 contracts)
+        // v49.1.12: REVERTED upscaling. Real-world tests show 1-3 contracts pass on CLOB V2.
         let safeQty = Math.floor(tradeAmountUsd / effectivePrice);
-        if (safeQty < 5) {
-            console.log(`[Engine] 🛡️🛰️⚓ Upscaling size from ${safeQty} to 5 (V2 Minimum Requirement)`);
-            safeQty = 5;
-        }
 
         if (safeQty <= 0) {
             console.warn(`[Engine] Skip: Amount too low after fees to purchase even 1 contract.`);
             return;
         }
 
-        // v49.1.11: Margin Shield - Verify balance can afford the 5-contract minimum
-        if (!IS_SIMULATION_ENABLED) {
-            const currentBal = userBalance !== null ? userBalance : 0;
-            const estimatedCost = safeQty * finalPrice; // v49.1.11: safeQty is already at least 5
-            if (currentBal < estimatedCost) {
-                console.error(`[Engine] 🛡️⚠️ INSUFFICIENT FUNDS for V2 Minimum: Bal $${currentBal.toFixed(2)} < Needed $${estimatedCost.toFixed(2)} (Qty: ${safeQty} @ $${finalPrice.toFixed(2)})`);
-                sendTelegramAlert(`⚠️ *INSUFFICIENT FUNDS* ⚠️\n\nVotre solde ($${currentBal.toFixed(2)}) est insuffisant pour acheter le minimum V2 de 5 contrats au prix actuel ($${finalPrice.toFixed(2)}).\nBesoin de ~$${estimatedCost.toFixed(2)}.`);
-                return;
-            }
-        }
 
         if (!IS_SIMULATION_ENABLED) {
             await CollateralManager.ensureCollateral(clobClient, null, tradeAmountUsd);
