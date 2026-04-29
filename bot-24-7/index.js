@@ -1193,8 +1193,10 @@ async function mainLoop() {
                 if (lastAlertedSlot !== slotStart) {
                     const sideLabel = side === 'YES' ? 'UP' : 'DOWN';
                     const entryMsg = `🎯 *SNIPER ENTRY : BTC ${sideLabel}* 🎯\n\n` +
+                                    `• Side: ${side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
                                     `• Price: $${executionPrice}\n` +
-                                    `• Mise: $${tradeAmountUsd.toFixed(2)}\n` +
+                                    `• Qty: ${safeQty} 📦\n` +
+                                    `• Mise: $${tradeAmountUsd.toFixed(2)} 🏦\n` +
                                     `• Latency: ${totalLatency}ms ⚡`;
                     sendTelegramAlert(entryMsg);
                     lastAlertedSlot = slotStart;
@@ -1384,7 +1386,9 @@ async function performanceLoop() {
                                         await executeRedeemOnChain(pos.conditionId);
                                         const winMsg = `🏆 *REDEEM SUCCESS (WIN)* 💰\n\n` +
                                                        `• Marché: ${pos.slug}\n` +
-                                                       `• Profit: +$${profitNet.toFixed(2)}\n` +
+                                                       `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
+                                                       `• Profit: +$${profitNet.toFixed(2)} 💵\n` +
+                                                       `• Mise: $${cost.toFixed(2)}\n` +
                                                        `• Statut: Gasless Redeem ✅`;
                                         sendTelegramAlert(winMsg);
                                     } catch (redeemErr) {
@@ -1434,7 +1438,11 @@ async function performanceLoop() {
                                      } catch (e) { console.error('[ArchivalError] LOSS Sync failed:', e.message); }
 
                                      // v34.4.12: ALERT SECOND (Non-blocking)
-                                     sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise perdue: ${cost.toFixed(2)}`);
+                                     sendTelegramAlert(`🛑 *LOSS* 💀\n\n` +
+                                                       `• Marché: ${pos.slug}\n` +
+                                                       `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
+                                                       `• Entry: $${pos.buyPrice}\n` +
+                                                       `• Mise perdue: $${cost.toFixed(2)} 💸`);
                                  }
                              }
 
@@ -1819,11 +1827,13 @@ async function executeEmergencyExit(info) {
                             
                             const exitLatency = Date.now() - exitStart;
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
-                                            `• Tentative: ${attempt}/${maxAttempts}\n` +
+                                            `• Marché: ${pos.slug}\n` +
+                                            `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
+                                            `• Entry: $${pos.buyPrice}\n` +
+                                            `• Exit: $${exitPrice}\n` +
                                             `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                                            `• Best Bid: $${bestBid}\n` +
-                                            `• Prix Sortie: $${exitPrice}\n` +
-                                            `• Latence: ${exitLatency}ms ⚡\n` +
+                                            `• Mise/Qty: ${safeQty} 📦\n` +
+                                            `• Latency: ${exitLatency}ms ⚡\n` +
                                             `• Statut: Sécurisé (Orderbook Sweep)`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
