@@ -2,34 +2,34 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 346** 🔵
-> - **ATH (Sommet Historique)** : **1 580,48 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 019**
+> - **Total des Positions (Vie du Bot)** : **1 347** 🔵
+> - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
+> - **Victoires** : **1 020**
 > - **Pertes (SL)** : **350**
 > - **Win Rate** : **75,7 %**
-> - **Statut** : **V49.1.3 (CLOB V2 Production MIGRATED)** 🚀
+> - **Statut** : **V49.1.9 (CLOB V2 PRODUCTION STABLE)** 🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **3,83 $** 💰
-> **Dernière Synchro** : 29/04/2026 à 13h37 (Paris)
+> **Capital Réel (pUSD)** : **4,46 $** 💰
+> **Dernière Synchro** : 29/04/2026 à 16h47 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
-- **Score Session** : **215 Victoires / 51 Stop Loss** (WR 80.8%)
-- **Statut** : **ACTIF (V49.1.5 - SL AGGRESSIF + FIX REDEEM) ✅**
-- **Solde Réel (pUSD)** : **$4.32** ✅ (4 victoires encaissées)
-- **ATH Session (Simu)** : $1 580.48 USD (Atteint le 29/04)
+- **Score Session** : **216 Victoires / 51 Stop Loss** (WR 80.9%)
+- **Statut** : **ACTIF (V49.1.9 - CLOB V2 FIXED) ✅**
+- **Solde Réel (pUSD)** : **$4.46** ✅ (5 victoires encaissées)
+- **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
 - **Migration V2** : **SYNCHRO FRAIS DYNAMIQUES OK** — V2-MIGRATED ✅🚀
 
 ---
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **4** ✅
-- **Victoires (Cash)** : **4** 💰 (Total: +$0.80 net)
+- **Positions Réelles** : **5** ✅
+- **Victoires (Cash)** : **5** 💰 (Total: +$0.94 net)
 - **Pertes (SL Cash)** : **0** 📉
 - **Win Rate Réel** : **100%** 🏆
-- **Profit Session** : **+$0.80** (ROI cumulé)
+- **Profit Session** : **+$0.94** (ROI cumulé)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
@@ -65,6 +65,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **16h40** | **VICTOIRE CLOB V2** | Résolution automatique `btc-updown-5m-1777473000` (Down) | **PROFIT +$0.15** 🏆 |
 | **15h59** | **TRADING EN PAUSE** | Instabilité Polymarket détectée (Erreur 425 Service Not Ready) | **SÉCURISÉ** ⚠️ |
 | **15h55** | **DOUBLE VICTOIRE** | Ajout de 2 succès manuels / validés post-instabilité | **PROFIT +$0.33** 💰 |
 | **13h35** | **FIX REDEEM API** | Détection V2 `outcomePrices` au lieu de `winningOutcomeIndex` | **AUTO-REDEEM V2 ACTIF** 🏆 |
@@ -81,7 +82,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🔧 Dernière Ligne Pipeline
 ```
-[PIPELINE] | T-197s | slot:1777430100 | UP:56.0% | DOWN:45.0% | Bal:$3.66 | Open:76438.78 | Spot:76449.38 | Δ:+$10.60 (+0.014%)
+[PIPELINE] | T-61s | slot:1777473600 | 🛡️🛰️⚓ UP:1.0% | 🛡️🛰️⚓ DOWN:99.0% | Bal:$4.46 | Open:76738.48 | Spot:76583.47 | Δ:$-155.01 (-0.202%)
 ```
 
 ---

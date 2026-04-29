@@ -1335,6 +1335,46 @@ async function performanceLoop() {
                                 console.log(`[Sentinel] 📊 Market Info: ${pos.slug} | WinnerIndex: ${winningIndex} | Prices: ${JSON.stringify(market.outcomePrices)}`);
                                 
                                 if (winningIndex === -1 && !market.resolved) {
+                                    // v49.1.10: Emergency Market Exit Fallback
+                                    // If no resolution after 60s, try to sell at market price if possible
+                                    if (now > pos.slotEnd + 60000 && !pos.isSimulated) {
+                                        console.log(`[Sentinel] 🚨 Market ${pos.slug} not resolved after 60s. Attempting Emergency Market Sell...`);
+                                        try {
+                                            const sideToSell = pos.side === 'YES' ? 'SELL' : 'SELL'; // Always SELL existing token
+                                            const tokenIdToSell = pos.tokenId || (pos.side === 'YES' ? pos.tokenIdYes : pos.tokenIdNo);
+                                            
+                                            // Place a small market sell order to exit
+                                            const order = await clobClient.createOrder({
+                                                tokenId: tokenIdToSell,
+                                                price: 0.50, // Low price to ensure match if liquidity exists
+                                                side: 'SELL',
+                                                size: pos.amount,
+                                                orderType: 'GTC'
+                                            });
+                                            console.log(`[Sentinel] 🚨 Emergency Sell Order placed:`, order.orderID);
+                                            sendTelegramAlert(`🚨 *EMERGENCY EXIT* 🚨\n\n• Marché: ${pos.slug}\n• Motif: Resolution Lag (>60s)\n• Statut: Vente tentée au marché.`);
+                                            
+                                            // Archive as exit
+                                            Analytics.recordTrade({
+                                                asset: pos.asset || 'BTC',
+                                                slug: pos.slug,
+                                                isSimulated: false,
+                                                side: pos.side,
+                                                entryPrice: pos.buyPrice,
+                                                exitPrice: 0.50, // Placeholder
+                                                quantity: pos.amount,
+                                                pnlUsd: 0, 
+                                                isWin: false,
+                                                note: "EMERGENCY_EXIT_LAG"
+                                            });
+                                            positions.splice(i, 1);
+                                            changed = true;
+                                            continue;
+                                        } catch (sellErr) {
+                                            console.error(`[Sentinel] 🚨 Emergency Sell failed:`, sellErr.message);
+                                        }
+                                    }
+                                    
                                     console.log(`[Sentinel] ⏳ Market ${pos.slug} not yet resolved. Waiting...`);
                                     continue; 
                                 }
