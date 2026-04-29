@@ -1334,10 +1334,9 @@ async function performanceLoop() {
                                 console.log(`[Sentinel] 📊 Market Info: ${pos.slug} | WinnerIndex: ${winningIndex} | Prices: ${JSON.stringify(market.outcomePrices)}`);
                                 
                                 if (winningIndex === -1 && !market.resolved) {
-                                    // v49.1.10: Emergency Market Exit Fallback
-                                    // If no resolution after 60s, try to sell at market price if possible
-                                    if (now > pos.slotEnd + 60000 && !pos.isSimulated) {
-                                        console.log(`[Sentinel] 🚨 Market ${pos.slug} not resolved after 60s. Attempting Emergency Market Sell...`);
+                                    // v49.1.13: Relaxed Emergency Exit to 10 minutes (Polymarket V2 resolution delay)
+                                    if (now > pos.slotEnd + 600000 && !pos.isSimulated) {
+                                        console.log(`[Sentinel] 🚨 Market ${pos.slug} not resolved after 10m. Attempting Emergency Market Sell...`);
                                         try {
                                             const sideToSell = pos.side === 'YES' ? 'SELL' : 'SELL'; // Always SELL existing token
                                             const tokenIdToSell = pos.tokenId || (pos.side === 'YES' ? pos.tokenIdYes : pos.tokenIdNo);
