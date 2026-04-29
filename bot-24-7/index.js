@@ -310,9 +310,11 @@ async function ensureClobClient() {
 
             // Step 1: Create initial client for key derivation
             const tempClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
                 chain: 137,
-                signer: walletClient
+                signer: walletClient,
+                httpAgent: proxyAgent,
+                httpsAgent: proxyAgent
             });
 
             let apiCreds;
@@ -1119,7 +1121,7 @@ async function mainLoop() {
                         tickSize: tSize,
                         negRisk: currentSig.m?.negRisk ?? (tokenId.length > 50)
                     },
-                    OrderType.FOK // v25.3.0: Fill Or Kill for surgical entry
+                    OrderType.GTC // v49.1.8: Reverted FOK -> GTC for maximum V2 compatibility
                 );
 
                 if (response && response.orderID) {
