@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v34.2 RECOVERY)
+ * Master Controller (v2025 MODULAR - v49.2.0 EARLY EXIT)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -89,10 +89,6 @@ const LAST_TRADE_FILE = path.join(__dirname, 'last-trade.json'); // v17.54.0: To
 const CTF_CONTRACT_ADDRESS = '0x4d97dcd97ec945f40cf65f87097ace5ea0476045';
 const PUSD_ADDRESS = '0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb'; // V2: pUSD (Polymarket USD) - verified on PolygonScan
 const USDC_E_ADDRESS = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174'; // Legacy reference
-const CTF_ABI = [
-    "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"
-];
-const RELAYER_URL = "https://relayer-v2.polymarket.com";
 
 // --- STATE ---
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
@@ -1317,142 +1313,59 @@ async function performanceLoop() {
                     const pos = positions[i];
                     if (pos.resolved || pos.redeemed) continue;
 
-                    if (pos.slotEnd && (now > pos.slotEnd + 55000)) { 
-                        const url = `https://gamma-api.polymarket.com/markets?slug=${pos.slug}`;
-                        const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
-                        
-                        if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
-                            const market = res.data[0];
-                            if (market.resolved) {
-                                console.log(`[Sentinel] 🏁 Resolution Found for ${pos.slug}`);
-                                
-                                let winningIndex = parseInt(market.winningOutcomeIndex);
-                                if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
-                                    winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
-                                }
-                                
-                                console.log(`[Sentinel] 📊 Market Info: ${pos.slug} | WinnerIndex: ${winningIndex} | Prices: ${JSON.stringify(market.outcomePrices)}`);
-                                
-                                if (winningIndex === -1 && !market.resolved) {
-                                    // v49.1.13: Relaxed Emergency Exit to 10 minutes (Polymarket V2 resolution delay)
-                                    if (now > pos.slotEnd + 600000 && !pos.isSimulated) {
-                                        console.log(`[Sentinel] 🚨 Market ${pos.slug} not resolved after 10m. Attempting Emergency Market Sell...`);
-                                        try {
-                                            const sideToSell = pos.side === 'YES' ? 'SELL' : 'SELL'; // Always SELL existing token
-                                            const tokenIdToSell = pos.tokenId || (pos.side === 'YES' ? pos.tokenIdYes : pos.tokenIdNo);
-                                            
-                                            // Place a small market sell order to exit
-                                            const order = await clobClient.createOrder({
-                                                tokenId: tokenIdToSell,
-                                                price: 0.50, // Low price to ensure match if liquidity exists
-                                                side: 'SELL',
-                                                size: pos.amount,
-                                                orderType: 'GTC'
-                                            });
-                                            console.log(`[Sentinel] 🚨 Emergency Sell Order placed:`, order.orderID);
-                                            sendTelegramAlert(`🚨 *EMERGENCY EXIT* 🚨\n\n• Marché: ${pos.slug}\n• Motif: Resolution Lag (>60s)\n• Statut: Vente tentée au marché.`);
-                                            
-                                            // Archive as exit
-                                            Analytics.recordTrade({
-                                                asset: pos.asset || 'BTC',
-                                                slug: pos.slug,
-                                                isSimulated: false,
-                                                side: pos.side,
-                                                entryPrice: pos.buyPrice,
-                                                exitPrice: 0.50, // Placeholder
-                                                quantity: pos.amount,
-                                                pnlUsd: 0, 
-                                                isWin: false,
-                                                note: "EMERGENCY_EXIT_LAG"
-                                            });
-                                            positions.splice(i, 1);
-                                            changed = true;
-                                            continue;
-                                        } catch (sellErr) {
-                                            console.error(`[Sentinel] 🚨 Emergency Sell failed:`, sellErr.message);
-                                        }
-                                    }
-                                    
-                                    console.log(`[Sentinel] ⏳ Market ${pos.slug} not yet resolved. Waiting...`);
-                                    continue; 
-                                }
+                    // v49.2.0: EARLY EXIT STRATEGY (T-10s)
+                    // Sell everything 10 seconds before slot end to capture value without needing redeem
+                    const timeUntilEnd = pos.slotEnd - now;
+                    
+                    if (timeUntilEnd <= 10000 && timeUntilEnd > -300000) {
+                        console.log(`[Sentinel] 🚀 Early Exit Triggered for ${pos.slug} (T-${Math.round(timeUntilEnd/1000)}s). Selling...`);
+                        try {
+                            const tokenIdToSell = pos.tokenId;
+                            
+                            // Fetch current market price for analytics accuracy
+                            const mInfo = await clobClient.getMarket(pos.conditionId);
+                            const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
+                            
+                            const response = await clobClient.createAndPostOrder({
+                                tokenID: tokenIdToSell,
+                                price: 0.01, // Market-style sell (aggressive)
+                                size: pos.amount,
+                                side: Side.SELL
+                            });
 
-                                // v49.1.9: Robust outcome detection (Label-aware)
-                                let isWin = false;
-                                try {
-                                    const outcomes = JSON.parse(market.outcomes || "[]");
-                                    const winningLabel = outcomes[winningIndex] || "";
-                                    
-                                    if (pos.side === 'YES') {
-                                        // YES wins if label is "Yes" or "Up" (or starts with them)
-                                        if (winningLabel.toLowerCase().startsWith('yes') || winningLabel.toLowerCase().startsWith('up')) isWin = true;
-                                    } else if (pos.side === 'NO') {
-                                        // NO wins if label is "No" or "Down"
-                                        if (winningLabel.toLowerCase().startsWith('no') || winningLabel.toLowerCase().startsWith('down')) isWin = true;
-                                    }
-                                    
-                                    // Fallback to legacy index if labels are missing/empty
-                                    if (!winningLabel) {
-                                        if (winningIndex === 0 && pos.side === 'YES') isWin = true;
-                                        if (winningIndex === 1 && pos.side === 'NO') isWin = true;
-                                    }
-                                } catch (e) {
-                                    // Extreme fallback
-                                    if (winningIndex === 0 && pos.side === 'YES') isWin = true;
-                                    if (winningIndex === 1 && pos.side === 'NO') isWin = true;
-                                }
-
-                                const payout = pos.amount; 
-                                const cost = pos.buyPrice * pos.amount;
-                                const profitNet = isWin ? (payout - cost) : 0;
-                                
-                                updateStreak(isWin, profitNet);
-
-                                if (isWin) {
-                                    if (pos.isSimulated) {
-                                        const result = await updateVirtualBalance(payout);
-                                        const finalBal = (typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0);
-                                        sendTelegramAlert(`🧪 *SIMULATED REDEEM (WIN)* 💰\n• Profit: +$${profitNet.toFixed(2)}\n• Capital: $${parseFloat(finalBal).toFixed(2)}`);
-                                    } else {
-                                        console.log(`[Redeem] 🏆 REAL WIN detected for ${pos.slug}. Initiating gasless redeem...`);
-                                        try {
-                                            await executeRedeemOnChain(pos.conditionId);
-                                            sendTelegramAlert(`🏆 *REDEEM SUCCESS (WIN)* 💰\n• Marché: ${pos.slug}\n• Profit: +$${profitNet.toFixed(2)}`);
-                                        } catch (redeemErr) {
-                                            console.error(`[Redeem] ❌ Gasless redeem failed:`, redeemErr.message);
-                                            sendTelegramAlert(`⚠️ *REDEEM FAILED*\n${pos.slug}\n${redeemErr.message}`);
-                                        }
-                                    }
-                                } else {
-                                    if (pos.isSimulated) {
-                                        const result = await getVirtualBalance();
-                                        const finalBal = (typeof result === 'object' && result !== null) ? (result.balance ?? 0) : (result ?? 0);
-                                        sendTelegramAlert(`🛑 *SIMULATED LOSS* 💀\n• Solde: $${parseFloat(finalBal).toFixed(2)}`);
-                                    } else {
-                                        console.log(`[Redeem] 💀 REAL LOSS for ${pos.slug}.`);
-                                        sendTelegramAlert(`🛑 *LOSS* 💀\n• Marché: ${pos.slug}\n• Mise: $${cost.toFixed(2)}`);
-                                    }
-                                }
-
-                                try {
-                                    Analytics.recordTrade({
-                                        asset: pos.asset || 'BTC',
-                                        slug: pos.slug,
-                                        isSimulated: !!pos.isSimulated,
-                                        side: pos.side,
-                                        entryPrice: pos.buyPrice,
-                                        exitPrice: isWin ? 1.0 : 0.0,
-                                        quantity: pos.amount,
-                                        pnlUsd: isWin ? profitNet : -cost,
-                                        isWin: isWin
-                                    });
-                                } catch (e) {}
-
-                                lastResolvedCids.add(pos.tokenId);
-                                positions.splice(i, 1);
-                                changed = true;
-                            }
+                            console.log(`[Sentinel] ✅ Early Exit SOLD: ${pos.slug} | Order: ${response.orderID}`);
+                            
+                            // Record as finished trade
+                            const isWin = currentPrice > 0.5; // Heuristic for early exit
+                            const profitNet = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
+                            
+                            Analytics.recordTrade({
+                                asset: pos.asset || 'BTC',
+                                slug: pos.slug,
+                                isSimulated: false,
+                                side: pos.side,
+                                entryPrice: pos.buyPrice,
+                                exitPrice: currentPrice,
+                                quantity: pos.amount,
+                                pnlUsd: profitNet,
+                                isWin: isWin,
+                                note: "EARLY_EXIT_T10"
+                            });
+                            
+                            positions.splice(i, 1);
+                            changed = true;
+                            continue;
+                        } catch (exitErr) {
+                            console.error(`[Sentinel] 🚨 Early Exit Failed for ${pos.slug}:`, exitErr.message);
                         }
+                    }
+                    
+                    // Fallback: Emergency Archive if resolution delay > 10m (v49.1.13)
+                    if (now > pos.slotEnd + 600000) {
+                        console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug} (Expired)`);
+                        positions.splice(i, 1);
+                        changed = true;
+                        continue;
                     }
                 }
 
@@ -1470,182 +1383,7 @@ async function performanceLoop() {
     }
 }
 
-/**
- * v34.4.9: Support for Polymarket Relayer V2 Asynchronous Submissions
- * Polls the relayer until the transactionHash is available (or timeout).
- */
-async function pollRelayerTransaction(transactionID, maxAttempts = 15, intervalMs = 3000) {
-    if (!transactionID) return null;
-    
-    console.log(`[Relayer] 🛡️🛰️⚓ Starting polling for transactionID: ${transactionID}...`);
-    
-    for (let i = 0; i < maxAttempts; i++) {
-        try {
-            // endpoint pattern for Polymarket Relayer V2 polling
-            const res = await axios.get(`${RELAYER_URL}/transaction?id=${transactionID}`, {
-                httpsAgent: proxyAgent,
-                timeout: 5000
-            });
-            
-            if (res.data && (res.data.transactionHash || res.data.hash)) {
-                const h = res.data.transactionHash || res.data.hash;
-                console.log(`[Relayer] ✅ Transaction Hash found: ${h} (Attempt ${i+1})`);
-                return h;
-            }
-            
-            if (res.data && res.data.state === 'STATE_FAILED') {
-                console.error(`[Relayer] ❌ Transaction FAILED in Relayer: ${transactionID}`);
-                return null;
-            }
-
-            console.log(`[Relayer] ⏳ Attempt ${i+1}/${maxAttempts}: Still pending...`);
-        } catch (err) {
-            console.warn(`[Relayer] ⚠️ Poll attempt ${i+1} failed: ${err.message}`);
-        }
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
-    }
-    
-    console.error(`[Relayer] 💀 Polling timeout for ${transactionID}`);
-    return null;
-}
-
-/**
- * Automate the "Redeem" transaction via Polymarket Gasless Relayer (v17.0.0)
- * Uses EIP-712 Meta-transactions to avoid MATIC fees.
- */
-async function executeRedeemOnChain(conditionId) {
-    try {
-        console.log(`[Redeem] 🛡️🛰️⚓ Starting GASLESS redemption for ${conditionId}...`);
-        
-        const proxyWallet = process.env.CLOB_FUNDER_ADDRESS;
-        const signerAddress = wallet.address;
-        const apiKey = process.env.RELAYER_API_KEY;
-
-        if (!proxyWallet || !apiKey) {
-            throw new Error("Missing RELAYER_API_KEY or CLOB_FUNDER_ADDRESS in .env");
-        }
-
-        // 1. Get Nonce from Relayer
-        const nonceRes = await axios.get(`${RELAYER_URL}/nonce?address=${proxyWallet}`, {
-            httpsAgent: proxyAgent,
-            timeout: 10000
-        });
-        const nonce = nonceRes.data.nonce;
-        console.log(`[Redeem] Current Safe Nonce: ${nonce}`);
-
-        // 2. Encode CTF Call
-        const ctfInterface = new ethers.utils.Interface(CTF_ABI);
-        const callData = ctfInterface.encodeFunctionData("redeemPositions", [
-            PUSD_ADDRESS, // V2: pUSD collateral (was USDC_E_ADDRESS in V1)
-            ethers.constants.HashZero,
-            conditionId,
-            [1, 2]
-        ]);
-
-        // 3. Prepare EIP-712 Safe Transaction
-        const domain = {
-            name: "Gnosis Safe",
-            version: "1.3.0",
-            chainId: 137,
-            verifyingContract: proxyWallet
-        };
-
-        const types = {
-            SafeTx: [
-                { name: "to", type: "address" },
-                { name: "value", type: "uint256" },
-                { name: "data", type: "bytes" },
-                { name: "operation", type: "uint8" },
-                { name: "safeTxnGas", type: "uint256" },
-                { name: "baseGas", type: "uint256" },
-                { name: "gasPrice", type: "uint256" },
-                { name: "gasToken", type: "address" },
-                { name: "refundReceiver", type: "address" },
-                { name: "nonce", type: "uint256" }
-            ]
-        };
-
-        const message = {
-            to: CTF_CONTRACT_ADDRESS,
-            value: 0,
-            data: callData,
-            operation: 0,
-            safeTxnGas: 0,
-            baseGas: 0,
-            gasPrice: 0,
-            gasToken: ethers.constants.AddressZero,
-            refundReceiver: ethers.constants.AddressZero,
-            nonce: parseInt(nonce)
-        };
-
-        // 4. Sign (v5 standard)
-        const signature = await wallet._signTypedData(domain, types, message);
-
-        // 5. Submit to Relayer
-        const submitPayload = {
-            from: signerAddress,
-            to: CTF_CONTRACT_ADDRESS,
-            proxyWallet: proxyWallet,
-            data: callData,
-            nonce: nonce.toString(),
-            signature: signature,
-            signatureParams: {
-                gasPrice: "0",
-                operation: "0",
-                safeTxnGas: "0",
-                baseGas: "0",
-                gasToken: ethers.constants.AddressZero,
-                refundReceiver: ethers.constants.AddressZero
-            },
-            type: "SAFE"
-        };
-
-        const submitRes = await axios.post(`${RELAYER_URL}/submit`, submitPayload, {
-            headers: {
-                'X-Relayer-Api-Key': apiKey,
-                'X-Relayer-Address': signerAddress
-            },
-            httpsAgent: proxyAgent,
-            timeout: 15000
-        });
-
-        if (submitRes.data && (submitRes.data.transactionHash || submitRes.data.hash)) {
-            const txHash = submitRes.data.transactionHash || submitRes.data.hash;
-            console.log(`[Relayer] 🛡️🛰️⚓ Redeem transaction submitted (Sync): ${txHash}`);
-        } else if (submitRes.data && submitRes.data.transactionID) {
-            const tid = submitRes.data.transactionID;
-            console.log(`[Relayer] 🛡️🛰️⚓ Redeem accepted (Async ID: ${tid}). Polling in background...`);
-            
-            // Asynchronous polling to avoid blocking the main Sniper loop
-            pollRelayerTransaction(tid).then(txHash => {
-                if (txHash) {
-                    sendTelegramAlert(`✅ *REDEEM ON-CHAIN CONFIRMED*\nHash: \`${txHash}\``);
-                } else {
-                    sendTelegramAlert(`⚠️ *REDEEM PENDING TIMEOUT*\nID: \`${tid}\` (Check Polyscan manually)`);
-                }
-            });
-        } else {
-            console.warn(`[Relayer] 🛡️🛰️⚓ Redeem submitted but response structure unknown: ${JSON.stringify(submitRes.data)}`);
-            await sendTelegramAlert(`⚠️ *REDEEM UNKNOWN RESPONSE*\nCheck dashboard manually.`);
-        }
-
-    } catch (err) {
-        const errorData = err.response?.data?.error || err.response?.data?.message || err.message;
-        
-        // v34.4.11: Smart detection for Polymarket Auto-Redeem coexistence
-        const isRedundant = errorData.toLowerCase().includes("already executed") || 
-                            errorData.toLowerCase().includes("nothing to redeem") ||
-                            errorData.toLowerCase().includes("nonce used");
-
-        if (isRedundant) {
-            console.log(`[Redeem] 🛡️ Info: Position already redeemed manually or via Polymarket Auto-Redeem. Skipping silently.`);
-            return true; // Consider as success to allow archival
-        }
-
-        console.error(`[Redeem] 🛡️⚠️ Relayer Error:`, errorData);
-        throw new Error(errorData); // Real error, escalate to Sentinel
-    }
-}
+// Relayer & Redeem functions removed in v49.2.0 in favor of Early Exit Strategy.
 
 /**
  * v32.0: Smart Orderbook Sweep Logic
