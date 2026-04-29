@@ -1,5 +1,4 @@
-/**
- * Master Controller (v2025 MODULAR - v49.9.2 TURBO-STREAM)
+ * Master Controller (v2025 MODULAR - v50.0.0 HYPER-REACTIVE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -402,7 +401,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v49.9.2 TURBO-STREAM ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v50.0.0 HYPER-REACTIVE ONLINE ===");
     
     // v49.9.0: Activate Binance Real-Time Stream
     BinanceWS.start();
@@ -900,10 +899,11 @@ async function mainLoop() {
             console.error('[Heartbeat] Write failed:', e.message);
         }
         
-        // v17.59.0: Ultra-High-Priority Resolution (Compound Engine)
+        // v50.0.0: High-Frequency Position Monitoring
         const marketState = await getUnifiedMarketState('BTC');
         if (marketState) {
-            global.lastBinanceSpot = marketState.bSpot; // v35.0.0: Global price sharing for SL Sentinel
+            global.lastBinanceSpot = marketState.bSpot;
+            await monitorPositionsFast(marketState);
         }
         
         if (IS_SIMULATION_ENABLED && marketState) {
@@ -1330,130 +1330,7 @@ async function performanceLoop() {
             }
         }
 
-        // --- 🏆 WINNER WATCHER (REDEEM) ---
-        try {
-            const positions = loadActivePositions();
-            if (positions.length > 0) {
-                const now = Date.now();
-                let changed = false;
-
-                for (let i = positions.length - 1; i >= 0; i--) {
-                    const pos = positions[i];
-                    if (pos.resolved || pos.redeemed) continue;
-
-                    // v49.5.0: ROBUST MONITORING (TOKEN_ID MATCH + BID-BASED SL)
-                    try {
-                        // 1. Fetch Real-time Depth for SL Check
-                        const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
-                        const bids = book?.bids || [];
-                        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
-                        
-                        // Fallback to Market Price only if Book is thin (for analytics)
-                        let currentPrice = bestBid;
-                        if (currentPrice === 0) {
-                            const mInfo = await clobClient.getMarket(pos.conditionId);
-                            const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
-                            currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
-                        }
-
-                        if (currentPrice === 0) {
-                            console.warn(`[Sentinel] ⚠️ Price unavailable for ${pos.slug}. Skipping loop.`);
-                            continue;
-                        }
-                        
-                        // Fetch fresh Spot price for Delta Shield
-                        const mv = await getUnifiedMarketState('BTC').catch(() => null);
-                        const bSpot = mv ? mv.bSpot : 0;
-
-                        // 2. STOP LOSS CHECK (With Delta Shield Confirmation)
-                        // Trigger SL only if we HAVE liquidity (bestBid > 0) to avoid ghost exits
-                        const shouldExit = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
-                            pos.buyPrice,
-                            bestBid,
-                            currentPrice,
-                            pos.side,
-                            pos.entryAssetPrice,
-                            bSpot,
-                            pos.strike
-                        );
-
-                        if (shouldExit) {
-                            const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
-                            console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Bid: $${bestBid} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
-                            await executeEmergencyExit({
-                                tokenId: pos.tokenId,
-                                currentPrice: currentPrice,
-                                pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
-                                pnlPct: pnlPct
-                            });
-                            positions.splice(i, 1);
-                            changed = true;
-                            continue;
-                        }
-
-                        // 3. INSTANT TAKE PROFIT / EARLY EXIT STRATEGY
-                        const timeUntilEnd = pos.slotEnd - now;
-                        const isInstantTP = currentPrice >= 0.99;
-                        const isTimeExit = (timeUntilEnd <= 10000 && timeUntilEnd > -300000);
-
-                        if (isInstantTP || isTimeExit) {
-                            const reason = isInstantTP ? "INSTANT_TP_99" : `EARLY_EXIT_T${Math.round(timeUntilEnd/1000)}s`;
-                            console.log(`[Sentinel] 🚀 ${reason} Triggered for ${pos.slug}. Selling at $${currentPrice}...`);
-                            
-                            const response = await clobClient.createAndPostOrder({
-                                tokenID: pos.tokenId,
-                                price: 0.01, // Market-style sell (aggressive)
-                                size: pos.amount,
-                                side: Side.SELL
-                            });
-
-                            console.log(`[Sentinel] ✅ SOLD (${reason}): ${pos.slug} | Order: ${response.orderID}`);
-                            
-                            // v49.9.2: Telegram Alert for Early Exit
-                            const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
-                            const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
-                            await sendTelegramAlert(`🚀 *VENTE AUTO (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
-                                `📦 *Market*: ${pos.slug}\n` +
-                                `💰 *Prix*: $${currentPrice.toFixed(3)}\n` +
-                                `📈 *PnL*: +$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
-                                `🆔 *Order*: \`${response.orderID}\``);
-
-                            Analytics.recordTrade({
-                                asset: pos.asset || 'BTC',
-                                slug: pos.slug,
-                                isSimulated: !!pos.isSimulated,
-                                side: pos.side,
-                                entryPrice: pos.buyPrice,
-                                exitPrice: currentPrice,
-                                quantity: pos.amount,
-                                pnlUsd: pnlUsd,
-                                isWin: currentPrice > 0.5,
-                                note: reason
-                            });
-                            
-                            positions.splice(i, 1);
-                            changed = true;
-                            continue;
-                        }
-                    } catch (mErr) {
-                        console.error(`[Sentinel] Monitor Error for ${pos.slug}:`, mErr.message);
-                    }
-
-                    // Fallback: Emergency Archive if resolution delay > 10m
-                    if (now > pos.slotEnd + 600000) {
-                        console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug} (Expired)`);
-                        positions.splice(i, 1);
-                        changed = true;
-                    }
-                }
-
-                if (changed) {
-                    saveActivePositions(positions);
-                }
-            }
-        } catch (watcherErr) {
-            console.error(`[Sentinel] Resolution Error:`, watcherErr.message);
-        }
+        // --- 📊 REPORTING & PULSE (Every 1s) ---
     } catch (globalErr) {
         console.error(`[Sentinel] Global Loop Error:`, globalErr.message);
     } finally {
@@ -1742,3 +1619,113 @@ init().then(async () => {
     console.error("🛡️⚠️ v17.10.0 FATAL:", err.message);
     process.exit(1);
 });
+
+// --- v50.0.0: High-Frequency Position Monitoring ---
+async function monitorPositionsFast(mv) {
+    try {
+        const positions = loadActivePositions();
+        if (positions.length === 0) return;
+
+        const now = Date.now();
+        let changed = false;
+
+        for (let i = positions.length - 1; i >= 0; i--) {
+            const pos = positions[i];
+            if (pos.resolved || pos.redeemed) continue;
+
+            try {
+                // 1. Fetch Real-time Depth for SL/TP Check
+                const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
+                const bids = book?.bids || [];
+                const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
+                
+                let currentPrice = bestBid;
+                if (currentPrice === 0) {
+                    const mInfo = await clobClient.getMarket(pos.conditionId);
+                    const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
+                    currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
+                }
+
+                if (currentPrice === 0) continue;
+
+                // 2. STOP LOSS CHECK
+                const bSpot = mv ? mv.bSpot : (global.lastBinanceSpot || 0);
+                const shouldExit = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
+                    pos.buyPrice,
+                    bestBid,
+                    currentPrice,
+                    pos.side,
+                    pos.entryAssetPrice,
+                    bSpot,
+                    pos.strike
+                );
+
+                if (shouldExit) {
+                    const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
+                    console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Bid: $${bestBid} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+                    await executeEmergencyExit({
+                        tokenId: pos.tokenId,
+                        currentPrice: currentPrice,
+                        pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
+                        pnlPct: pnlPct
+                    });
+                    positions.splice(i, 1);
+                    changed = true;
+                    continue;
+                }
+
+                // 3. INSTANT TAKE PROFIT / EARLY EXIT
+                const timeUntilEnd = pos.slotEnd - now;
+                const isInstantTP = currentPrice >= 0.99;
+                const isTimeExit = (timeUntilEnd <= 10000 && timeUntilEnd > -300000);
+
+                if (isInstantTP || isTimeExit) {
+                    const reason = isInstantTP ? "INSTANT_TP_99" : `EARLY_EXIT_T${Math.round(timeUntilEnd/1000)}s`;
+                    console.log(`[Sentinel] 🚀 ${reason} Triggered for ${pos.slug}. Selling at $${currentPrice}...`);
+                    
+                    const response = await clobClient.createAndPostOrder({
+                        tokenID: pos.tokenId,
+                        price: 0.01,
+                        size: pos.amount,
+                        side: Side.SELL
+                    });
+
+                    console.log(`[Sentinel] ✅ SOLD (${reason}): ${pos.slug} | Order: ${response.orderID}`);
+                    
+                    const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
+                    const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
+                    await sendTelegramAlert(`🚀 *VENTE AUTO (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
+                        `📦 *Market*: ${pos.slug}\n` +
+                        `💰 *Prix*: $${currentPrice.toFixed(3)}\n` +
+                        `📈 *PnL*: +$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
+                        `🆔 *Order*: \`${response.orderID}\``);
+
+                    Analytics.recordTrade({
+                        asset: pos.asset || 'BTC',
+                        slug: pos.slug,
+                        isSimulated: !!pos.isSimulated,
+                        side: pos.side,
+                        entryPrice: pos.buyPrice,
+                        exitPrice: currentPrice,
+                        quantity: pos.amount,
+                        pnlUsd: pnlUsd,
+                        isWin: currentPrice > 0.5,
+                        note: reason
+                    });
+                    
+                    positions.splice(i, 1);
+                    changed = true;
+                    continue;
+                }
+                
+                // Fallback: Emergency Archive if resolution delay > 10m
+                if (now > pos.slotEnd + 600000) {
+                    console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug} (Expired)`);
+                    positions.splice(i, 1);
+                    changed = true;
+                }
+            } catch (err) {}
+        }
+        if (changed) saveActivePositions(positions);
+    } catch (e) {}
+}
