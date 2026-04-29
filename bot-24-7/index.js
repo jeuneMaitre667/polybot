@@ -1052,7 +1052,12 @@ async function mainLoop() {
         // Effective price per unit = price * (1 + 0.036 * (1 - price))
         const theta = (globalFeeRate / 0.5) || 0.072; // Recover raw feeRate from SL percentage
         const effectivePrice = safePrice * (1 + (theta * (1 - safePrice)));
-        const safeQty = Math.floor(tradeAmountUsd / effectivePrice);
+        // v49.1.9: Enforcement of Polymarket V2 Minimum Order Size (5 contracts)
+        let safeQty = Math.floor(tradeAmountUsd / effectivePrice);
+        if (safeQty < 5) {
+            console.log(`[Engine] 🛡️🛰️⚓ Upscaling size from ${safeQty} to 5 (V2 Minimum Requirement)`);
+            safeQty = 5;
+        }
 
         if (safeQty <= 0) {
             console.warn(`[Engine] Skip: Amount too low after fees to purchase even 1 contract.`);
@@ -1335,27 +1340,22 @@ async function performanceLoop() {
             const pos = positions[i];
             if (pos.resolved || pos.redeemed) continue;
 
-            // v49.1.6: Wait 55s before checking resolution (Polymarket lag optimization)
+            // v49.1.9: Query MARKET status instead of EVENT for faster/more reliable resolution detection
             if (pos.slotEnd && (now > pos.slotEnd + 55000)) { 
-                const url = `https://gamma-api.polymarket.com/events?slug=${pos.slug}&closed=true`;
+                const url = `https://gamma-api.polymarket.com/markets?slug=${pos.slug}`;
                 const res = await axios.get(url, { httpsAgent: null }).catch(() => null);
                 
                 if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
-                    const event = res.data[0];
+                    const market = res.data[0];
                     
-                    if (event.closed) {
+                    if (market.resolved) {
                         console.log(`[Sentinel] 🏁 Resolution Found for ${pos.slug}`);
-                        const market = event.markets.find(m => 
-                            m.conditionId === pos.conditionId || 
-                            (m.clobTokenIds && (m.clobTokenIds.includes(pos.tokenId) || m.clobTokenIds.includes(pos.tokenIdYes) || m.clobTokenIds.includes(pos.tokenIdNo)))
-                        );
                         
-                        if (market && market.closed) {
-                            // V2 API compatibility: winningOutcomeIndex is deprecated, use outcomePrices
-                            let winningIndex = parseInt(market.winningOutcomeIndex);
-                            if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
-                                winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
-                            }
+                        // V2 API compatibility: winningOutcomeIndex is sometimes null, use outcomePrices
+                        let winningIndex = parseInt(market.winningOutcomeIndex);
+                        if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
+                            winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00" || p === "1.0" || p === 1);
+                        }
                             
                             // v49.1.5: Resolution Guard. If no winner found yet, do NOT resolve/archive.
                             if (winningIndex === -1 && !market.resolved) {
