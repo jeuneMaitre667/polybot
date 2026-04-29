@@ -1222,7 +1222,7 @@ async function mainLoop() {
             }
 
             // v37.0.0: Launch Strike-Aware Stop Loss Sentinel
-            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10"); // Locked at 10%
+            const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.14"); // Locked at 14%
             SLSentinel.startMonitoring(
                 String(tokenId), 
                 executionPrice, 
@@ -1318,7 +1318,7 @@ async function performanceLoop() {
                         const mInfo = await clobClient.getMarket(pos.conditionId);
                         const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
                         const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
-                        const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.10");
+                        const stopLossPct = parseFloat(process.env.STOP_LOSS_PCT || "0.14");
 
                         // 1. STOP LOSS CHECK (Active Monitoring)
                         if (pnlPct <= -stopLossPct) {
