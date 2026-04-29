@@ -1,3 +1,4 @@
+/**
  * Master Controller (v2025 MODULAR - v50.0.0 HYPER-REACTIVE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
