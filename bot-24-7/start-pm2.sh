@@ -8,8 +8,8 @@ sudo npm install -g pm2
 
 echo ""
 echo "=== Démarrage du bot ==="
-pm2 delete polymarket-bot 2>/dev/null || true
-pm2 start index.js --name polymarket-bot
+pm2 delete poly-engine 2>/dev/null || true
+pm2 start index.js --name poly-engine
 
 echo ""
 echo "=== Sauvegarde et démarrage automatique au boot ==="
@@ -20,5 +20,5 @@ echo ""
 echo "=== Terminé. Le bot tourne en arrière-plan."
 echo "Quand tu auras ajouté ta PRIVATE_KEY dans .env :"
 echo "  nano ~/bot-24-7/.env"
-echo "  pm2 restart polymarket-bot"
-echo "Logs : pm2 logs polymarket-bot"
+echo "  pm2 restart poly-engine"
+echo "Logs : pm2 logs poly-engine"

@@ -167,7 +167,7 @@ export function shouldSkipTradeTiming(s) {
 /**
  * Calcule la mise optimale en fonction de la profondeur du carnet.
  */
-export function calculateOptimalStake(asset, side, book, targetPrice) {
+export function calculateOptimalStake(asset, side, book, targetPrice, feeRate = null) {
     if (!book || !book.asks || book.asks.length === 0) return 0;
     
     let totalAvailableUsdc = 0;
@@ -180,8 +180,9 @@ export function calculateOptimalStake(asset, side, book, targetPrice) {
         totalAvailableUsdc += (p * size);
     }
 
+    const currentFeeRate = feeRate || POLYMARKET_FEE_RATE;
     const optimal = totalAvailableUsdc * 0.8;
-    const netStake = optimal / (1 + (POLYMARKET_FEE_RATE * FEE_SAFETY_BUFFER));
+    const netStake = optimal / (1 + (currentFeeRate * FEE_SAFETY_BUFFER));
     return Math.floor(netStake * 100) / 100;
 }
 

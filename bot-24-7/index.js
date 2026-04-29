@@ -98,6 +98,9 @@ const RELAYER_URL = "https://relayer-v2.polymarket.com";
 let lastExecutedSlot = 0; // Track slot to avoid spamming multiple triggers per 5m
 let lastAlertedSlot = 0; // v34.3.6: Dedicated alert de-duplicator
 let activePosition = null;
+let lastFeeRefreshTime = 0; // v49.1.0: Fee rotation tracker
+let globalFeeRate = 0.036; // Default fallback (v2: ~3.6% feeRate => 1.8% at p=0.5)
+const FEE_REFRESH_INTERVAL_MS = 3600000; // Refresh once per hour (Protocol fees change rarely)
 let isResolving = false; // v33.0 Mutex lock for resolution logic
 let isReporting = false; // v34.0 Mutex lock for Telegram reporting
 let isMainLoopRunning = false; // v34.3.6: Global loop concurrency lock
@@ -307,7 +310,7 @@ async function ensureClobClient() {
 
             // Step 1: Create initial client for key derivation
             const tempClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
                 chain: 137,
                 signer: walletClient
             });
@@ -331,7 +334,7 @@ async function ensureClobClient() {
 
             // Step 2: Create fully authenticated client
             clobClient = new ClobClient({
-                host: process.env.CLOB_API_URL || 'https://clob.polymarket.com',
+                host: process.env.CLOB_API_URL || 'https://clob-v2.polymarket.com',
                 chain: 137,
                 signer: walletClient,
                 creds: apiCreds,
@@ -339,17 +342,8 @@ async function ensureClobClient() {
                 funderAddress: process.env.CLOB_FUNDER_ADDRESS
             });
             
-            console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation du solde de trading en cours...`);
-            try {
-                // v48.0.3: Call without args to avoid "Invalid asset type" 400 error
-                await clobClient.updateBalanceAllowance();
-                console.log(`[Self-Healing] 🛡️🛰️⚓ Synchronisation CLOB V2 réussie (Solde activé).`);
-            } catch (syncErr) {
-                // Non-blocking: ignore balance sync errors (400/401), trading still works
-                if (!syncErr.message?.includes('400') && !syncErr.message?.includes('Invalid')) {
-                    console.warn(`[Self-Healing] ⚠️ Échec sync solde : ${syncErr.message}`);
-                }
-            }
+            // v49.1.3: Removed legacy updateBalanceAllowance() (V2 incompatible)
+            console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized (V2-MIGRATED)`);
 
             console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }
@@ -584,6 +578,25 @@ async function reportingLoop() {
 
         if (sig) {
             try {
+                // v49.1.0: DYNAMIC PROTOCOL FEE SYNC (Zero-API cost)
+                const mkt = sig.markets ? sig.markets[0] : null;
+                if (mkt && mkt.feeSchedule) {
+                    const sched = mkt.feeSchedule;
+                    const baseRate = parseFloat(sched.rate);
+                    const exponent = parseInt(sched.exponent);
+                    const protocolFeeRate = baseRate * Math.pow(10, -exponent);
+                    
+                    // v49.1.2: Calculate effective PnL fee (relative % at p=0.5 for SL safety)
+                    // Formula: feeRate * (1-p) => 0.072 * 0.5 = 0.036 (3.6%)
+                    const effectivePnlFee = protocolFeeRate * 0.5; 
+                    
+                    if (effectivePnlFee !== globalFeeRate) {
+                        globalFeeRate = effectivePnlFee;
+                        RiskManager.setDynamicFees(globalFeeRate);
+                        if (Math.random() < 0.01) console.log(`[Protocol] 🛡️🛰️⚓ Fees Synced: ${(globalFeeRate * 100).toFixed(3)}% (Market: ${sig.slug})`);
+                    }
+                }
+
                 let bestBidUp = 0;
                 let bestBidDown = 0;
                 let priceUp = 0;
@@ -1032,7 +1045,7 @@ async function mainLoop() {
         // 2. Dynamic Fee Calculation (Polymarket v2026 Formula)
         // Fee = Theta * qty * price * (1 - price) | Theta Crypto approx 0.036 (1.8% peak)
         // Effective price per unit = price * (1 + 0.036 * (1 - price))
-        const theta = 0.036;
+        const theta = (globalFeeRate / 0.5) || 0.072; // Recover raw feeRate from SL percentage
         const effectivePrice = safePrice * (1 + (theta * (1 - safePrice)));
         const safeQty = Math.floor(tradeAmountUsd / effectivePrice);
 
@@ -1275,6 +1288,7 @@ async function performanceLoop() {
                 
                 if (sizeMb > 1.0) {
                     console.error(`[Sentinel] 🛡️⚠️ DIGEST ABORTED: orders.log is too large (${sizeMb.toFixed(2)}MB). Clear logs to resume reporting.`);
+
                     await sendTelegramAlert(`🛡️⚠️ *RAPPORT DESACTIVE* : Le fichier orders.log est trop volumineux (${sizeMb.toFixed(2)}Mo) et risque de faire planter le serveur. Pensez à le vider.`);
                     return;
                 }
@@ -1773,34 +1787,44 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v48.0: Smart Orderbook Exit (same behavior as simulation)
-                // Read the orderbook, find the exact sweep price, and exit at best available price
+                // v49.1.4: ULTRA-AGGRESSIVE EMERGENCY EXIT
                 let success = false;
-                const maxAttempts = 3; // 3 attempts with fresh orderbook reads
+                const maxAttempts = 5; 
+                let lastError = "";
                 
                 for (let attempt = 1; attempt <= maxAttempts; attempt++) {
                     try {
-                        // Fresh orderbook read on each attempt
                         const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
                         const bids = book?.bids || [];
                         
-                        if (bids.length === 0) {
-                            console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts}: Orderbook empty. Retrying in 500ms...`);
-                            if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 500));
+                        if (bids.length === 0 && attempt < 3) {
+                            console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts}: Orderbook empty. Retrying in 400ms...`);
+                            await new Promise(r => setTimeout(r, 400));
                             continue;
                         }
 
-                        // Calculate sweep price: the worst price level needed to fill our entire quantity
+                        // v49.1.4: Be increasingly aggressive on price
+                        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : info.currentPrice;
                         const sweepPrice = calculateSellSweepPrice(safeQty, bids);
-                        // Also get the best bid for logging
-                        const bestBid = parseFloat(bids[0].price);
                         
-                        // Use sweep price with a tiny 0.5% safety margin to ensure FOK fill
-                        const exitPrice = sweepPrice 
-                            ? Math.max(0.01, parseFloat((sweepPrice * 0.995).toFixed(4)))
-                            : Math.max(0.01, parseFloat((bestBid * 0.99).toFixed(4)));
+                        let exitPrice;
+                        let useFOK = (attempt <= 2); // Use FOK for first 2 attempts, then GTC to force fill
+
+                        if (attempt <= 2) {
+                            // Precise sweep for first attempts
+                            exitPrice = sweepPrice 
+                                ? Math.max(0.01, parseFloat((sweepPrice * 0.99).toFixed(4)))
+                                : Math.max(0.01, parseFloat((bestBid * 0.98).toFixed(4)));
+                        } else if (attempt <= 4) {
+                            // Aggressive discount
+                            exitPrice = Math.max(0.01, parseFloat((bestBid * 0.80).toFixed(4)));
+                        } else {
+                            // Last resort: Nuclear exit at floor price to match ANY bid
+                            exitPrice = 0.01;
+                            useFOK = false;
+                        }
                         
-                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | BestBid: $${bestBid} | Sweep: $${sweepPrice || 'N/A'} | Exit: $${exitPrice} | Qty: ${safeQty}`);
+                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | Mode: ${useFOK ? 'FOK' : 'GTC'} | Bid: $${bestBid} | Exit: $${exitPrice} | Qty: ${safeQty}`);
 
                         const response = await clobClient.createAndPostOrder(
                             {
@@ -1813,7 +1837,7 @@ async function executeEmergencyExit(info) {
                                 tickSize: emergencyTickSize,
                                 negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
                             },
-                            OrderType.FOK 
+                            useFOK ? OrderType.FOK : OrderType.GTC
                         );
 
                         if (response && response.orderID) {
@@ -1858,13 +1882,14 @@ async function executeEmergencyExit(info) {
                             break; // EXIT LOOP ON SUCCESS
                         }
                     } catch (attemptErr) {
-                        console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts} FAILED: ${attemptErr.message}`);
+                        lastError = attemptErr.message;
+                        console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts} FAILED: ${lastError}`);
                         if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 300));
                     }
                 }
 
                 if (!success) {
-                    throw new Error("All exit attempts failed after orderbook sweep. Falling back to next loop cycle.");
+                    throw new Error(`All exit attempts failed. Last error: ${lastError || 'Empty Orderbook'}`);
                 }
         } catch (err) {
             console.error(`[Emergency] 🛡️⚠️ SDK Exit Failed:`, err.message);

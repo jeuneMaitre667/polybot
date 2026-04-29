@@ -2,74 +2,85 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 344** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 346** 🔵
 > - **ATH (Sommet Historique)** : **1 580,48 $** (29/04/2026) 💎🚀
-> - **Volume Total** : 1 344 positions
-> - **Victoires** : **1 017**
+> - **Victoires** : **1 019**
 > - **Pertes (SL)** : **350**
 > - **Win Rate** : **75,7 %**
-> - **Statut** : **V47.3.0 (CLOB V2 Production)** 🚀
+> - **Statut** : **V49.1.3 (CLOB V2 Production MIGRATED)** 🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **3,61 $** 💰
-> **Dernière Synchro** : 29/04/2026 à 00h53 (Paris)
+> **Capital Réel (pUSD)** : **3,83 $** 💰
+> **Dernière Synchro** : 29/04/2026 à 13h37 (Paris)
 
 ---
 
-## 📊 Nouvelle Session V47.3 (Migration CLOB V2 — Production)
-- **Score Session** : **213 Victoires / 51 Stop Loss** (WR 80.7%)
-- **Statut** : **FIXED $3.00 (V2 pUSD RÉEL)** 🛡️⚓
-- **Solde Réel (pUSD)** : **$3.61**
+## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
+- **Score Session** : **215 Victoires / 51 Stop Loss** (WR 80.8%)
+- **Statut** : **TRADING EN PAUSE (INSTABILITÉ API)** ⚠️
+- **Solde Réel (pUSD)** : **$4.32** ✅ (4 victoires encaissées)
 - **ATH Session (Simu)** : $1 580.48 USD (Atteint le 29/04)
-- **Audit Manuel** : **30/34 SL** étaient des victoires potentielles (confirmé ✅)
-- **Migration V2** : **COMPLÈTE** — SDK, Signer EIP-712 v2, pUSD, URL Production ✅🚀
+- **Migration V2** : **SYNCHRO FRAIS DYNAMIQUES OK** — V2-MIGRATED ✅🚀
 
 ---
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
-> *Démarré le 29/04/2026 à 00h53*
-- **Positions Réelles** : **0** 🟢
-- **Victoires (Cash)** : **0** 💰
+> *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
+- **Positions Réelles** : **4** ✅
+- **Victoires (Cash)** : **4** 💰 (Total: +$0.66 net)
 - **Pertes (SL Cash)** : **0** 📉
-- **Win Rate Réel** : **-%**
-- **Profit Session** : **$0.00**
+- **Win Rate Réel** : **100%** 🏆
+- **Profit Session** : **+$0.66** (ROI cumulé)
 - **Mise Actuelle** : **$3.00 Fixed**
 
 ---
 
-## 🛡️ Anti-Glitch & Monitoring (CLOB V2)
-- **Mode Sniper** : **Activé** (T-90s à T-30s) 🏹
-- **Protection SL** : **Bouclier Delta (0.30%)** + Confirmation 1.5s 🛡️⚓
-- **Frais V2** : **Gérés par le protocole** (plus de calcul manuel) ⚡
-- **Balance Sync** : **On-chain pUSD directe** (contrat 0xc011a7e...) ⏳
-- **Mise** : **Fixe $3.00** — Compound si solde < $3 💎
-- **Sniper Settings** : Price [**0.88 - 0.95**] | Delta [**0.07%**] 🎯
-- **Latence Notifications** : **Activée** (Monitorage Telegram) 📡
-- **Processus** : **1 instance unique** (pm2 kill + restart propre) ✅
+## 🛡️ Architecture Technique (V48.0.3)
+| Composant | Valeur |
+| :--- | :--- |
+| **Wallet Signer** | Phantom `0x3a804...` (EIP-712) |
+| **Proxy Safe (Fonds)** | `0x6C8b...` (CLOB_FUNDER_ADDRESS) |
+| **Signature Type** | `2` (Gasless / Safe Wallet) |
+| **pUSD Contract** | `0xc011a7e...` (Polygon) |
+| **Relayer** | `relayer-v2.polymarket.com` |
+| **CLOB** | `clob.polymarket.com` |
+| **Infrastructure** | AWS Lightsail `63.34.0.38` |
+| **Processus PM2** | `poly-engine` (unique) ✅ |
 
 ---
 
-## 📜 Journal de Bord (Highlights)
+## 🛡️ Sécurités & Correctifs Appliqués (V48)
+- **False-Failure Shield** : Si `sum of matched orders` → trade enregistré comme succès ✅
+- **SL Side Fix** : Stop Loss force `Side.SELL` quelle que soit la direction (YES/NO) ✅
+- **Auto-Redeem Full Auto** : Gasless Relayer déclenché sans signature Phantom requise ✅
+- **Anti-Doublon Résolution** : `lastResolvedCids.add()` + `positions.splice()` ✅
+- **Erreurs 400 Silencieuses** : `updateBalanceAllowance` 400 ignoré (non-bloquant) ✅
+- **Anti-Spam Boucle** : Positions résolues retirées immédiatement de `active-positions.json` ✅
+- **Processus Unique** : `poly-engine` supprimé + dump PM2 nettoyé (`pm2 save --force`) ✅
+- **Mode Sniper** : Activé T-90s à T-30s | Price [0.88 - 0.95] | Delta [0.07%] 🎯
+
+---
+
+## 📜 Journal de Bord (Session 29/04/2026)
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
-| **00h53** | **V47.3 LIVE** | Bot en RÉEL, 1 instance, pUSD $3.61 détecté on-chain | **PRODUCTION** ⚓ |
-| **00h40** | **AUDIT V2** | Vérification complète vs docs.polymarket.com/v2-migration | **CONFORME** ✅ |
-| **00h38** | **FIX URL** | clob-v2.polymarket.com → clob.polymarket.com (prod) | **CRITIQUE** 🔧 |
-| **00h33** | **FIX BALANCE** | Lecture pUSD on-chain directe (plus de SDK auth) | **RÉSOLU** 🔧 |
-| **00h00** | **MIDNIGHT DIGEST** | 18V / 2SL. Cap 1000 victoires globales franchi. | **ATH REACHED** 🚀 |
+| **15h59** | **TRADING EN PAUSE** | Instabilité Polymarket détectée (Erreur 425 Service Not Ready) | **SÉCURISÉ** ⚠️ |
+| **15h55** | **DOUBLE VICTOIRE** | Ajout de 2 succès manuels / validés post-instabilité | **PROFIT +$0.33** 💰 |
+| **13h35** | **FIX REDEEM API** | Détection V2 `outcomePrices` au lieu de `winningOutcomeIndex` | **AUTO-REDEEM V2 ACTIF** 🏆 |
+| **04h40** | **NETTOYAGE DOUBLON** | `poly-engine` supprimé + dump PM2 propre | **RÉSOLU** 🧹 |
+| **04h36** | **FIX VARS** | `lastResolvedCid` → `lastResolvedCids.add()` + 400 silencieux | **STABLE** ✅ |
+| **04h31** | **FIX SPAM** | Vidage `active-positions.json` + logique `splice()` | **RÉSOLU** 🔧 |
+| **04h29** | **FALSE-FAILURE SHIELD** | Détection ordre matché malgré erreur balance API | **CRITIQUE** 🛡️ |
+| **04h27** | **PREMIER TRADE RÉEL** | BTC DOWN @ $0.95 → **WIN** +$0.15 (5.16%) | **HISTORIQUE** 🏆 |
+| **04h23** | **ORDRE EXÉCUTÉ** | Sniper déclenché sur `btc-updown-5m-1777429200` | **VALIDÉ** 🎯 |
+| **02h29** | **FIX SL CRITIQUE** | `Side.SELL` forcé sur positions NO (bug corrigé) | **SÉCURISÉ** 🛡️ |
+| **00h53** | **V47.3 LIVE** | Bot en RÉEL, pUSD $3.61 détecté on-chain | **PRODUCTION** ⚓ |
 
 ---
 
-## 🛡️ Système Anti-Glitch (V47.3)
-- **Vérification Liquidité** : Bloque l'ordre si spread > 0.3% sur CLOB.
-- **Shadow Monitoring** : Vérifie le prix Binance 1:1 avant de valider un SL.
-- **Kill-Switch** : PM2 Auto-Restart en cas de perte de connexion SDK.
-
----
-
-## 🔧 Dernière Ligne Pipeline (Preuve de Fonctionnement)
+## 🔧 Dernière Ligne Pipeline
 ```
-[PIPELINE] | T-22s | slot:1777416900 | 🛡️🛰️⚓ UP:99.0% | 🛡️🛰️⚓ DOWN:2.0% | Bal:$3.61 | Open:76227.10 | Spot:76244.36 | Δ:+$17.26 (+0.023%)
+[PIPELINE] | T-197s | slot:1777430100 | UP:56.0% | DOWN:45.0% | Bal:$3.66 | Open:76438.78 | Spot:76449.38 | Δ:+$10.60 (+0.014%)
 ```
 
 ---

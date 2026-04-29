@@ -55,7 +55,7 @@ Puis en SSH sur Lightsail :
 ~/bot-24-7/redeploy.sh
 ```
 
-Le script fait : `git pull` → copie du code dans `~/bot-24-7` (en gardant ton `.env`) → `npm install` → `pm2 restart polymarket-bot`.
+Le script fait : `git pull` → copie du code dans `~/bot-24-7` (en gardant ton `.env`) → `npm install` → `pm2 restart poly-engine --update-env`.
 
 ---
 

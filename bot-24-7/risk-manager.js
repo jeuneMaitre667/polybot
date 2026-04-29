@@ -8,6 +8,12 @@
 const FIXED_STOP_LOSS = 0.15; // 15%
 const CONFIRMATION_DELTA_PCT = 0.3; // 0.3% underlying gain blocks SL
 
+let dynamicFeeRate = 0.036; // Default fallback (v2: ~3.6% feeRate => 1.8% at p=0.5)
+
+export function setDynamicFees(rate) {
+    if (rate && rate > 0) dynamicFeeRate = rate;
+}
+
 export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, entryAssetPrice, currentAssetPrice, strikePrice) {
     if (!buyPrice || !currentBid) return false;
     
@@ -17,8 +23,9 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
     const strike = parseFloat(strikePrice);
 
     // 1. Calculate PnL on the Ticket
-    const entryFee = 0.018;
-    const exitFee = 0.018;
+    // v49.1.0: Using Dynamic Protocol Fees
+    const entryFee = dynamicFeeRate;
+    const exitFee = dynamicFeeRate;
     const effectiveEntry = bPrice * (1 + entryFee);
     const effectiveExit = cBid * (1 - exitFee);
     const netPnlPct = (effectiveExit - effectiveEntry) / effectiveEntry;
