@@ -1,6 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.8.0 HYPER-SHIELD)
- * Patch: Anti-Spam Control for Skip/Pulse logs.
+ * Master Controller (v2025 MODULAR - v49.9.0 TURBO-STREAM)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -47,6 +46,7 @@ import { getStrike, getBinanceStrike } from './src/core/strike-manager.js';
 import * as RiskManager from './risk-manager.js';
 import * as CollateralManager from './collateral-manager.js';
 import * as SLSentinel from './sl-sentinel.js';
+import BinanceWS from './binance-ws.js'; // v49.9.0: Ultra-low latency stream
 import * as Analytics from './analytics-engine.js';
 import { getChainlinkPrice, getChainlinkPriceCached } from './chainlink-price.js';
 import { sendTelegramAlert, telegramTradeAlertsEnabled, telegramMiddayDigestEnabled } from './telegramAlerts.js';
@@ -402,7 +402,10 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v49.8.1 SPREAD-AGNOSTIC ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v49.9.0 TURBO-STREAM ONLINE ===");
+    
+    // v49.9.0: Activate Binance Real-Time Stream
+    BinanceWS.start();
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
@@ -468,9 +471,24 @@ async function getUnifiedMarketState(asset = 'BTC') {
     const binanceSpotUrl = `https://api.binance.com/api/v3/ticker/price?symbol=${binanceSignalSymbol}`;
     const binanceKlinesUrl = `https://api.binance.com/api/v3/klines?symbol=${binanceSignalSymbol}`;
     
-    // 1. Fetch Binance Spot (Current)
-    const spotRes = await axios.get(binanceSpotUrl, { timeout: 5000, httpsAgent: null }).catch(() => null);
-    const bSpot = (spotRes && spotRes.data && spotRes.data.price) ? parseFloat(spotRes.data.price) : (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+    // 1. Fetch Binance Spot (Optimized v49.9.0)
+    let bSpot = 0;
+    let source = 'WS';
+
+    if (BinanceWS.isReady()) {
+        bSpot = BinanceWS.getPrice();
+    } else {
+        // Fallback to Polling if WS is down
+        try {
+            const bResp = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', { timeout: 2000 });
+            bSpot = parseFloat(bResp.data.price);
+            source = 'POLL';
+        } catch (e) {
+            console.error('[MarketState] Binance Poll Error:', e.message);
+        }
+    }
+
+    if (!bSpot) bSpot = (memoryHealth.dashboardMarketView?.binanceSpot || 0);
     
     // v35.0.0: Global export for SLSentinel & RiskManager
     global.lastBinanceSpot = bSpot;
