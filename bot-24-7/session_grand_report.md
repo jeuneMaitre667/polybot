@@ -31,6 +31,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Win Rate Réel** : **100%** 🏆
 - **Profit Session** : **+$0.66** (ROI cumulé)
 - **Mise Actuelle** : **$3.00 Fixed**
+- **Capital de Départ** : **$3.66** (Initial Deposit)
 
 ---
 
