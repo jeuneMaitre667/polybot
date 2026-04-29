@@ -2,22 +2,22 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 348** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 350** 🔵
 > - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 021**
-> - **Pertes (SL)** : **350**
-> - **Win Rate** : **75,8 %**
+> - **Victoires** : **1 022**
+> - **Pertes (SL)** : **351**
+> - **Win Rate** : **75,7 %**
 > - **Statut** : **V49.4.0 (SHIELD + 1HZ MONITOR)** 🚀
-> **Statut Actuel** : `PAUSE MANUELLE` ⚠️ (Attente réactivation)
-> **Capital Réel (pUSD)** : **4,74 $** 💰
-> **Dernière Synchro** : 29/04/2026 à 23h10 (Paris)
+> **Statut Actuel** : `Trading RÉEL 24/7` 🤖
+> **Capital Réel (pUSD)** : **2,50 $** 💰
+> **Dernière Synchro** : 29/04/2026 à 23h14 (Paris)
 
 ---
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
-- **Score Session** : **217 Victoires / 51 Stop Loss** (WR 80.9%)
-- **Statut** : **PAUSE (V49.4.0 - ULTRA-FAST 1HZ) ⚠️**
-- **Solde Réel (pUSD)** : **$4.74** ✅ (6 victoires encaissées)
+- **Score Session** : **218 Victoires / 52 Stop Loss** (WR 80.7%)
+- **Statut** : **ACTIF (V49.4.0 - ULTRA-FAST 1HZ) ✅**
+- **Solde Réel (pUSD)** : **$2.50** 📉 (7 victoires / 1 perte)
 - **ATH Session (Simu)** : $1 580.63 USD (Atteint le 29/04)
 - **Migration V2** : **1HZ SL + DELTA SHIELD** — V2-ELITE ✅🚀
 
@@ -25,11 +25,11 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **6** ✅
-- **Victoires (Cash)** : **6** 💰 (Total: +$1.22 net)
-- **Pertes (SL Cash)** : **0** 📉
-- **Win Rate Réel** : **100%** 🏆
-- **Profit Session** : **+$1.22** (ROI cumulé)
+- **Positions Réelles** : **8** ✅
+- **Victoires (Cash)** : **7** 💰
+- **Pertes (SL Cash)** : **1** 📉 (Échec SL v49.2)
+- **Win Rate Réel** : **87.5%** 🏆
+- **Profit Session** : **-$1.02** (Impact perte non-stoppée)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
@@ -65,6 +65,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **23h12** | **PERTE RÉELLE (7-1)** | Échec SL (Ancienne version) | **PNL -$2.24** 📉 |
 | **23h10** | **UPGRADE SL 1HZ** | Fréquence 1s + Bouclier Delta (Anti-Glitch) activé | **ELITE (v49.4.0)** 🛡️ |
 | **23h05** | **FIX SL CRITIQUE** | Intégration monitoring prix actif (10s) à 14% dans Sentinel | **STABLE (v49.3.0)** 🛡️ |
 | **17h15** | **VICTOIRE RÉELLE (6/6)** | BTC DOWN @ $0.90 -> $1.00 (Redeem Auto) | **PROFIT +$0.28** 🏆 |

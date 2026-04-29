@@ -6,7 +6,7 @@
  */
 
 const FIXED_STOP_LOSS = 0.14; // 14%
-const CONFIRMATION_DELTA_PCT = 0.3; // 0.3% underlying gain blocks SL
+const CONFIRMATION_DELTA_PCT = 0.07; // 0.07% underlying gain blocks SL
 
 let dynamicFeeRate = 0.036; // Default fallback (v2: ~3.6% feeRate => 1.8% at p=0.5)
 

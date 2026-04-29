@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v49.4.0 SHIELD+1HZ)
+ * Master Controller (v2025 MODULAR - v49.5.0 BID-SHIELD)
  * Patch: Anti-Spam Control for Skip/Pulse logs.
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
@@ -1313,19 +1313,35 @@ async function performanceLoop() {
                     const pos = positions[i];
                     if (pos.resolved || pos.redeemed) continue;
 
-                    // v49.4.0: UNIFIED MONITORING (SL + DELTA SHIELD + EARLY EXIT)
+                    // v49.5.0: ROBUST MONITORING (TOKEN_ID MATCH + BID-BASED SL)
                     try {
-                        const mInfo = await clobClient.getMarket(pos.conditionId);
-                        const currentPrice = pos.side === 'YES' ? parseFloat(mInfo.tokens[0].price) : parseFloat(mInfo.tokens[1].price);
+                        // 1. Fetch Real-time Depth for SL Check
+                        const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
+                        const bids = book?.bids || [];
+                        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
+                        
+                        // Fallback to Market Price only if Book is thin (for analytics)
+                        let currentPrice = bestBid;
+                        if (currentPrice === 0) {
+                            const mInfo = await clobClient.getMarket(pos.conditionId);
+                            const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
+                            currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
+                        }
+
+                        if (currentPrice === 0) {
+                            console.warn(`[Sentinel] ⚠️ Price unavailable for ${pos.slug}. Skipping loop.`);
+                            continue;
+                        }
                         
                         // Fetch fresh Spot price for Delta Shield
                         const mv = await getUnifiedMarketState('BTC').catch(() => null);
                         const bSpot = mv ? mv.bSpot : 0;
 
-                        // 1. STOP LOSS CHECK (With Delta Shield Confirmation)
-                        const shouldExit = RiskManager.shouldTriggerStopLoss(
+                        // 2. STOP LOSS CHECK (With Delta Shield Confirmation)
+                        // Trigger SL only if we HAVE liquidity (bestBid > 0) to avoid ghost exits
+                        const shouldExit = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
                             pos.buyPrice,
-                            currentPrice, // Treat current price as Bid for SL calculation
+                            bestBid,
                             currentPrice,
                             pos.side,
                             pos.entryAssetPrice,
@@ -1335,7 +1351,7 @@ async function performanceLoop() {
 
                         if (shouldExit) {
                             const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
-                            console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Price: $${currentPrice} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+                            console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Bid: $${bestBid} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
                             await executeEmergencyExit({
                                 tokenId: pos.tokenId,
                                 currentPrice: currentPrice,
@@ -1347,7 +1363,7 @@ async function performanceLoop() {
                             continue;
                         }
 
-                        // 2. EARLY EXIT STRATEGY (T-10s)
+                        // 3. EARLY EXIT STRATEGY (T-10s)
                         const timeUntilEnd = pos.slotEnd - now;
                         if (timeUntilEnd <= 10000 && timeUntilEnd > -300000) {
                             console.log(`[Sentinel] 🚀 Early Exit Triggered for ${pos.slug} (T-${Math.round(timeUntilEnd/1000)}s). Selling...`);
