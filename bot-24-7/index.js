@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️🛰️⚓ SNIPER BOT: v49.7.0 HYPER-SHIELD ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v49.8.0 SPREAD-AGNOSTIC ONLINE ===");
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
