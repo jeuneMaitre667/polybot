@@ -1330,7 +1330,11 @@ async function performanceLoop() {
                         );
                         
                         if (market && market.closed) {
-                            const winningIndex = parseInt(market.winningOutcomeIndex);
+                            // V2 API compatibility: winningOutcomeIndex is deprecated, use outcomePrices
+                            let winningIndex = parseInt(market.winningOutcomeIndex);
+                            if (isNaN(winningIndex) && market.outcomePrices && Array.isArray(market.outcomePrices)) {
+                                winningIndex = market.outcomePrices.findIndex(p => p === "1" || p === "1.00");
+                            }
                             let isWin = false;
 
                             if (winningIndex === 0 && pos.side === 'YES') isWin = true;
