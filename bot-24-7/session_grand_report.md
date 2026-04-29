@@ -16,7 +16,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 📊 Session V49 (Production RÉEL — CLOB V2 Stabilisée)
 - **Score Session** : **215 Victoires / 51 Stop Loss** (WR 80.8%)
-- **Statut** : **TRADING EN PAUSE (INSTABILITÉ API)** ⚠️
+- **Statut** : **ACTIF (V49.1.5 - SL AGGRESSIF + FIX REDEEM) ✅**
 - **Solde Réel (pUSD)** : **$4.32** ✅ (4 victoires encaissées)
 - **ATH Session (Simu)** : $1 580.48 USD (Atteint le 29/04)
 - **Migration V2** : **SYNCHRO FRAIS DYNAMIQUES OK** — V2-MIGRATED ✅🚀
