@@ -34,21 +34,24 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
-## 🛡️ Architecture Technique (V50.1.0)
+## 🛡️ Architecture Technique (V50.4.1)
 | Composant | Valeur |
 | :--- | :--- |
-| **Price Feed** | **Binance WebSocket (TURBO)** |
+| **Price Feed** | **Binance WebSocket (ULTRA-TURBO)** |
 | **Monitoring SL/TP** | **Mode Intégré (20Hz)** |
 | **Filtre Glitch** | **Absurdity Filter < $0.10** |
-| **Confirmation SL** | **500ms Persistence** |
+| **Confirmation SL** | **500ms + Ghost-Decision** 👻 |
+| **Delta Shield** | **0.06% Threshold (Strict)** ⚖️ |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v50.1.0) ✅ |
+| **Processus PM2** | `poly-engine` (v50.4.1) ✅ |
 
 ---
 
-## 🛡️ Sécurités & Correctifs Appliqués (V50.1)
-- **Glitch-Proof (v50.1.0)** : Ajout d'une confirmation de 500ms et d'un filtre sur les prix aberrants pour éviter les faux SL ✅🛡️
-- **Hyper-Reactive (v50.0.0)** : Monitoring des positions intégré au cycle principal (~20 checks/sec) ✅⚡
+## 🛡️ Sécurités & Correctifs Appliqués (V50.4)
+- **Ghost-Decision (v50.4.0)** : Déclenchement du SL sur prix théorique (Gamma) pour éviter le gel en cas de carnet vide ✅👻
+- **Delta-Sensitive (v50.4.1)** : Durcissement du bouclier Bitcoin à 0,06% pour des sorties plus proches du seuil de -14% ✅⚖️
+- **Liquidity Shield (v50.2.3)** : Blocage des boucles de vente infinies sur les marchés expirés (T=0) ✅🛡️
+- **Glitch-Proof (v50.1.0)** : Confirmation de 500ms pour éliminer 90% des faux SL de simulation ✅🛡️
 
 ---
 
@@ -56,8 +59,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **12h57** | **UPGRADE v50.4.1** | Activation Delta 0.06% + Ghost Decision | **READY 🛡️⚡** |
+| **12h24** | **CRASH LIQUIDITÉ** | Carnet vide sur chute Polymarket | **SL (-$3.81)** 📉 |
+| **12h10** | **MISE BOOST 4$** | Augmentation de la mise fixe à 4,00 $ | **AGRESSIF 🚀** |
 | **11h44** | **MAINTENANCE** | Bot mis en pause pour corrections | **PAUSE 🛑** |
-| **02h08** | **UPGRADE GLITCH-PROOF** | Filtre absurdité + Confirmation 500ms | **STABLE (v50.1.0)** 🛡️ |
 
 ---
 
