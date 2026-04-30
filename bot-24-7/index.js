@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.1 ULTRA-SENSITIVE)
+ * Master Controller (v2025 MODULAR - v50.4.2 LIQUIDITY-PUMP)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1494,11 +1494,11 @@ async function executeEmergencyExit(info) {
                         let exitPrice;
                         let useFOK = (attempt <= 2); // Use FOK for first 2 attempts, then GTC to force fill
 
-                        if (attempt <= 2) {
-                            // Precise sweep for first attempts
+                        if (attempt === 1) {
+                            // v50.4.2: If bestBid is 0, force 0.01 immediately to avoid price=0 error
                             exitPrice = sweepPrice 
                                 ? Math.max(0.01, parseFloat((sweepPrice * 0.99).toFixed(4)))
-                                : Math.max(0.01, parseFloat((bestBid * 0.98).toFixed(4)));
+                                : (bestBid > 0 ? Math.max(0.01, parseFloat((bestBid * 0.98).toFixed(4))) : 0.01);
                         } else if (attempt <= 4) {
                             // Aggressive discount
                             exitPrice = Math.max(0.01, parseFloat((bestBid * 0.80).toFixed(4)));
