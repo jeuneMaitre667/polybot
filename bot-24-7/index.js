@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.3 BALANCED-SHIELD)
+ * Master Controller (v2025 MODULAR - v50.4.5 HYPER-TP)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1646,11 +1646,20 @@ async function monitorPositionsFast(mv) {
                 
                 let currentPrice = bestBid;
                 if (currentPrice === 0) {
-                    const mInfo = await clobClient.getMarket(pos.conditionId);
-                    const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
-                    currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
+                    // v50.4.5: If book is empty, use the provided MarketView price (Gamma) 
+                    // to ensure TP/SL can still trigger.
+                    currentPrice = (mv && mv.gammaPrice) ? mv.gammaPrice : 0;
                 }
 
+                if (currentPrice === 0) {
+                     // Last resort: fetch from SDK
+                     try {
+                        const mInfo = await clobClient.getMarket(pos.conditionId);
+                        const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
+                        currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
+                     } catch (e) { }
+                }
+                
                 if (currentPrice === 0) continue;
 
                 // 2. STOP LOSS CHECK (v50.4.0: GHOST-DECISION - Decision on Gamma/Theoretical price)
