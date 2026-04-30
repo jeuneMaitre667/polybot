@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.3 BALANCE-AWARE)
+ * Master Controller (v2025 MODULAR - v50.5.5 REFERENCE-FIX)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1124,7 +1124,7 @@ async function mainLoop() {
                 );
 
                 // v50.5.3: Balance Shield (Avoid 400 errors if capital < min_order_size cost)
-                const currentBalance = await getClobBalance().catch(() => 0);
+                const currentBalance = userBalance || 0;
                 const totalCost = amount * finalPrice;
                 if (totalCost > currentBalance) {
                     console.log(`[Engine] 🛡️🛰️⚓ Trade Skipped: Balance insufficient for min_size ($${totalCost.toFixed(2)} > $${parseFloat(currentBalance).toFixed(2)})`);

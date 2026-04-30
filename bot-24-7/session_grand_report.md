@@ -7,7 +7,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 038**
 > - **Pertes (SL)** : **352**
 > - **Win Rate** : **74,7 %**
-> - **Statut** : **V50.5.4 (COLD-START + BALANCE-AWARE)** 🛡️🛰️⚓🚀
+> - **Statut** : **V50.5.5 (REFERENCE-FIX)** 🛡️🛰️⚓🚀
 > **Statut Actuel** : `PAUSE (Repos Utilisateur)` 🛑
 > **Capital Réel (pUSD)** : **4,10 $** 💰
 > **Dernière Synchro** : 30/04/2026 à 18h49 (Paris)
