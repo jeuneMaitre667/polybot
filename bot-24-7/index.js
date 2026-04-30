@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.5 HYPER-TP)
+ * Master Controller (v2025 MODULAR - v50.4.7 SAFE-MARGIN)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1489,8 +1489,9 @@ async function executeEmergencyExit(info) {
                         let exitPrice;
                         
                         if (bestBid > 0) {
-                            // Align with the carnet's best buyer
-                            exitPrice = parseFloat(bestBid.toFixed(4));
+                            // v50.4.7: Apply a $0.01 safety margin (slippage tolerance) 
+                            // to ensure we hit the buyer even if price moves slightly.
+                            exitPrice = parseFloat(Math.max(0.01, bestBid - 0.01).toFixed(4));
                         } else {
                             // Last resort: Nuclear exit at floor price to match ANY bid
                             exitPrice = 0.01;

@@ -7,7 +7,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 031**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,8 %**
-> - **Statut** : **V50.4.6 (STRICT-LIMIT + GTC-FORCE)** 🛡️⚖️🚀
+> - **Statut** : **V50.4.7 (SAFE-MARGIN + GTC-FORCE)** 🛡️🎯🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
 > **Capital Réel (pUSD)** : **4,97 $** 💰
 > **Dernière Synchro** : 30/04/2026 à 15h24 (Paris)
