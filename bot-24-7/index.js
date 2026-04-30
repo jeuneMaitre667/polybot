@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.6 SENTINEL-FIX)
+ * Master Controller (v2025 MODULAR - v50.5.7 FULL-V2-SHIELD)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -145,6 +145,34 @@ function updateStreak(isWin, profit = 0) {
 }
 
 const AUTO_STOP_TIME = null; // V2: Maintenance complete, no auto-stop needed
+
+// v50.5.7: V2 APPROVAL SHIELD
+async function ensureV2Approvals(client, wallet) {
+    try {
+        const exchange = client.getExchangeAddress();
+        const negRisk = client.getNegRiskExchangeAddress();
+        
+        const pusd = new ethers.Contract(PUSD_ADDRESS, [
+            "function allowance(address owner, address spender) view returns (uint256)",
+            "function approve(address spender, uint256 amount) returns (bool)"
+        ], wallet.connect(new ethers.providers.JsonRpcProvider(PRIMARY_RPC)));
+
+        for (const spender of [exchange, negRisk]) {
+            if (!spender) continue;
+            const allowance = await pusd.allowance(wallet.address, spender);
+            if (allowance.lt(ethers.utils.parseUnits("1000000", 6))) {
+                console.log(`[V2-Shield] 🛡️⚓ Approving ${spender} for pUSD...`);
+                const tx = await pusd.approve(spender, ethers.constants.MaxUint256);
+                await tx.wait();
+                console.log(`[V2-Shield] ✅ Approval successful for ${spender}`);
+            } else {
+                console.log(`[V2-Shield] 🛡️⚓ Allowance OK for ${spender}`);
+            }
+        }
+    } catch (err) {
+        console.warn(`[V2-Shield] 🛡️⚠️ Approval check failed:`, err.message);
+    }
+}
 
 /**
  * v22.8.0: Manual CLOB Header Generator
@@ -345,6 +373,9 @@ async function ensureClobClient() {
             
             // v49.1.3: Removed legacy updateBalanceAllowance() (V2 incompatible)
             console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized (V2-MIGRATED)`);
+            
+            // v50.5.7: ENSURE V2 APPROVALS (The "400 Allowance" Killer)
+            await ensureV2Approvals(clobClient, wallet);
 
             console.log(`[Self-Healing] 🛡️🛰️⚓ ClobClient V2 initialized with API credentials (DUBLIN-AXIOM PROTOCOL)`);
         }

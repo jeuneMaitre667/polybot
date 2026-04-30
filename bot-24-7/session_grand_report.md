@@ -7,7 +7,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 038**
 > - **Pertes (SL)** : **352**
 > - **Win Rate** : **74,7 %**
-> - **Statut** : **V50.5.6 (SENTINEL-FIX)** 🛡️🛰️⚓🚀
+> - **Statut** : **V50.5.7 (FULL-V2-SHIELD)** 🛡️🛰️⚓🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
 > **Capital Réel (pUSD)** : **4,10 $** 💰
 > **Dernière Synchro** : 30/04/2026 à 18h49 (Paris)
