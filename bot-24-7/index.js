@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.1.0 GLITCH-PROOF)
+ * Master Controller (v2025 MODULAR - v50.2.0 REAL-CRASH READY)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v50.1.0 GLITCH-PROOF ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v50.2.0 REAL-CRASH READY ONLINE ===");
     
     // v49.9.0: Activate Binance Real-Time Stream
     BinanceWS.start();
@@ -1651,13 +1651,10 @@ async function monitorPositionsFast(mv) {
 
                 if (currentPrice === 0) continue;
 
-                // 2. STOP LOSS CHECK (Glitch-Proof)
+                // 2. STOP LOSS CHECK (v50.2.0: Multi-Confirmation Timer)
                 const bSpot = mv ? mv.bSpot : (global.lastBinanceSpot || 0);
                 
-                // v50.1.0: Absurdity Filter (Ignore Bid < 0.10 if we bought > 0.50)
-                const isAbsurdBid = (bestBid > 0 && bestBid < 0.10 && pos.buyPrice > 0.50);
-                
-                const isViolated = !isAbsurdBid && (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
+                const isViolated = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
                     pos.buyPrice,
                     bestBid,
                     currentPrice,
@@ -1668,7 +1665,7 @@ async function monitorPositionsFast(mv) {
                 );
 
                 if (isViolated) {
-                    // v50.1.0: 500ms Confirmation Timer
+                    // v50.1.0: 500ms Confirmation Timer (Enough to skip 1ms empty book glitches)
                     const firstSeen = slConfirmations.get(pos.tokenId) || now;
                     if (!slConfirmations.has(pos.tokenId)) slConfirmations.set(pos.tokenId, now);
                     
