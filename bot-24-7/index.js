@@ -1694,7 +1694,9 @@ async function monitorPositionsFast(mv) {
                 // 3. INSTANT TAKE PROFIT / EARLY EXIT
                 const timeUntilEnd = pos.slotEnd - now;
                 const isInstantTP = currentPrice >= 0.99;
-                const isTimeExit = (timeUntilEnd <= 10000 && timeUntilEnd > -300000);
+                
+                // v50.2.3: Only try to sell BEFORE the slot ends. After T=0, it's too late to sell.
+                const isTimeExit = (timeUntilEnd <= 10000 && timeUntilEnd > 0);
 
                 if (isInstantTP || isTimeExit) {
                     const reason = isInstantTP ? "INSTANT_TP_99" : `EARLY_EXIT_T${Math.round(timeUntilEnd/1000)}s`;
@@ -1707,38 +1709,49 @@ async function monitorPositionsFast(mv) {
                         side: Side.SELL
                     });
 
-                    console.log(`[Sentinel] ✅ SOLD (${reason}): ${pos.slug} | Order: ${response.orderID}`);
+                    // v50.2.3: Check if order actually succeeded
+                    const orderID = response?.orderID || response?.id || null;
                     
-                    const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
-                    const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
-                    const pnlSign = pnlUsd >= 0 ? "+" : "";
-                    
-                    // v50.2.2: Fetch real balance for the alert
-                    const finalBal = await getClobBalance().catch(() => 0);
-                    
-                    await sendTelegramAlert(`${pnlUsd >= 0 ? '💰' : '📉'} *VENTE ${pnlUsd >= 0 ? 'PROFIT' : 'STOP LOSS'} (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
-                        `📦 *Market*: \`${pos.slug}\`\n` +
-                        `💵 *Prix*: $${currentPrice.toFixed(3)}\n` +
-                        `📈 *PnL*: ${pnlSign}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
-                        `🏦 *Solde*: **$${parseFloat(finalBal).toFixed(2)}**\n\n` +
-                        `🆔 *Order*: \n\`${response.orderID}\``);
+                    if (orderID) {
+                        console.log(`[Sentinel] ✅ SOLD (${reason}): ${pos.slug} | Order: ${orderID}`);
+                        
+                        const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
+                        const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
+                        const pnlSign = pnlUsd >= 0 ? "+" : "";
+                        
+                        const finalBal = await getClobBalance().catch(() => 0);
+                        
+                        await sendTelegramAlert(`${pnlUsd >= 0 ? '💰' : '📉'} *VENTE ${pnlUsd >= 0 ? 'PROFIT' : 'STOP LOSS'} (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
+                            `📦 *Market*: \`${pos.slug}\`\n` +
+                            `💵 *Prix*: $${currentPrice.toFixed(3)}\n` +
+                            `📈 *PnL*: ${pnlSign}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
+                            `🏦 *Solde*: **$${parseFloat(finalBal).toFixed(2)}**\n\n` +
+                            `🆔 *Order*: \n\`${orderID}\``);
 
-                    Analytics.recordTrade({
-                        asset: pos.asset || 'BTC',
-                        slug: pos.slug,
-                        isSimulated: !!pos.isSimulated,
-                        side: pos.side,
-                        entryPrice: pos.buyPrice,
-                        exitPrice: currentPrice,
-                        quantity: pos.amount,
-                        pnlUsd: pnlUsd,
-                        isWin: currentPrice > 0.5,
-                        note: reason
-                    });
-                    
-                    positions.splice(i, 1);
-                    changed = true;
-                    continue;
+                        Analytics.recordTrade({
+                            asset: pos.asset || 'BTC',
+                            slug: pos.slug,
+                            isSimulated: !!pos.isSimulated,
+                            side: pos.side,
+                            entryPrice: pos.buyPrice,
+                            exitPrice: currentPrice,
+                            quantity: pos.amount,
+                            pnlUsd: pnlUsd,
+                            isWin: currentPrice > 0.5,
+                            note: reason
+                        });
+                        
+                        positions.splice(i, 1);
+                        changed = true;
+                        continue;
+                    } else {
+                        console.warn(`[Sentinel] ⚠️ Order failed for ${pos.slug}:`, response);
+                        // If it failed because market is closed, archive it
+                        if (timeUntilEnd < 0) {
+                            positions.splice(i, 1);
+                            changed = true;
+                        }
+                    }
                 }
                 
                 // Fallback: Emergency Archive

@@ -7,8 +7,8 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 031**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,8 %**
-> - **Statut** : **V50.2.0 (REAL-CRASH READY + HYPER-REACTIVE)** 🛡️⚡
-> **Statut Actuel** : `PAUSED (Maintenance)` 🛑
+> - **Statut** : **V50.2.2 (TELEGRAM-LITE + HYPER-REACTIVE)** 💰⚡
+> **Statut Actuel** : `Trading RÉEL 24/7` 🤖
 > **Capital Réel (pUSD)** : **4,95 $** 💰
 > **Dernière Synchro** : 30/04/2026 à 11h44 (Paris)
 
@@ -16,7 +16,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
-- **Statut** : **EN PAUSE 🛑**
+- **Statut** : **ACTIF (v50.2.2 - TELEGRAM-LITE) ✅💰**
 - **Solde Réel (pUSD)** : **$4.95** ✅ (22 victoires / 1 perte)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
