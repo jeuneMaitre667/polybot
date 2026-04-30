@@ -62,7 +62,36 @@ export function initSession(initialBalance) {
 }
 
 
+
+let consecutiveLosses = 0;
+let tradingSuspended = false;
+const MAX_CONSECUTIVE_LOSSES = 2;
+const MIN_BALANCE_THRESHOLD = 3.50;
+
+export function recordTradeResult(isWin) {
+    if (isWin) {
+        consecutiveLosses = 0;
+    } else {
+        consecutiveLosses++;
+        if (consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+            tradingSuspended = true;
+            console.error(`[RiskManager] 🚨 CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses. Trading SUSPENDED.`);
+        }
+    }
+}
+
+export function isTradingSuspended(currentBalance) {
+    if (tradingSuspended) return true;
+    if (currentBalance !== null && currentBalance < MIN_BALANCE_THRESHOLD) {
+        console.error(`[RiskManager] 🚨 SAFETY STOP: Balance ($${currentBalance}) below threshold ($${MIN_BALANCE_THRESHOLD}).`);
+        tradingSuspended = true;
+        return true;
+    }
+    return false;
+}
+
 export function calculateTradeSize(balance) {
+    if (isTradingSuspended(balance)) return 0;
     const baseStake = 2.5;
     const finalStake = Math.min(baseStake, parseFloat(balance || 0));
     return finalStake;

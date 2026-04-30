@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.10 FULL-V2-SHIELD-FIX)
+ * Master Controller (v2025 MODULAR - v50.6.0 NIGHT-WATCH-FIX)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -132,6 +132,7 @@ try {
 } catch (e) {}
 
 function updateStreak(isWin, profit = 0) {
+    RiskManager.recordTradeResult(isWin); // v50.6.0: Hook Circuit Breaker
     if (isWin) {
         streakCount++;
         streakProfit += Math.max(0, profit);
@@ -862,7 +863,9 @@ async function mainLoop() {
             
             const hbBal = await updateVirtualBalance(0); // Force fresh check or return current
             const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : 0));
-            const engineStatus = (userBalance === null && !IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
+            let engineStatus = (userBalance === null && !IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
+            if (RiskManager.isTradingSuspended(currentBal)) engineStatus = "🚨 SUSPENDED (SAFETY) 🚨";
+            
             const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
                           `• Window: OPEN 🛡️🛰️⚓\n` +
                           `• Capital: $${(userBalance === null && !IS_SIMULATION_ENABLED) ? "---" : currentBal.toFixed(2)} 🛡️🛰️⚓\n` +
