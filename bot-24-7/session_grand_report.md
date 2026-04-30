@@ -9,14 +9,14 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Win Rate** : **75,8 %**
 > - **Statut** : **V50.4.4 (SAFE-RECOVERY + HYPER-REACTIVE)** 🛡️🔒🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **4,54 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 13h30 (Paris)
+> **Capital Réel (pUSD)** : **4,65 $** 💰
+> **Dernière Synchro** : 30/04/2026 à 14h17 (Paris)
 
 ---
 
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
-- **Solde Réel (pUSD)** : **$4.54** ✅ (40 victoires / 2 pertes)
+- **Solde Réel (pUSD)** : **$4.65** ✅ (41 victoires / 2 pertes)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
 
@@ -24,11 +24,11 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **42** ✅
-- **Victoires (Cash)** : **40** 💰
+- **Positions Réelles** : **43** ✅
+- **Victoires (Cash)** : **41** 💰
 - **Pertes (SL Cash)** : **2** 📉 (Delta Shield Sensibility v50.3.1)
-- **Win Rate Réel** : **95.2%** 🏆
-- **Profit Session** : **+$1.01** 🚀
+- **Win Rate Réel** : **95.3%** 🏆
+- **Profit Session** : **+$1.13** 🚀
 - **Mise Actuelle** : **$3.00 Fixed** (Mode Sécurité)
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
