@@ -56,14 +56,14 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $3.00 Stake Active.');
+    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $4.00 Stake Active.');
     console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v47.0.0 (Delta 0.3%) Active.');
 }
 
 export function calculateTradeSize(balance) {
-    // v47.1.0: Real Trading Transition. Fixed $3.00 stake.
-    // If balance < $3, we use the remaining amount (compound).
-    const baseStake = 3.0;
+    // v50.3.0: Boosted Stake to $4.00.
+    // If balance < $4, we use the remaining amount (compound).
+    const baseStake = 4.0;
     const finalStake = Math.min(baseStake, parseFloat(balance || 0));
     return finalStake;
 }

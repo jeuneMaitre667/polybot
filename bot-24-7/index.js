@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.2.2 TELEGRAM-LITE)
+ * Master Controller (v2025 MODULAR - v50.3.0 BOOST-MODE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v50.2.0 REAL-CRASH READY ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v50.3.0 BOOST-MODE ONLINE ===");
     
     // v49.9.0: Activate Binance Real-Time Stream
     BinanceWS.start();
