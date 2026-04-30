@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.0.0 HYPER-REACTIVE)
+ * Master Controller (v2025 MODULAR - v50.1.0 GLITCH-PROOF)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -402,7 +402,7 @@ async function validateGeoblockStatus() {
 
 // --- INITIALIZATION ---
 async function init() {
-    console.log("=== 🛡️⚓ SNIPER BOT: v50.0.0 HYPER-REACTIVE ONLINE ===");
+    console.log("=== 🛡️⚓ SNIPER BOT: v50.1.0 GLITCH-PROOF ONLINE ===");
     
     // v49.9.0: Activate Binance Real-Time Stream
     BinanceWS.start();
@@ -1621,7 +1621,9 @@ init().then(async () => {
     process.exit(1);
 });
 
-// --- v50.0.0: High-Frequency Position Monitoring ---
+// --- v50.1.0: Glitch-Proof Position Monitoring ---
+const slConfirmations = new Map();
+
 async function monitorPositionsFast(mv) {
     try {
         const positions = loadActivePositions();
@@ -1635,7 +1637,7 @@ async function monitorPositionsFast(mv) {
             if (pos.resolved || pos.redeemed) continue;
 
             try {
-                // 1. Fetch Real-time Depth for SL/TP Check
+                // 1. Fetch Real-time Depth
                 const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
                 const bids = book?.bids || [];
                 const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
@@ -1649,9 +1651,13 @@ async function monitorPositionsFast(mv) {
 
                 if (currentPrice === 0) continue;
 
-                // 2. STOP LOSS CHECK
+                // 2. STOP LOSS CHECK (Glitch-Proof)
                 const bSpot = mv ? mv.bSpot : (global.lastBinanceSpot || 0);
-                const shouldExit = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
+                
+                // v50.1.0: Absurdity Filter (Ignore Bid < 0.10 if we bought > 0.50)
+                const isAbsurdBid = (bestBid > 0 && bestBid < 0.10 && pos.buyPrice > 0.50);
+                
+                const isViolated = !isAbsurdBid && (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
                     pos.buyPrice,
                     bestBid,
                     currentPrice,
@@ -1661,18 +1667,29 @@ async function monitorPositionsFast(mv) {
                     pos.strike
                 );
 
-                if (shouldExit) {
-                    const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
-                    console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Bid: $${bestBid} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
-                    await executeEmergencyExit({
-                        tokenId: pos.tokenId,
-                        currentPrice: currentPrice,
-                        pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
-                        pnlPct: pnlPct
-                    });
-                    positions.splice(i, 1);
-                    changed = true;
-                    continue;
+                if (isViolated) {
+                    // v50.1.0: 500ms Confirmation Timer
+                    const firstSeen = slConfirmations.get(pos.tokenId) || now;
+                    if (!slConfirmations.has(pos.tokenId)) slConfirmations.set(pos.tokenId, now);
+                    
+                    if (now - firstSeen >= 500) {
+                        const pnlPct = (currentPrice - pos.buyPrice) / pos.buyPrice;
+                        console.log(`[Sentinel] 🚨 STOP LOSS CONFIRMED for ${pos.slug} | Bid: $${bestBid} (PnL: ${(pnlPct * 100).toFixed(2)}%)`);
+                        await executeEmergencyExit({
+                            tokenId: pos.tokenId,
+                            currentPrice: currentPrice,
+                            pnlUsd: (currentPrice * pos.amount) - (pos.buyPrice * pos.amount),
+                            pnlPct: pnlPct
+                        });
+                        positions.splice(i, 1);
+                        slConfirmations.delete(pos.tokenId);
+                        changed = true;
+                        continue;
+                    } else {
+                        if (now % 1000 < 100) console.log(`[Sentinel] ⏳ SL Pending confirmation for ${pos.slug}...`);
+                    }
+                } else {
+                    slConfirmations.delete(pos.tokenId);
                 }
 
                 // 3. INSTANT TAKE PROFIT / EARLY EXIT
@@ -1719,9 +1736,9 @@ async function monitorPositionsFast(mv) {
                     continue;
                 }
                 
-                // Fallback: Emergency Archive if resolution delay > 10m
+                // Fallback: Emergency Archive
                 if (now > pos.slotEnd + 600000) {
-                    console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug} (Expired)`);
+                    console.log(`[Sentinel] 🛡️⚠️ Emergency Archive for ${pos.slug}`);
                     positions.splice(i, 1);
                     changed = true;
                 }

@@ -2,22 +2,22 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 356** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 357** 🔵
 > - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 028**
+> - **Victoires** : **1 029**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,7 %**
 > - **Statut** : **V50.0.0 (HYPER-REACTIVE + TURBO-EXIT)** 🚀⚡
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **3,39 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 01h26 (Paris)
+> **Capital Réel (pUSD)** : **3,50 $** 💰
+> **Dernière Synchro** : 30/04/2026 à 01h36 (Paris)
 
 ---
 
 ## 📊 Session V50 (Production RÉEL — HYPER-REACTIVE)
-- **Score Session** : **224 Victoires / 52 Stop Loss** (WR 81.2%)
+- **Score Session** : **225 Victoires / 52 Stop Loss** (WR 81.2%)
 - **Statut** : **ACTIF (v50.0.0 - HYPER-REACTIVE) ✅⚡**
-- **Solde Réel (pUSD)** : **$3.39** ✅ (13 victoires / 1 perte)
+- **Solde Réel (pUSD)** : **$3.50** ✅ (14 victoires / 1 perte)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Fréquence Monitoring** : **~20Hz (Turbo-Exit)** 🎯⚡
 
@@ -25,11 +25,11 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **14** ✅
-- **Victoires (Cash)** : **13** 💰
+- **Positions Réelles** : **15** ✅
+- **Victoires (Cash)** : **14** 💰
 - **Pertes (SL Cash)** : **1** 📉 (Échec SL v49.2)
-- **Win Rate Réel** : **92.8%** 🏆
-- **Profit Session** : **-$0.13** (On arrive au Break-Even !)
+- **Win Rate Réel** : **93.3%** 🏆
+- **Profit Session** : **-$0.02** (BREAK-EVEN IMMINENT)
 - **Mise Actuelle** : **$3.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
@@ -58,15 +58,15 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **01h35** | **VICTOIRE RÉELLE (14/1)** | BTC DOWN @ $0.94 → $0.99 (Vente Auto T-10s) | **PROFIT +$0.11** 🏆 |
 | **01h26** | **VICTOIRE RÉELLE (13/1)** | BTC UP @ $0.90 → $0.99 (Vente Auto) | **PROFIT +$0.25** 🏆 |
 | **01h25** | **UPGRADE HYPER-REACTIVE** | Monitoring intégré au cycle principal (20Hz) | **TURBO (v50.0.0)** ⚡ |
-| **01h20** | **VICTOIRE RÉELLE (12/1)** | BTC UP @ $0.91 → $0.99 (Vente Auto) | **PROFIT +$0.22** 🏆 |
 
 ---
 
 ## 🔧 Dernière Ligne Pipeline
 ```
-[PIPELINE] | T-256s | slot:1777505100 | 🛡️🛰️⚓ UP:75.0% | 🛡️🛰️⚓ DOWN:26.0% | Bal:$3.39 | Open:75725.09 | Spot:75770.20 | Δ:+$45.11 (+0.060%)
+[PIPELINE] | T-230s | slot:1777505700 | 🛡️🛰️⚓ UP:45.0% | 🛡️🛰️⚓ DOWN:56.0% | Bal:$3.50 | Open:75823.32 | Spot:75790.11 | Δ:$-33.21 (-0.044%)
 ```
 
 ---
