@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.3.0 BOOST-MODE)
+ * Master Controller (v2025 MODULAR - v50.4.0 GHOST-DECISION)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1653,13 +1653,15 @@ async function monitorPositionsFast(mv) {
 
                 if (currentPrice === 0) continue;
 
-                // 2. STOP LOSS CHECK (v50.2.0: Multi-Confirmation Timer)
+                // 2. STOP LOSS CHECK (v50.4.0: GHOST-DECISION - Decision on Gamma/Theoretical price)
                 const bSpot = mv ? mv.bSpot : (global.lastBinanceSpot || 0);
                 
-                const isViolated = (bestBid > 0) && RiskManager.shouldTriggerStopLoss(
+                // v50.4.0: We use currentPrice (Integrated) instead of waiting for a real bid.
+                // This ensures SL triggers even during a "Liquidity Hole".
+                const isViolated = RiskManager.shouldTriggerStopLoss(
                     pos.buyPrice,
-                    bestBid,
-                    currentPrice,
+                    currentPrice, // Using Integrated Price for decision
+                    currentPrice, 
                     pos.side,
                     pos.entryAssetPrice,
                     bSpot,
