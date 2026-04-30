@@ -9,14 +9,14 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Win Rate** : **75,8 %**
 > - **Statut** : **V50.4.3 (BALANCED-SHIELD + HYPER-REACTIVE)** 🛡️⚖️🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **4,53 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 12h57 (Paris)
+> **Capital Réel (pUSD)** : **4,54 $** 💰
+> **Dernière Synchro** : 30/04/2026 à 13h30 (Paris)
 
 ---
 
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
-- **Solde Réel (pUSD)** : **$4.53** ✅ (40 victoires / 2 pertes)
+- **Solde Réel (pUSD)** : **$4.54** ✅ (40 victoires / 2 pertes)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
 
