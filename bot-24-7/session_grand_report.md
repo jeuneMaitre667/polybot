@@ -34,7 +34,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
-## 🛡️ Architecture Technique (V50.5.2)
+## 🛡️ Architecture Technique (V50.5.10)
 | Composant | Valeur |
 | :--- | :--- |
 | **Price Feed** | **Binance WebSocket (ULTRA-TURBO)** |
@@ -44,18 +44,15 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 | **Mode Entrée/Sortie** | **RAW-ENTRY / RAW-EXIT (Two-Step GTC)** 🏹 |
 | **Diagnostics** | **OMEGA-LOGS (Full JSON Error Dumps)** 🔍 |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v50.5.2) ✅ |
+| **Processus PM2** | `poly-engine` (v50.5.10) ✅ |
 
 ---
 
-## 🛡️ Sécurités & Correctifs Appliqués (V50.4)
-- **RAW-EXIT (v50.4.8)** : Passage en création/postage d'ordre brut pour contourner les validations locales du SDK + Suppression du monitoring double (Single Sentinel) ✅🛡️
-- **SAFE-MARGIN (v50.4.7)** : Marge de sécurité de 0,01$ sur le Best Bid pour garantir l'exécution immédiate du SL ✅🎯
-- **GTC-FORCE (v50.4.6)** : Suppression du mode FOK, ordres GTC exclusifs pour éliminer "Empty Orderbook" ✅⚖️
-- **Ghost-Decision (v50.4.0)** : Déclenchement du SL sur prix théorique (Gamma) pour éviter le gel en cas de carnet vide ✅👻
-- **Delta-Balanced (v50.4.3)** : Bouclier Bitcoin calibré à 0,04% (équilibre protection/réactivité) ✅⚖️
-- **Liquidity Shield (v50.2.3)** : Blocage des boucles de vente infinies sur les marchés expirés (T=0) ✅🛡️
-- **Glitch-Proof (v50.1.0)** : Confirmation de 500ms pour éliminer 90% des faux SL de simulation ✅🛡️
+## 🛡️ Sécurités & Correctifs Appliqués (V50.5)
+- **V2-SHIELD (v50.5.10)** : Approbation automatique (allowance) du pUSD pour les contrats Exchange V2 (Standard & NegRisk) ✅🛡️
+- **V2-NATIVE (v50.5.8)** : Alignement 100% sur le SDK V2 (Timestamp, EIP-712 v2, GTC-RAW) ✅🚀
+- **SENTINEL-TURBO (v50.5.2)** : Monitoring ultra-rapide (200ms) indépendant de la boucle principale ✅⚡
+- **REFERENCE-FIX (v50.5.6)** : Suppression définitive de `getClobBalance` au profit de la synchro `userBalance` ✅🎯
 
 ---
 
@@ -63,7 +60,9 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
-| **18h49** | **UPGRADE v50.5.2** | OMEGA-STABILITY : Sentinel Turbo (200ms) + Amount Guard | **FINAL FIX 🏁** |
+| **20h39** | **UPGRADE v50.5.10** | **FULL-V2-SHIELD** : Fix checksum + Auto-Approval pUSD | **V2 READY 🛡️** |
+| **19h15** | **UPGRADE v50.5.7** | V2-Alignment : EIP-712 Domain v2 + Timestamp-based | **MIGRATED 🚀** |
+| **18h49** | **UPGRADE v50.5.6** | REFERENCE-FIX : Suppression globale de `getClobBalance` | **STABLE ✅** |
 | **18h36** | **UPGRADE v50.5.1** | ANTI-GHOST : SL uniquement sur Bid réel + Renforcement TP | **STABLE 🛡️** |
 | **18h26** | **UPGRADE v50.5.0** | IRON-GATE : Safety Lock global (1 position max) | **SECURED 🔒** |
 | **17h55** | **UPGRADE v50.4.8** | RAW-EXIT (bypass SDK) + Centralisation Sentinel | **FIXED 🛡️** |
