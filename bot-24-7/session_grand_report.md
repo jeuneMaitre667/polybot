@@ -17,7 +17,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
 - **Statut** : **ACTIF (v50.2.2 - TELEGRAM-LITE) ✅💰**
-- **Solde Réel (pUSD)** : **$8.09** ✅ (23 victoires / 1 perte)
+- **Solde Réel (pUSD)** : **$8.09** ✅ (39 victoires / 1 perte)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
 
@@ -25,10 +25,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🎯 Suivi Trading RÉEL (Production pUSD)
 > *Démarré le 29/04/2026 à 00h53 — Premier trade réel : 04h23*
-- **Positions Réelles** : **24** ✅
-- **Victoires (Cash)** : **23** 💰
+- **Positions Réelles** : **40** ✅
+- **Victoires (Cash)** : **39** 💰
 - **Pertes (SL Cash)** : **1** 📉 (Filtre SL Trop Sévère v50.1)
-- **Win Rate Réel** : **95.8%** 🏆
+- **Win Rate Réel** : **97.5%** 🏆
 - **Profit Session** : **+$4.57** (PROFIT NET ÉTABLI) 🚀💎
 - **Mise Actuelle** : **$4.00 Fixed**
 - **Capital de Départ** : **$3.52** (Initial Deposit)

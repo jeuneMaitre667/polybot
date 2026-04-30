@@ -6,7 +6,7 @@
  */
 
 const FIXED_STOP_LOSS = 0.14; // 14%
-const CONFIRMATION_DELTA_PCT = 0.03; // 0.03% underlying gain blocks SL (v49.7.0: Hyper-Shield)
+const CONFIRMATION_DELTA_PCT = 0.05; // v50.3.1: Increased to 0.05% for more sensitive SL
 
 let dynamicFeeRate = 0.036; // Default fallback (v2: ~3.6% feeRate => 1.8% at p=0.5)
 
