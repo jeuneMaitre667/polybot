@@ -7,10 +7,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 038**
 > - **Pertes (SL)** : **352**
 > - **Win Rate** : **74,7 %**
-> - **Statut** : **V50.5.1 (ANTI-GHOST + IRON-GATE)** 🛡️🛰️⚓🚀
-> **Statut Actuel** : `Trading RÉEL 24/7` 🤖
+> - **Statut** : **V50.5.2 (OMEGA-STABILITY)** 🛡️🛰️⚓🚀
+> **Statut Actuel** : `PAUSE (Vérifications en cours)` 🛑
 > **Capital Réel (pUSD)** : **4,10 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 18h36 (Paris)
+> **Dernière Synchro** : 30/04/2026 à 18h49 (Paris)
 
 ---
 
@@ -34,16 +34,17 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
-## 🛡️ Architecture Technique (V50.5.1)
+## 🛡️ Architecture Technique (V50.5.2)
 | Composant | Valeur |
 | :--- | :--- |
 | **Price Feed** | **Binance WebSocket (ULTRA-TURBO)** |
 | **Safety Lock** | **IRON-GATE (Single Active Position)** 🛡️ |
-| **SL Logic** | **ANTI-GHOST (Real Bid Only)** 🎯 |
-| **Delta Shield** | **0.04% Threshold (Balanced)** ⚖️ |
-| **Mode Sortie** | **GTC-RAW + 10s Intensive Retry** 🏹 |
+| **Sentinel** | **TURBO-LOOP (200ms Resolution)** ⚡ |
+| **Order Guard** | **AMOUNT-GUARD (min_order_size compliance)** 🛡️ |
+| **Mode Entrée/Sortie** | **RAW-ENTRY / RAW-EXIT (Two-Step GTC)** 🏹 |
+| **Diagnostics** | **OMEGA-LOGS (Full JSON Error Dumps)** 🔍 |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v50.5.1) ✅ |
+| **Processus PM2** | `poly-engine` (v50.5.2) ✅ |
 
 ---
 
@@ -62,6 +63,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **18h49** | **UPGRADE v50.5.2** | OMEGA-STABILITY : Sentinel Turbo (200ms) + Amount Guard | **FINAL FIX 🏁** |
 | **18h36** | **UPGRADE v50.5.1** | ANTI-GHOST : SL uniquement sur Bid réel + Renforcement TP | **STABLE 🛡️** |
 | **18h26** | **UPGRADE v50.5.0** | IRON-GATE : Safety Lock global (1 position max) | **SECURED 🔒** |
 | **17h55** | **UPGRADE v50.4.8** | RAW-EXIT (bypass SDK) + Centralisation Sentinel | **FIXED 🛡️** |

@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.1 ANTI-GHOST)
+ * Master Controller (v2025 MODULAR - v50.5.2 OMEGA-STABILITY)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -861,11 +861,10 @@ async function mainLoop() {
             console.error('[Heartbeat] Write failed:', e.message);
         }
         
-        // v50.0.0: High-Frequency Position Monitoring
+        // v50.5.2: Main Cycle Sync (REMOVED: Sentinel call moved to independent Turbo Loop)
         const marketState = await getUnifiedMarketState('BTC');
         if (marketState) {
             global.lastBinanceSpot = marketState.bSpot;
-            await monitorPositionsFast(marketState);
         }
         
         if (IS_SIMULATION_ENABLED && marketState) {
@@ -1100,19 +1099,31 @@ async function mainLoop() {
                 
                 console.log(`[Engine] 🎯 Price Aligned: Raw=$${safePrice} -> Final=$${finalPrice} (Tick:${tSize}, Cap:${maxAllowed})`);
 
-                const response = await clobClient.createAndPostOrder(
+                // v50.5.2: OMEGA Amount Guard (Minimum Order Size Shield)
+                const book = await clobClient.getOrderBook(tokenId).catch(() => null);
+                const minSize = book ? parseFloat(book.min_order_size || "1") : 1.0;
+                const calculatedAmount = parseFloat((tradeAmountUsd / finalPrice).toFixed(4));
+                const amount = Math.max(calculatedAmount, minSize);
+                
+                if (amount > calculatedAmount) {
+                    console.log(`[Engine] 🛡️🛰️⚓ Amount adjusted to min_size: ${amount} (vs ${calculatedAmount.toFixed(4)})`);
+                }
+
+                // v50.5.2: RAW-ENTRY (Two-step placement for maximum reliability)
+                const orderObj = await clobClient.createOrder(
                     {
                         tokenID: tokenId,
                         price: finalPrice,
-                        size: safeQty,
-                        side: Side.BUY
+                        size: amount,
+                        side: side === "UP" ? Side.BUY : Side.SELL
                     },
                     {
                         tickSize: tSize,
                         negRisk: currentSig.m?.negRisk ?? (tokenId.length > 50)
-                    },
-                    OrderType.GTC // v49.1.8: Reverted FOK -> GTC for maximum V2 compatibility
+                    }
                 );
+
+                const response = await clobClient.postOrder(orderObj, OrderType.GTC);
 
                 if (response && response.orderID) {
                     order = response; // For common state tracking below
@@ -1519,14 +1530,18 @@ async function executeEmergencyExit(info) {
                             break; // EXIT LOOP ON SUCCESS
                         }
                     } catch (attemptErr) {
-                        lastError = attemptErr.message;
+                        try {
+                            lastError = JSON.stringify(attemptErr);
+                        } catch (e) {
+                            lastError = attemptErr.message || String(attemptErr);
+                        }
                         console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts} FAILED: ${lastError}`);
                         if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 100));
                     }
                 }
 
                 if (!success) {
-                    throw new Error(`All exit attempts failed. Last error: ${lastError || 'Empty Orderbook'}`);
+                    throw new Error(`All exit attempts failed. Diagnostics: ${lastError || 'Empty Orderbook'}`);
                 }
         } catch (err) {
             console.error(`[Emergency] 🛡️⚠️ SDK Exit Failed:`, err.message);
@@ -1720,3 +1735,18 @@ async function monitorPositionsFast(mv) {
         if (changed) saveActivePositions(positions);
     } catch (e) {}
 }
+
+// v50.5.2: OMEGA TURBO SENTINEL (Independent Loop)
+(async function turboSentinel() {
+    console.log("[Sentinel] 🛡️🛰️⚓ Turbo Sentinel started (200ms resolution).");
+    while (true) {
+        try {
+            // v50.5.2: Independent Price Discovery for Sentinel
+            const mv = await getUnifiedMarketState('BTC').catch(() => null);
+            await monitorPositionsFast(mv);
+        } catch (e) {
+            console.error("[Sentinel] 🛡️⚠️ Turbo Loop Error:", e.message);
+        }
+        await new Promise(r => setTimeout(r, 200));
+    }
+})();
