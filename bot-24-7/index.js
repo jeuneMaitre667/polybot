@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.2.0 REAL-CRASH READY)
+ * Master Controller (v2025 MODULAR - v50.2.2 TELEGRAM-LITE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1535,13 +1535,15 @@ async function executeEmergencyExit(info) {
                             
                             const exitLatency = Date.now() - exitStart;
                             const pnlSign = info.pnlUsd >= 0 ? "+" : "";
+                            const finalBal = await getClobBalance().catch(() => 0);
+                            
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                                             `📦 *Market*: \`${pos.slug}\`\n` +
                                             `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
                                             `• Entry: $${pos.buyPrice}\n` +
                                             `• Exit: $${exitPrice}\n` +
                                             `📉 *PnL*: ${pnlSign}$${info.pnlUsd.toFixed(2)} (${(info.pnlPct * 100).toFixed(2)}%)\n` +
-                                            `• Mise/Qty: ${pos.amount} 📦\n` +
+                                            `🏦 *Solde*: **$${parseFloat(finalBal).toFixed(2)}**\n` +
                                             `• Latency: ${exitLatency}ms ⚡`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
@@ -1711,10 +1713,14 @@ async function monitorPositionsFast(mv) {
                     const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
                     const pnlSign = pnlUsd >= 0 ? "+" : "";
                     
-                    await sendTelegramAlert(`🚀 *VENTE AUTO (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
+                    // v50.2.2: Fetch real balance for the alert
+                    const finalBal = await getClobBalance().catch(() => 0);
+                    
+                    await sendTelegramAlert(`${pnlUsd >= 0 ? '💰' : '📉'} *VENTE ${pnlUsd >= 0 ? 'PROFIT' : 'STOP LOSS'} (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
                         `📦 *Market*: \`${pos.slug}\`\n` +
-                        `💰 *Prix*: $${currentPrice.toFixed(3)}\n` +
-                        `📈 *PnL*: ${pnlSign}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n\n` +
+                        `💵 *Prix*: $${currentPrice.toFixed(3)}\n` +
+                        `📈 *PnL*: ${pnlSign}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
+                        `🏦 *Solde*: **$${parseFloat(finalBal).toFixed(2)}**\n\n` +
                         `🆔 *Order*: \n\`${response.orderID}\``);
 
                     Analytics.recordTrade({
