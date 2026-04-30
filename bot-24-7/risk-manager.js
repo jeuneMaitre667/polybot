@@ -1,8 +1,9 @@
 /**
- * v46.2.5 Delta-Shield (Final V1 Patch)
- * Base stake is fixed at 100$ to ensure consistency.
- * SL 15% + 1.5s Timer.
- * NEW: SL blocked if Delta > 0.3% (Underlying confirmation).
+ * v50.4.7 Risk Manager (SAFE-MARGIN)
+ * Base stake is fixed at $3.00 (Safety Mode).
+ * SL 14% + 500ms Timer.
+ * Delta Shield: SL blocked if Delta >= 0.04% (Balanced confirmation).
+ * Exit Mode: GTC + $0.01 slippage margin on Best Bid.
  */
 
 const FIXED_STOP_LOSS = 0.14; // 14%
@@ -56,9 +57,10 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $4.00 Stake Active.');
-    console.log('[RiskManager] 🛡️⚓ Anti-Glitch Shield v47.0.0 (Delta 0.3%) Active.');
+    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $3.00 Stake Active.');
+    console.log('[RiskManager] 🛡️⚓ Delta Shield v50.4.7 (Delta 0.04%) + GTC SAFE-MARGIN Active.');
 }
+
 
 export function calculateTradeSize(balance) {
     const baseStake = 3.0;
