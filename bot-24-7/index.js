@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.5 REFERENCE-FIX)
+ * Master Controller (v2025 MODULAR - v50.5.6 SENTINEL-FIX)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1505,7 +1505,7 @@ async function executeEmergencyExit(info) {
                             
                             const exitLatency = Date.now() - exitStart;
                             const pnlSign = info.pnlUsd >= 0 ? "+" : "";
-                            const finalBal = await getClobBalance().catch(() => 0);
+                            const finalBal = userBalance || 0;
                             
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
                                             `📦 *Market*: \`${pos.slug}\`\n` +
@@ -1697,7 +1697,7 @@ async function monitorPositionsFast(mv) {
                         const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
                         const pnlSign = pnlUsd >= 0 ? "+" : "";
                         
-                        const finalBal = await getClobBalance().catch(() => 0);
+                        const finalBal = userBalance || 0;
                         
                         await sendTelegramAlert(`${pnlUsd >= 0 ? '💰' : '📉'} *VENTE ${pnlUsd >= 0 ? 'PROFIT' : 'STOP LOSS'} (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
                             `📦 *Market*: \`${pos.slug}\`\n` +
