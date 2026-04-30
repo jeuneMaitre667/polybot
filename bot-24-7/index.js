@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.2 LIQUIDITY-PUMP)
+ * Master Controller (v2025 MODULAR - v50.4.3 BALANCED-SHIELD)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
