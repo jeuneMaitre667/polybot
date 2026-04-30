@@ -6,7 +6,7 @@
  */
 
 const FIXED_STOP_LOSS = 0.14; // 14%
-const CONFIRMATION_DELTA_PCT = 0.05; // v50.3.1: Increased to 0.05% for more sensitive SL
+const CONFIRMATION_DELTA_PCT = 0.06; // v50.4.1: Increased to 0.06% for ultra-sensitive SL
 
 let dynamicFeeRate = 0.036; // Default fallback (v2: ~3.6% feeRate => 1.8% at p=0.5)
 
