@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.2 OMEGA-STABILITY)
+ * Master Controller (v2025 MODULAR - v50.5.3 BALANCE-AWARE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -1122,6 +1122,14 @@ async function mainLoop() {
                         negRisk: currentSig.m?.negRisk ?? (tokenId.length > 50)
                     }
                 );
+
+                // v50.5.3: Balance Shield (Avoid 400 errors if capital < min_order_size cost)
+                const currentBalance = await getClobBalance().catch(() => 0);
+                const totalCost = amount * finalPrice;
+                if (totalCost > currentBalance) {
+                    console.log(`[Engine] 🛡️🛰️⚓ Trade Skipped: Balance insufficient for min_size ($${totalCost.toFixed(2)} > $${parseFloat(currentBalance).toFixed(2)})`);
+                    return; 
+                }
 
                 const response = await clobClient.postOrder(orderObj, OrderType.GTC);
 

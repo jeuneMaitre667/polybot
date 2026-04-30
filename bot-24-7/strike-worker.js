@@ -12,19 +12,25 @@ import { SUPPORTED_ASSETS } from './config.js';
 
 let lastCapturedMinute = -1;
 
-export const runBoundaryCapture = async () => {
+export const runBoundaryCapture = async (isStartup = false) => {
     try {
         const now = new Date();
         const m = now.getMinutes();
         const isFiveMinBoundary = (m % 5 === 0);
         
-        if (!isFiveMinBoundary) return;
-        if (lastCapturedMinute === m) return;
+        // v50.5.4: COLD-START (Fetch current slot strike even if not on boundary)
+        if (!isFiveMinBoundary && !isStartup) return;
         
-        lastCapturedMinute = m;
-        const targetSlotStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), m, 0, 0).getTime();
+        // For startup, we target the current slot (floor to 5min)
+        const effectiveM = isFiveMinBoundary ? m : Math.floor(m / 5) * 5;
         
-        console.log(`[Strike-Worker] 🎯 TRIGGER detected for slot ${new Date(targetSlotStartMs).toISOString()}`);
+        if (!isStartup && lastCapturedMinute === effectiveM) return;
+        
+        if (!isStartup) lastCapturedMinute = effectiveM;
+        
+        const targetSlotStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), effectiveM, 0, 0).getTime();
+        
+        console.log(`[Strike-Worker] 🎯 ${isStartup ? "COLD-START" : "TRIGGER"} detected for slot ${new Date(targetSlotStartMs).toISOString()}`);
 
         // --- 🔵 BINANCE USDC ALIGNMENT ---
         // Capture du prix "Ouverture" (Open) de la bougie
@@ -58,23 +64,29 @@ export const runBoundaryCapture = async () => {
             }
         }
 
-        // v17.21.0: Real-time sync (No more 15s wait)
-        // We fetch the AI/Gamma Strike in the background to avoid delaying the Binance pulse
+        // v50.5.4: Multi-Attempt Strike Sync for startup resilience
         (async () => {
-            for (const asset of SUPPORTED_ASSETS) {
-                try {
-                    const apiStrike = await fetchStrikeFromPolymarket(asset, targetSlotStartMs);
-                    if (apiStrike != null) {
-                        console.log(`[Strike-Worker] 🏆 API SYNC SUCCESS for ${asset}: ${apiStrike}`);
-                        continue; 
+            const maxAttempts = isStartup ? 3 : 1;
+            for (let i = 0; i < maxAttempts; i++) {
+                let allDone = true;
+                for (const asset of SUPPORTED_ASSETS) {
+                    try {
+                        const apiStrike = await fetchStrikeFromPolymarket(asset, targetSlotStartMs);
+                        if (apiStrike != null) {
+                            console.log(`[Strike-Worker] 🏆 API SYNC SUCCESS for ${asset}: ${apiStrike}`);
+                            continue; 
+                        }
+                        allDone = false;
+                        const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
+                        if (strikeData && strikeData.price) {
+                            saveStrike(asset, strikeData.price, targetSlotStartMs);
+                        }
+                    } catch (err) {
+                        console.error(`[Strike-Worker] ❌ ERROR ${asset}:`, err.message);
                     }
-                    const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
-                    if (strikeData && strikeData.price) {
-                        saveStrike(asset, strikeData.price, targetSlotStartMs);
-                    }
-                } catch (err) {
-                    console.error(`[Strike-Worker] ❌ ERROR ${asset}:`, err.message);
                 }
+                if (allDone) break;
+                if (isStartup && i < maxAttempts - 1) await new Promise(r => setTimeout(r, 5000));
             }
         })();
 
@@ -91,6 +103,8 @@ function saveBinanceStrike(asset, price, timestamp) {
             data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         }
         if (!data[asset]) data[asset] = [];
+        // v50.5.4: Avoid duplicates
+        if (data[asset].some(p => p.at === timestamp)) return;
         data[asset].push({ at: timestamp, price });
         // Garder les 50 derniers points
         data[asset] = data[asset].slice(-50);
@@ -101,7 +115,7 @@ function saveBinanceStrike(asset, price, timestamp) {
 }
 
 export const startStrikeWorker = () => {
-    console.log('[Strike-Worker] 🚀 Starting High-Precision 5m Capture Sync (API + Chainlink Fallback)...');
-    setInterval(runBoundaryCapture, 5000);
-    setTimeout(runBoundaryCapture, 2000); // Startup trigger
+    console.log('[Strike-Worker] 🚀 Starting High-Precision 5m Capture Sync (v50.5.4 COLD-START Enabled)...');
+    setInterval(() => runBoundaryCapture(false), 5000);
+    setTimeout(() => runBoundaryCapture(true), 2000); // Startup trigger with COLD-START
 };
