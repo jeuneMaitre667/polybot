@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.0 GHOST-DECISION)
+ * Master Controller (v2025 MODULAR - v50.4.1 ULTRA-SENSITIVE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
