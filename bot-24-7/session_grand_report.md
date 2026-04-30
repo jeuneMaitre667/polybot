@@ -7,7 +7,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 031**
 > - **Pertes (SL)** : **351**
 > - **Win Rate** : **75,8 %**
-> - **Statut** : **V50.4.3 (BALANCED-SHIELD + HYPER-REACTIVE)** 🛡️⚖️🚀
+> - **Statut** : **V50.4.4 (SAFE-RECOVERY + HYPER-REACTIVE)** 🛡️🔒🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
 > **Capital Réel (pUSD)** : **4,54 $** 💰
 > **Dernière Synchro** : 30/04/2026 à 13h30 (Paris)
@@ -29,7 +29,7 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Pertes (SL Cash)** : **2** 📉 (Delta Shield Sensibility v50.3.1)
 - **Win Rate Réel** : **95.2%** 🏆
 - **Profit Session** : **+$1.01** 🚀
-- **Mise Actuelle** : **$4.00 Fixed**
+- **Mise Actuelle** : **$3.00 Fixed** (Mode Sécurité)
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
 ---

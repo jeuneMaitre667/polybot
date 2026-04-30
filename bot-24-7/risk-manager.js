@@ -61,9 +61,7 @@ export function initSession(initialBalance) {
 }
 
 export function calculateTradeSize(balance) {
-    // v50.3.0: Boosted Stake to $4.00.
-    // If balance < $4, we use the remaining amount (compound).
-    const baseStake = 4.0;
+    const baseStake = 3.0;
     const finalStake = Math.min(baseStake, parseFloat(balance || 0));
     return finalStake;
 }
