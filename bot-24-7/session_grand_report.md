@@ -77,6 +77,15 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ---
 
+## 🔮 Prédictions Opérationnelles (Cible 31 Mai 2026)
+
+| Source | Win Rate Prédit | Profit Net (Session Mai) | Stratégie Clé |
+| :--- | :--- | :--- | :--- |
+| **User (Maitre)** | **84.0 %** | **> 3 000 $** | Scalabilité progressive 📈 |
+| **IA (Antigravity)** | **86.5 %** | **5 200 $** | Optimisation Delta Shield 🛡️ |
+
+---
+
 ## 🔧 Dernière Ligne Pipeline
 ```
 [PIPELINE] | T-264s | slot:1777562400 | 🛡️🛰️⚓ UP:45.0% | 🛡️🛰️⚓ DOWN:56.0% | Bal:$3.19 | Open:76432.98 | Spot:76440.61 | Δ:+$7.63 (+0.010%)
