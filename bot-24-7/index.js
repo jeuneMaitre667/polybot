@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.5.8 FULL-V2-SHIELD-FIX)
+ * Master Controller (v2025 MODULAR - v50.5.9 FULL-V2-SHIELD-FIX)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -149,9 +149,9 @@ const AUTO_STOP_TIME = null; // V2: Maintenance complete, no auto-stop needed
 // v50.5.7: V2 APPROVAL SHIELD
 async function ensureV2Approvals(client, wallet) {
     try {
-        // v50.5.8: Robust address discovery
-        const exchange = '0x4bFb9e615976dB23224E3e83984E297A13C8B996'; // Standard V2 Exchange
-        const negRisk = '0xC36d671A1968e80E1071f94706130438Ba06076b'; // Neg Risk V2 Exchange
+        // v50.5.9: Standard Checksummed V2 addresses
+        const exchange = ethers.utils.getAddress('0x4bFb9e615976dB23224E3e83984E297A13C8B996');
+        const negRisk = ethers.utils.getAddress('0xC36d671A1968e80E1071f94706130438Ba06076b');
         
         const pusd = new ethers.Contract(PUSD_ADDRESS, [
             "function allowance(address owner, address spender) view returns (uint256)",
