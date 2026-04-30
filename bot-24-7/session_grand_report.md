@@ -2,21 +2,21 @@
 Ce document fait office de rapport opérationnel fusionnant les performances historiques (Simulation démarrée le **15 Avril 2026 à 13h48**) et la session actuelle.
 
 ## 📈 Résumé de Performance Globale (Historique)
-> - **Total des Positions (Vie du Bot)** : **1 358** 🔵
+> - **Total des Positions (Vie du Bot)** : **1 359** 🔵
 > - **ATH (Sommet Historique)** : **1 580,63 $** (29/04/2026) 💎🚀
-> - **Victoires** : **1 038**
+> - **Victoires** : **1 039**
 > - **Pertes (SL)** : **352**
 > - **Win Rate** : **74,7 %**
 > - **Statut** : **V50.5.10 (FULL-V2-SHIELD-FIX)** 🛡️🛰️⚓🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **4,10 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 18h49 (Paris)
+> **Capital Réel (pUSD)** : **4,25 $** 💰
+> **Dernière Synchro** : 01/05/2026 à 00h08 (Paris)
 
 ---
 
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
-- **Solde Réel (pUSD)** : **$4.10** ✅ (52 victoires / 3 pertes)
+- **Solde Réel (pUSD)** : **$4.25** ✅ (53 victoires / 3 pertes)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
 
