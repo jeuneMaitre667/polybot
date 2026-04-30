@@ -1480,35 +1480,23 @@ async function executeEmergencyExit(info) {
                     try {
                         const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
                         const bids = book?.bids || [];
-                        
-                        if (bids.length === 0 && attempt < 3) {
-                            console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts}: Orderbook empty. Retrying in 400ms...`);
-                            await new Promise(r => setTimeout(r, 400));
-                            continue;
-                        }
-
-                        // v49.1.4: Be increasingly aggressive on price
-                        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : info.currentPrice;
+                        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
                         const sweepPrice = calculateSellSweepPrice(safeQty, bids);
                         
+                        // v50.4.6: STRICT-LIMIT EXIT
+                        // Use GTC (Good Til Cancelled) for ALL attempts to avoid "Empty Orderbook" FOK errors.
+                        // Use bestBid as the limit price to follow the user's advice.
                         let exitPrice;
-                        let useFOK = (attempt <= 2); // Use FOK for first 2 attempts, then GTC to force fill
-
-                        if (attempt === 1) {
-                            // v50.4.2: If bestBid is 0, force 0.01 immediately to avoid price=0 error
-                            exitPrice = sweepPrice 
-                                ? Math.max(0.01, parseFloat((sweepPrice * 0.99).toFixed(4)))
-                                : (bestBid > 0 ? Math.max(0.01, parseFloat((bestBid * 0.98).toFixed(4))) : 0.01);
-                        } else if (attempt <= 4) {
-                            // Aggressive discount
-                            exitPrice = Math.max(0.01, parseFloat((bestBid * 0.80).toFixed(4)));
+                        
+                        if (bestBid > 0) {
+                            // Align with the carnet's best buyer
+                            exitPrice = parseFloat(bestBid.toFixed(4));
                         } else {
                             // Last resort: Nuclear exit at floor price to match ANY bid
                             exitPrice = 0.01;
-                            useFOK = false;
                         }
                         
-                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | Mode: ${useFOK ? 'FOK' : 'GTC'} | Bid: $${bestBid} | Exit: $${exitPrice} | Qty: ${safeQty}`);
+                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | Mode: GTC | Bid: $${bestBid} | Exit: $${exitPrice} | Qty: ${safeQty}`);
 
                         const response = await clobClient.createAndPostOrder(
                             {
@@ -1521,7 +1509,7 @@ async function executeEmergencyExit(info) {
                                 tickSize: emergencyTickSize,
                                 negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
                             },
-                            useFOK ? OrderType.FOK : OrderType.GTC
+                            OrderType.GTC
                         );
 
                         if (response && response.orderID) {
