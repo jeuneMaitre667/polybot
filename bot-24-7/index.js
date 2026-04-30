@@ -1534,15 +1534,15 @@ async function executeEmergencyExit(info) {
                             SLSentinel.stopMonitoring();
                             
                             const exitLatency = Date.now() - exitStart;
+                            const pnlSign = info.pnlUsd >= 0 ? "+" : "";
                             const exitMsg = `🚨 *SORTIE D'URGENCE (STOP LOSS)* 🚨\n\n` +
-                                            `• Marché: ${pos.slug}\n` +
+                                            `📦 *Market*: \`${pos.slug}\`\n` +
                                             `• Side: ${pos.side === 'YES' ? 'UP 🚀' : 'DOWN 📉'}\n` +
                                             `• Entry: $${pos.buyPrice}\n` +
                                             `• Exit: $${exitPrice}\n` +
-                                            `• PnL: ${(info.pnlPct * 100).toFixed(2)}%\n` +
-                                            `• Mise/Qty: ${safeQty} 📦\n` +
-                                            `• Latency: ${exitLatency}ms ⚡\n` +
-                                            `• Statut: Sécurisé (Orderbook Sweep)`;
+                                            `📉 *PnL*: ${pnlSign}$${info.pnlUsd.toFixed(2)} (${(info.pnlPct * 100).toFixed(2)}%)\n` +
+                                            `• Mise/Qty: ${pos.amount} 📦\n` +
+                                            `• Latency: ${exitLatency}ms ⚡`;
                             
                             // v46.0.1: ENSURE PERSISTENCE FOR AUDIT
                             updateStreak(false, 0); // v46.0.4: RESET ON SL
@@ -1709,11 +1709,13 @@ async function monitorPositionsFast(mv) {
                     
                     const pnlUsd = (currentPrice * pos.amount) - (pos.buyPrice * pos.amount);
                     const pnlPct = ((currentPrice - pos.buyPrice) / pos.buyPrice) * 100;
+                    const pnlSign = pnlUsd >= 0 ? "+" : "";
+                    
                     await sendTelegramAlert(`🚀 *VENTE AUTO (${isInstantTP ? 'TP 99c' : 'T-10s'})*\n\n` +
-                        `📦 *Market*: ${pos.slug}\n` +
+                        `📦 *Market*: \`${pos.slug}\`\n` +
                         `💰 *Prix*: $${currentPrice.toFixed(3)}\n` +
-                        `📈 *PnL*: +$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n` +
-                        `🆔 *Order*: \`${response.orderID}\``);
+                        `📈 *PnL*: ${pnlSign}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)\n\n` +
+                        `🆔 *Order*: \n\`${response.orderID}\``);
 
                     Analytics.recordTrade({
                         asset: pos.asset || 'BTC',
