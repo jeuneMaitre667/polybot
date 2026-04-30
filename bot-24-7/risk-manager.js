@@ -1,6 +1,6 @@
 /**
- * v50.4.7 Risk Manager (SAFE-MARGIN)
- * Base stake is fixed at $3.00 (Safety Mode).
+ * v50.4.8 Risk Manager (ULTRA-SAFE)
+ * Base stake is fixed at $2.50 (Safety Mode).
  * SL 14% + 500ms Timer.
  * Delta Shield: SL blocked if Delta >= 0.04% (Balanced confirmation).
  * Exit Mode: GTC + $0.01 slippage margin on Best Bid.
@@ -57,13 +57,13 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
 }
 
 export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $3.00 Stake Active.');
-    console.log('[RiskManager] 🛡️⚓ Delta Shield v50.4.7 (Delta 0.04%) + GTC SAFE-MARGIN Active.');
+    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $2.50 Stake Active.');
+    console.log('[RiskManager] 🛡️⚓ Delta Shield v50.4.8 (Delta 0.04%) + RAW-EXIT Active.');
 }
 
 
 export function calculateTradeSize(balance) {
-    const baseStake = 3.0;
+    const baseStake = 2.5;
     const finalStake = Math.min(baseStake, parseFloat(balance || 0));
     return finalStake;
 }

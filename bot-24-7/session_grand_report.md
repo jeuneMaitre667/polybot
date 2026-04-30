@@ -7,16 +7,16 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 > - **Victoires** : **1 038**
 > - **Pertes (SL)** : **352**
 > - **Win Rate** : **74,7 %**
-> - **Statut** : **V50.4.7 (SAFE-MARGIN + GTC-FORCE)** 🛡️🎯🚀
+> - **Statut** : **V50.5.1 (ANTI-GHOST + IRON-GATE)** 🛡️🛰️⚓🚀
 > **Statut Actuel** : `Trading RÉEL 24/7` 🤖
-> **Capital Réel (pUSD)** : **3,19 $** 💰
-> **Dernière Synchro** : 30/04/2026 à 17h21 (Paris)
+> **Capital Réel (pUSD)** : **4,10 $** 💰
+> **Dernière Synchro** : 30/04/2026 à 18h36 (Paris)
 
 ---
 
 ## 📊 Session V50.1 (Production RÉEL — GLITCH-PROOF)
 - **Score Session** : **236 Victoires / 52 Stop Loss** (WR 81.9%)
-- **Solde Réel (pUSD)** : **$3.19** ✅ (50 victoires / 3 pertes)
+- **Solde Réel (pUSD)** : **$4.10** ✅ (52 victoires / 3 pertes)
 - **Latence Signal** : **338ms - 360ms** (WebSocket Real-Time) ✅🚀
 - **Sûreté SL** : **Filtre Absurdité ($0.10) + Confirmation 500ms** 🛡️⚡
 
@@ -28,27 +28,27 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 - **Victoires (Cash)** : **50** 💰
 - **Pertes (SL Cash)** : **3** 📉 (Delta Shield Sensibility v50.3.1)
 - **Win Rate Réel** : **94.3%** 🏆
-- **Profit Session** : **-$0.33** 📈
-- **Mise Actuelle** : **$3.00 Fixed** (Mode Sécurité)
+- **Profit Session** : **+$0.58** 📈
+- **Mise Actuelle** : **$2.50 Fixed** (Mode Ultra-Sécurité) 🛡️
 - **Capital de Départ** : **$3.52** (Initial Deposit)
 
 ---
 
-## 🛡️ Architecture Technique (V50.4.7)
+## 🛡️ Architecture Technique (V50.5.1)
 | Composant | Valeur |
 | :--- | :--- |
 | **Price Feed** | **Binance WebSocket (ULTRA-TURBO)** |
-| **Monitoring SL/TP** | **Mode Intégré (20Hz)** |
-| **Filtre Glitch** | **Absurdity Filter < $0.10** |
-| **Confirmation SL** | **500ms + Ghost-Decision** 👻 |
+| **Safety Lock** | **IRON-GATE (Single Active Position)** 🛡️ |
+| **SL Logic** | **ANTI-GHOST (Real Bid Only)** 🎯 |
 | **Delta Shield** | **0.04% Threshold (Balanced)** ⚖️ |
-| **Mode Sortie** | **GTC + Marge 0.01$ (SAFE-MARGIN)** 🎯 |
+| **Mode Sortie** | **GTC-RAW + 10s Intensive Retry** 🏹 |
 | **Infrastructure** | AWS Lightsail `63.34.0.38` |
-| **Processus PM2** | `poly-engine` (v50.4.7) ✅ |
+| **Processus PM2** | `poly-engine` (v50.5.1) ✅ |
 
 ---
 
 ## 🛡️ Sécurités & Correctifs Appliqués (V50.4)
+- **RAW-EXIT (v50.4.8)** : Passage en création/postage d'ordre brut pour contourner les validations locales du SDK + Suppression du monitoring double (Single Sentinel) ✅🛡️
 - **SAFE-MARGIN (v50.4.7)** : Marge de sécurité de 0,01$ sur le Best Bid pour garantir l'exécution immédiate du SL ✅🎯
 - **GTC-FORCE (v50.4.6)** : Suppression du mode FOK, ordres GTC exclusifs pour éliminer "Empty Orderbook" ✅⚖️
 - **Ghost-Decision (v50.4.0)** : Déclenchement du SL sur prix théorique (Gamma) pour éviter le gel en cas de carnet vide ✅👻
@@ -62,6 +62,10 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 | Heure (UTC+2) | Événement | Détails | Impact |
 | :--- | :--- | :--- | :--- |
+| **18h36** | **UPGRADE v50.5.1** | ANTI-GHOST : SL uniquement sur Bid réel + Renforcement TP | **STABLE 🛡️** |
+| **18h26** | **UPGRADE v50.5.0** | IRON-GATE : Safety Lock global (1 position max) | **SECURED 🔒** |
+| **17h55** | **UPGRADE v50.4.8** | RAW-EXIT (bypass SDK) + Centralisation Sentinel | **FIXED 🛡️** |
+| **17h42** | **CRASH ÉVITÉ** | Bug SL bloqué par double monitoring + SDK local check | **ALERTE ⚠️** |
 | **17h08** | **UPGRADE v50.4.7** | Marge 0,01$ sur Best Bid (SAFE-MARGIN) | **DEPLOYED 🎯** |
 | **16h55** | **UPGRADE v50.4.6** | GTC-FORCE : suppression du FOK, ordres GTC exclusifs | **DEPLOYED ⚖️** |
 | **15h24** | **AUDIT DOC** | Vérification conformité avec documentation Polymarket | **CONFORME ✅** |

@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.4.7 SAFE-MARGIN)
+ * Master Controller (v2025 MODULAR - v50.5.1 ANTI-GHOST)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -577,6 +577,12 @@ async function reportingLoop() {
             }
         }
 
+        // v50.5.0: IRON-GATE Safety Lock (Global Guard)
+        if (loadActivePositions().length > 0) {
+            if (now % 10000 < 1000) console.log("[Safety] 🛡️⚓ Cycle skipped: Position already active or stuck.");
+            return;
+        }
+
         // 1. Get Unified Market State (v17.22.0 Sync)
         const marketState = await getUnifiedMarketState('BTC');
         
@@ -683,52 +689,7 @@ async function reportingLoop() {
                 if (bestBidUp === 0) bestBidUp = Math.max(0.01, bestAskUp - 0.01);
                 if (bestBidDown === 0) bestBidDown = Math.max(0.01, bestAskDown - 0.01);
 
-                // v16.16.0: Active Stop Loss Monitoring (Precision Bid-Based)
-                if (activePosition && activePosition.slotStart === slotStart) {
-                    // v28.0: TRIGGER ON BID (Real sell price)
-                    const currentBid = activePosition.side === 'YES' ? bestBidUp : bestBidDown;
-                    const currentAsk = activePosition.side === 'YES' ? bestAskUp : bestAskDown;
-                    
-                    const isViolated = RiskManager.shouldTriggerStopLoss(
-                        activePosition.buyPrice, 
-                        currentBid, 
-                        currentAsk,
-                        activePosition.side, 
-                        activePosition.entryAssetPrice, 
-                        global.lastBinanceSpot,
-                        activePosition.officialStrike
-                    );
-
-                    if (isViolated) {
-                        if (!activePosition.slViolationStart) {
-                            activePosition.slViolationStart = Date.now();
-                            console.log(`[Shield] 🛡️⚓ Violation detected. Starting 1.5s confirmation timer...`);
-                        }
-
-                        const violationDuration = Date.now() - activePosition.slViolationStart;
-                        if (violationDuration >= 1500 && !activePosition.isExiting) {
-                            console.warn(`[Risk] 🚨 Stop Loss CONFIRMED after ${violationDuration}ms! Bid:$${currentBid} | Exiting...`);
-                            activePosition.isExiting = true; 
-
-                            try {
-                                const pnlVal = ((currentBid - activePosition.buyPrice) / activePosition.buyPrice * 100);
-                                await executeEmergencyExit({
-                                    tokenId: activePosition.tokenId,
-                                    currentPrice: currentBid,
-                                    pnlPct: pnlVal / 100
-                                });
-                            } catch (err) {
-                                console.error(`[Risk] Stop Loss SELL Failed:`, err.message);
-                                activePosition.isExiting = false; 
-                            }
-                        }
-                    } else {
-                        if (activePosition.slViolationStart) {
-                            console.log(`[Shield] 🛡️⚓ Price RECOVERED. Timer reset.`);
-                            activePosition.slViolationStart = null;
-                        }
-                    }
-                }
+                // v16.16.0: Active Stop Loss Monitoring (REMOVED: Now handled by monitorPositionsFast for v50.4.7 consistency)
 
                 // v16.12.0: Unified Strategic HUD (Pipeline Vision)
                 const currentSlotLabel = sig.slug ? sig.slug.split('-').pop() : '000';
@@ -1471,9 +1432,15 @@ async function executeEmergencyExit(info) {
                     }
                 } catch (e) { }
 
-                // v49.1.4: ULTRA-AGGRESSIVE EMERGENCY EXIT
+                // v50.4.8: ULTRA-ROBUST EMERGENCY EXIT (Lock + RAW-CREATE)
+                if (pos.isExiting) {
+                    console.log(`[Emergency] 🛡️⚓ Exit already in progress for ${pos.tokenId}. skipping.`);
+                    return;
+                }
+                pos.isExiting = true;
+
                 let success = false;
-                const maxAttempts = 5; 
+                const maxAttempts = 100; // v50.4.9: 10 seconds of intensive retries (100ms gap)
                 let lastError = "";
                 
                 for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1481,25 +1448,19 @@ async function executeEmergencyExit(info) {
                         const book = await clobClient.getOrderBook(pos.tokenId).catch(() => null);
                         const bids = book?.bids || [];
                         const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
-                        const sweepPrice = calculateSellSweepPrice(safeQty, bids);
                         
-                        // v50.4.6: STRICT-LIMIT EXIT
-                        // Use GTC (Good Til Cancelled) for ALL attempts to avoid "Empty Orderbook" FOK errors.
-                        // Use bestBid as the limit price to follow the user's advice.
                         let exitPrice;
-                        
                         if (bestBid > 0) {
-                            // v50.4.7: Apply a $0.01 safety margin (slippage tolerance) 
-                            // to ensure we hit the buyer even if price moves slightly.
                             exitPrice = parseFloat(Math.max(0.01, bestBid - 0.01).toFixed(4));
                         } else {
-                            // Last resort: Nuclear exit at floor price to match ANY bid
                             exitPrice = 0.01;
                         }
                         
-                        console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | Mode: GTC | Bid: $${bestBid} | Exit: $${exitPrice} | Qty: ${safeQty}`);
+                        if (attempt % 10 === 1) {
+                            console.log(`[Emergency] 🎯 Attempt ${attempt}/${maxAttempts} | Mode: GTC-RAW | Bid: $${bestBid} | Exit: $${exitPrice} | Qty: ${safeQty}`);
+                        }
 
-                        const response = await clobClient.createAndPostOrder(
+                        const orderObj = await clobClient.createOrder(
                             {
                                 tokenID: pos.tokenId,
                                 price: exitPrice,
@@ -1509,12 +1470,13 @@ async function executeEmergencyExit(info) {
                             {
                                 tickSize: emergencyTickSize,
                                 negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
-                            },
-                            OrderType.GTC
+                            }
                         );
 
-                        if (response && response.orderID) {
-                            console.log(`[Emergency] ✅ OFFICIAL EXIT ACCEPTED on attempt ${attempt}: ${response.orderID}`);
+                        const response = await clobClient.postOrder(orderObj, OrderType.GTC);
+
+                        if (response && (response.orderID || response.hash)) {
+                            console.log(`[Emergency] ✅ RAW EXIT ACCEPTED on attempt ${attempt}: ${response.orderID || response.hash}`);
                             
                             updateStreak(false); // v46.0.9: Mandatory momentum reset on SL
                             // Cleanup
@@ -1559,7 +1521,7 @@ async function executeEmergencyExit(info) {
                     } catch (attemptErr) {
                         lastError = attemptErr.message;
                         console.warn(`[Emergency] ⚠️ Attempt ${attempt}/${maxAttempts} FAILED: ${lastError}`);
-                        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 300));
+                        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 100));
                     }
                 }
 
@@ -1633,32 +1595,16 @@ async function monitorPositionsFast(mv) {
                 const bids = book?.bids || [];
                 const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
                 
-                let currentPrice = bestBid;
-                if (currentPrice === 0) {
-                    // v50.4.5: If book is empty, use the provided MarketView price (Gamma) 
-                    // to ensure TP/SL can still trigger.
-                    currentPrice = (mv && mv.gammaPrice) ? mv.gammaPrice : 0;
-                }
+                // v50.5.1: REAL-BID ONLY SL (Anti-Ghost)
+                if (bestBid === 0) continue;
+                const currentPrice = bestBid;
 
-                if (currentPrice === 0) {
-                     // Last resort: fetch from SDK
-                     try {
-                        const mInfo = await clobClient.getMarket(pos.conditionId);
-                        const targetToken = mInfo.tokens.find(t => String(t.token_id) === String(pos.tokenId));
-                        currentPrice = targetToken ? parseFloat(targetToken.price) : 0;
-                     } catch (e) { }
-                }
                 
-                if (currentPrice === 0) continue;
-
-                // 2. STOP LOSS CHECK (v50.4.0: GHOST-DECISION - Decision on Gamma/Theoretical price)
+                // 2. STOP LOSS CHECK
                 const bSpot = mv ? mv.bSpot : (global.lastBinanceSpot || 0);
-                
-                // v50.4.0: We use currentPrice (Integrated) instead of waiting for a real bid.
-                // This ensures SL triggers even during a "Liquidity Hole".
                 const isViolated = RiskManager.shouldTriggerStopLoss(
                     pos.buyPrice,
-                    currentPrice, // Using Integrated Price for decision
+                    currentPrice,
                     currentPrice, 
                     pos.side,
                     pos.entryAssetPrice,
@@ -1702,12 +1648,21 @@ async function monitorPositionsFast(mv) {
                     const reason = isInstantTP ? "INSTANT_TP_99" : `EARLY_EXIT_T${Math.round(timeUntilEnd/1000)}s`;
                     console.log(`[Sentinel] 🚀 ${reason} Triggered for ${pos.slug}. Selling at $${currentPrice}...`);
                     
-                    const response = await clobClient.createAndPostOrder({
-                        tokenID: pos.tokenId,
-                        price: 0.01,
-                        size: pos.amount,
-                        side: Side.SELL
-                    });
+                    // v50.4.8: Consistent GTC-RAW Exit for TP/Early Exit
+                    const orderObj = await clobClient.createOrder(
+                        {
+                            tokenID: pos.tokenId,
+                            price: 0.01,
+                            size: pos.amount,
+                            side: Side.SELL
+                        },
+                        {
+                            tickSize: "0.01",
+                            negRisk: pos.negRisk ?? (pos.tokenId.length > 50)
+                        }
+                    );
+
+                    const response = await clobClient.postOrder(orderObj, OrderType.GTC);
 
                     // v50.2.3: Check if order actually succeeded
                     const orderID = response?.orderID || response?.id || null;
