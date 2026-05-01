@@ -81,7 +81,7 @@ const PRIMARY_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
 const FAILOVER_RPC = process.env.POLYGON_RPC_URL_FAILOVER || 'https://polygon-rpc.com';
 const VIRTUAL_BALANCE = parseFloat(process.env.VIRTUAL_BALANCE || "1000"); // v17.35.0
 
-const HEALTH_FILE = path.join(__dirname, 'health-v17.json');
+// v50.7.9: HEALTH_FILE removed (Dashboard eliminated)
 const POSITION_LOG = path.join(__dirname, 'active-positions.json');
 const HEARTBEAT_FILE = path.join(__dirname, 'heartbeat.json'); // v17.51.0: Heartbeat for watchdog
 const LAST_TRADE_FILE = path.join(__dirname, 'last-trade.json'); // v17.54.0: Total persistence
@@ -106,8 +106,7 @@ let lastDigestDate = ''; // YYYY-MM-DD
 let lastDigestWindow = ''; // 'morning' | 'night'
 let clobClient = null;
 let clobCreds = null; // v22.8.0: Store API credentials for manual posting
-let decisionFeed = [];
-const MAX_FEED_SIZE = 50;
+// v50.7.9: decisionFeed & MAX_FEED_SIZE removed (Dashboard eliminated)
 let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
 const slotStrikeLock = new Map(); // v50.7.1: Prevents strike jumping mid-slot
 let maticBalance = null; 
@@ -118,7 +117,7 @@ let lastHeartbeatSlot = 0; // v17.60.0: Unique alert per 5m slot
 let lastLogSkipTime = 0; // v34.2
 let lastLogPulseTime = 0; // v34.2
 let lastBalanceFetchTime = 0; // v17.80.0: Alchemy CU Optimization
-let memoryHealth = { dashboardMarketView: { status: 'waiting' } };
+// v50.7.9: memoryHealth removed (Dashboard eliminated)
 let riskSessionInitialized = false; // v17.70.0: Track RiskManager baseline
 
 // v46.0.4: Turbo-Switch Momentum Engine (House Money Mode)
@@ -165,26 +164,7 @@ async function ensureV2Approvals(client, wallet) {
  * v25.0.0: Official SDK Shielded Pulse
  * (createClobHeaders removed: SDK now handles authentication natively via Proxy Agent)
  */
-function updateHealth(data) {
-    memoryHealth = { ...memoryHealth, ...data };
-    
-    // v17.7.0: Atomic Balance Guard
-    const displayBalance = userBalance !== null ? userBalance : (memoryHealth.totalUsd || 0);
-
-    const fullHealth = { 
-        ...memoryHealth, 
-        dashboardMarketView: data.dashboardMarketView || memoryHealth.dashboardMarketView || null, // v17.10.0: Forced Visibility
-        at: new Date().toISOString(),
-        timestamp: Date.now(),
-        totalUsd: displayBalance,
-        balanceUsd: displayBalance, // Sync second alias
-        decisionFeed: decisionFeed,
-        status: 'online',
-        version: 'v17.7.0' // Traceability badge
-    };
-    memoryHealth = fullHealth;
-    atomicWriteJson(HEALTH_FILE, fullHealth);
-}
+// v50.7.9: updateHealth() function REMOVED (Dashboard eliminated)
 
 // v17.46.7: Atomic sequence for positions
 function loadActivePositions() {
@@ -422,7 +402,7 @@ async function init() {
     BinanceWS.start();
     
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
-    updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
+    // v50.7.9: updateHealth init call removed (Dashboard eliminated)
 
     // v17.36.0: Initialize RiskManager with Virtual or Real Balance (if available)
     const initialBal = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
@@ -505,7 +485,7 @@ async function getUnifiedMarketState(asset = 'BTC') {
         }
     }
 
-    if (!bSpot) bSpot = (memoryHealth.dashboardMarketView?.binanceSpot || 0);
+    if (!bSpot) bSpot = 0; // v50.7.9: Simplified (Dashboard fallback removed)
     
     // v35.0.0: Global export for SLSentinel & RiskManager
     global.lastBinanceSpot = bSpot;
@@ -581,7 +561,6 @@ async function reportingLoop() {
         const slotStart = Math.floor(now / 300000) * 300000;
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
         
-        let startAudit = Date.now();
         
         // 0. Fetch Real Blockchain Balance (v17.85.0: Ethers v5 syntax)
         if (now - lastBalanceFetchTime > BALANCE_REFRESH_MS || userBalance === null) {
@@ -764,62 +743,8 @@ async function reportingLoop() {
                 console.error('[Reporting] v16.12.0 HUD Error:', e.message);
             }
         }
-
-        let endAudit = Date.now();
         
-        // v16.12.0: Optimized Telemetry & Decision Feed
-        const logEntry = {
-            at: Date.now(),
-            asset: 'BTC',
-            decision: Math.abs(bDeltaPct) > 0.10 ? 'SCAN ACTIVE' : 'MONITORING',
-            reason: Math.abs(bDeltaPct) > 0.10 ? 'THRESHOLD_MET' : 'WAITING_SIGNAL',
-            edge: bDeltaPct,
-            strike: effectiveStrike,
-            spot: bSpot,
-            askUp: bestAskUp,
-            askDown: bestAskDown
-        };
-        decisionFeed.unshift(logEntry);
-        if (decisionFeed.length > MAX_FEED_SIZE) decisionFeed.pop();
-
-        const stats = Analytics.computePerformanceStats();
-
-        updateHealth({ 
-            dashboardMarketView: {
-                asset: 'BTC',
-                binanceSpot: bSpot,
-                binanceStrike: effectiveStrike,
-                binanceDeltaPct: bDeltaPct,
-                strikeSource: source, // v17.22.0: New source tag
-                bestAskUp,
-                bestAskDown,
-                // v17.7.0: Legacy Compatibility Aliases (Wake-up call for old UI)
-                priceUp: bestAskUp,
-                priceDown: bestAskDown,
-                variationPct: bDeltaPct,
-                thresholdPct: SNIPER_DELTA_THRESHOLD_PCT // v17.22.0: Dynamic threshold for UI
-            },
-            performance: stats,
-            sniperHUD: {
-                btc: {
-                    secondsLeft,
-                    slotStart: new Date(slotStart).toISOString(),
-                    strike: effectiveStrike,
-                    spot: bSpot,
-                    deltaPct: bDeltaPct,
-                    isStrikeOfficial: source === 'OFFICIAL'
-                }
-            },
-            currentSlot: slotStart,
-            wsConnected: SLSentinel.isConnected(),
-            sentinelMetrics: {
-                networkLatency: endAudit - startAudit,
-                cycleLatency: Date.now() - now,
-                queryEngine: 'Alchemy/Unified'
-            },
-            decisionFeed: decisionFeed,
-            gasBalance: maticBalance !== null ? maticBalance.toFixed(4) : "---"
-        });
+        // v50.7.9: Dashboard telemetry block REMOVED (All monitoring via PM2 logs)
     } catch (err) {
         console.error('[Reporting] Critical loop failure:', err.message);
     } finally {
