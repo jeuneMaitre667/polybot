@@ -77,3 +77,9 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 *Ce rapport est mis à jour en temps réel par l'assistant IA Antigravity.*
 ⚓⚡⚓
+
+### ⏸️ Pause Stratégique : Migration CLOBv2
+*   **Dates** : Weekend du 2-3 Mai 2026.
+*   **Cause** : Correctif majeur Polymarket pour les "Ghost Fills" prévu Lundi 4 Mai.
+*   **Status** : `poly-engine` stoppé sur AWS Lightsail. 
+*   **Objectif** : Éviter les instabilités API (403) et les erreurs d'exécution CLOB pendant la stabilisation du réseau.
