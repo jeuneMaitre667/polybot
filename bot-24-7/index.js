@@ -1052,7 +1052,13 @@ async function mainLoop() {
         }
 
         // 4. Risk & Collateral
-        const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
+        const baseBalance = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
+        
+        if (baseBalance === null) {
+            if (now % 30000 < 1000) console.log("[Engine] ⏳ Waiting for first balance fetch...");
+            return;
+        }
+
         let tradeAmountUsd = RiskManager.calculateTradeSize(baseBalance); 
         
 // v46.2.0: Turbo Mode deactivated. Fixed 100$ active.
