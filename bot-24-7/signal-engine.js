@@ -73,7 +73,7 @@ export async function fetchSignals(asset, context = {}) {
         const targetSlug = context.getCurrent5mEventSlug ? context.getCurrent5mEventSlug(asset) : getSlotSlugForAsset(asset);
         const primaryEvent = validEvents.find(e => e.slug === targetSlug) || validEvents[0];
         
-        console.log(`[${asset}] 📡 Discovery: ${validEvents.length} imminent markets found. Primary target: ${primaryEvent.slug}`);
+        // console.log(`[${asset}] 📡 Discovery: ${validEvents.length} imminent markets found. Primary target: ${primaryEvent.slug}`);
         
         // v21.5.0: Aggregate signals from ALL valid imminent events
         const allSignals = [];

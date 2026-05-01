@@ -558,9 +558,9 @@ async function getUnifiedMarketState(asset = 'BTC') {
     }
     
     // v24.2.4: Fast-Signal Detection (Log early even before trade window)
-    if (Math.abs(bDeltaPct) > 0.05) {
-        process.stdout.write(`\r[SIGNAL] 🛡️🛰️⚓ Delta spike detected: ${bDeltaPct > 0 ? '+' : ''}${bDeltaPct.toFixed(3)}% | Time: ${new Date().toLocaleTimeString()}\n`);
-    }
+    // if (Math.abs(bDeltaPct) > 0.05) {
+    //    process.stdout.write(`\r[SIGNAL] 🛡️🛰️⚓ Delta spike detected: ${bDeltaPct > 0 ? '+' : ''}${bDeltaPct.toFixed(3)}% | Time: ${new Date().toLocaleTimeString()}\n`);
+    // }
 
     return {
         asset,
