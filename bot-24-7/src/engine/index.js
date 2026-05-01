@@ -88,6 +88,9 @@ async function scheduledMainLoop() {
     }
 }
 
+import { reportingLoop } from './reporting.js';
+import { turboSentinel } from './sentinel.js';
+
 async function init() {
     console.log("=== 🛡️⚓ ENGINE V2 ONLINE ===");
     BinanceWS.start();
@@ -95,6 +98,8 @@ async function init() {
     
     // Pulse Loops
     setTimeout(scheduledMainLoop, 500);
+    reportingLoop();
+    turboSentinel();
 }
 
 init().then(async () => {
