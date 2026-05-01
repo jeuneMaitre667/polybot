@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.6.0 NIGHT-WATCH-FIX)
+ * Master Controller (v2025 MODULAR - v50.7.0 V2-CONTRACT-UPDATE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -148,18 +148,24 @@ function updateStreak(isWin, profit = 0) {
 const AUTO_STOP_TIME = null; // V2: Maintenance complete, no auto-stop needed
 
 // v50.5.7: V2 APPROVAL SHIELD
+// v50.7.0: CRITICAL UPDATE — New V2 contract addresses per Polymarket announcement 2026-05-01
 async function ensureV2Approvals(client, wallet) {
     try {
-        // v50.5.10: Forced checksum normalization
-        const exchange = ethers.utils.getAddress('0x4bFb9e615976dB23224E3e83984E297A13C8B996'.toLowerCase());
-        const negRisk = ethers.utils.getAddress('0xC36d671A1968e80E1071f94706130438Ba06076b'.toLowerCase());
+        // v50.7.0: Official V2 Exchange addresses (from docs.polymarket.com/resources/contracts)
+        const exchangeV2 = ethers.utils.getAddress('0xE111180000d2663C0091e4f400237545B87B996B'.toLowerCase());
+        const negRiskV2 = ethers.utils.getAddress('0xe2222d279d744050d28e00520010520000310F59'.toLowerCase());
+        const negRiskAdapter = ethers.utils.getAddress('0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296'.toLowerCase());
+        // v50.7.0: NEW Collateral Adapters (MUST be updated by May 1 @ 3pm UTC per @PolymarketDevs)
+        const ctfCollateralAdapter = ethers.utils.getAddress('0xAdA100Db00Ca00073811820692005400218FcE1f'.toLowerCase());
+        const negRiskCollateralAdapter = ethers.utils.getAddress('0xadA2005600Dec949baf300f4C6120000bDB6eAab'.toLowerCase());
         
         const pusd = new ethers.Contract(PUSD_ADDRESS, [
             "function allowance(address owner, address spender) view returns (uint256)",
             "function approve(address spender, uint256 amount) returns (bool)"
         ], wallet.connect(new ethers.providers.JsonRpcProvider(PRIMARY_RPC)));
 
-        for (const spender of [exchange, negRisk]) {
+        const spenders = [exchangeV2, negRiskV2, negRiskAdapter, ctfCollateralAdapter, negRiskCollateralAdapter];
+        for (const spender of spenders) {
             if (!spender) continue;
             const allowance = await pusd.allowance(wallet.address, spender);
             if (allowance.lt(ethers.utils.parseUnits("1000000", 6))) {
@@ -175,6 +181,7 @@ async function ensureV2Approvals(client, wallet) {
         console.warn(`[V2-Shield] 🛡️⚠️ Approval check failed:`, err.message);
     }
 }
+
 
 /**
  * v22.8.0: Manual CLOB Header Generator
