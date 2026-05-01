@@ -903,7 +903,7 @@ async function mainLoop() {
             console.log(`[PID:${process.pid}] [Telegram] Indep-Heartbeat Triggered (T-${hbSecondsLeft}s)`);
             
             const hbBal = await updateVirtualBalance(0); // Force fresh check or return current
-            const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : 0));
+            const currentBal = (IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance !== null ? userBalance : null));
             let engineStatus = (userBalance === null && !IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
             if (RiskManager.isTradingSuspended(currentBal)) engineStatus = "🚨 SUSPENDED (SAFETY) 🚨";
             
