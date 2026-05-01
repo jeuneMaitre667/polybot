@@ -109,6 +109,7 @@ let clobCreds = null; // v22.8.0: Store API credentials for manual posting
 let decisionFeed = [];
 const MAX_FEED_SIZE = 50;
 let userBalance = null; // v17.7.0: Null-Init to avoid sending 0 before first fetch
+const slotStrikeLock = new Map(); // v50.7.1: Prevents strike jumping mid-slot
 let maticBalance = null; 
 let wallet = null; // v16.21.1: Global scope fix
 let lastPulseTime = Date.now(); // v17.24.0: For Watchdog monitoring
@@ -533,21 +534,32 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // v35.0.0: Global export for SLSentinel & RiskManager
     global.lastBinanceSpot = bSpot;
 
-    // 2. Fetch or Backfill Strike (v50.7.1: GAMMA -> BINANCE -> MEMORY Fallback Chain)
+    // 2. Fetch or Backfill Strike (v50.7.1: LOCKED -> GAMMA -> BINANCE -> MEMORY Fallback Chain)
     const strikeTime = slotStart; 
-    let bStrike = getStrike(asset, strikeTime); // Try local cache (Polymarket Sync)
-    let strikeSource = 'POLY-GAMMA';
+    let bStrike = slotStrikeLock.get(strikeTime);
+    let strikeSource = bStrike ? 'LOCKED-MEM' : 'POLY-GAMMA';
 
     if (!bStrike) {
-        bStrike = await getBinanceStrike(asset, strikeTime); // Try Binance Open
-        strikeSource = 'BINANCE-OPEN';
+        // Try Gamma First
+        bStrike = getStrike(asset, strikeTime);
+        if (bStrike) {
+            strikeSource = 'POLY-GAMMA';
+        } else {
+            // Try Binance Fallback
+            bStrike = global.lastBinanceOpen;
+            if (bStrike) {
+                strikeSource = 'BINANCE-OPEN';
+            } else {
+                // Last Resort: Memory Sync
+                bStrike = boundaryStrikes[strikeTime] || null;
+                if (bStrike) strikeSource = 'MEMORY-SYNC';
+            }
+        }
+        
+        // LOCK IT if found
+        if (bStrike) slotStrikeLock.set(strikeTime, bStrike);
     }
 
-    if (!bStrike && global.lastBinanceOpen) {
-        bStrike = global.lastBinanceOpen; // Ultimate Memory Fallback
-        strikeSource = 'MEMORY-SYNC';
-    }
-    
     const effectiveStrike = bStrike;
     source = `${strikeSource} (${source})`;
     
