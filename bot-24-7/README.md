@@ -2,7 +2,7 @@
 
 Moteur de trading algorithmique optimisé pour le protocole **pUSD** de Polymarket V2. Spécialisé sur l'arbitrage de latence Bitcoin (Binance vs Polymarket).
 
-## 📊 Stratégie de Production (v50.7.9)
+## 📊 Stratégie de Production (v51.0.0 - Engine V2)
 
 | Paramètre | Valeur | Description |
 |-----------|--------|-------------|
@@ -14,14 +14,14 @@ Moteur de trading algorithmique optimisé pour le protocole **pUSD** de Polymark
 | **Delta Shield** | `0.04%` | Bloque le SL si l'asset progresse en faveur du trade |
 | **Exit Logic** | `GTC-RAW` | Ordres bruts (Bypass SDK) pour garantir le remplissage |
 
-## 🛠️ Architecture Technique V2
+## 🛠️ Architecture Technique V2 (Modularité Maximale)
 
+- **Orchestration** : Code divisé en 5 modules (Config, Strategy, Clob, Execution, Sentinel) via `src/engine/index.js`.
 - **Collatéral** : pUSD (Contrat `0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb`).
 - **Signature** : EIP-712 v2 via `viem` (WalletAccount).
 - **Execution** : `@polymarket/clob-client-v2` + Manual HMAC Headers.
 - **Monitoring** : Exclusif via **Logs PM2** (Pipeline temps réel), Dashboard supprimé.
-- **Sentinel** : Monitoring Turbo (200ms) indépendant du flux principal.
-- **V2-Shield** : Vérification et approbation automatique (Allowance) des contrats V2 au démarrage.
+- **Sentinel** : Monitoring Turbo (200ms) indépendant du flux principal dans `src/engine/sentinel.js`.
 
 ## 🚀 Déploiement PM2 (Lightsail)
 
@@ -48,5 +48,5 @@ Le bot tourne en **connexion directe** (AWS `eu-west-1` Ireland) pour éviter le
 - **Vérification** : `GET https://clob.polymarket.com/time` doit renvoyer un statut 200.
 
 ---
-*Dernière mise à jour : v50.7.9 "PURE-BINANCE & DASHBOARD-FREE"*
+*Dernière mise à jour : v51.0.0 "ENGINE V2 (MODULAR PURE-BINANCE)"*
 ⚓⚡⚓
