@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'poly-engine',
-      script: 'index.js',
+      script: './src/engine/index.js',
       cwd: '/home/ubuntu/polybot/bot-24-7',
       env: {
         NODE_ENV: 'production',

@@ -68,18 +68,24 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 ## 🔮 Prédictions Opérationnelles (Cible 31 Mai 2026)
 
-| Source | Win Rate Prédit | Profit Net (Session Mai) | Stratégie Clé |
-| :--- | :--- | :--- | :--- |
-| **User (Maitre)** | **84.0 %** | **> 3 000 $** | Scalabilité progressive 📈 |
-| **IA (Antigravity)** | **86.5 %** | **5 200 $** | Optimisation Delta Shield 🛡️ |
+### 📋 Synthèse des Travaux : Polymarket Sniper (v51.0.0 - Engine V2)
 
----
+#### 1. Déploiement "Engine V2" (Modularité Maximale)
+*   **Architecture Refactorisée** : Le fichier monolithique `index.js` (1700 lignes) a été découpé en modules spécialisés dans `src/engine/` (`config.js`, `clob.js`, `strategy.js`, `execution.js`, `index.js`).
+*   **Stratégie PURE-BINANCE** : Strike basé exclusivement sur l'Open de Binance (5m), Delta calculé en interne sans dépendance externe.
+*   **Nettoyage Complet** : Suppression du Dashboard et passage au 100% logs natifs (PM2).
+
+#### 2. État Technique & Configuration
+*   **Version** : `v51.0.0` (Modular V2).
+*   **Statut** : 🟢 **EN PRODUCTION (Trading Réel)**.
+*   **Sniper** : Delta 0.067%, Fenêtre T-90s à T-30s.
+
+#### 3. Levée de la Pause Stratégique
+*   **Action** : Le bot a été relancé en mode Trading Réel après validation de la structure V2.
+*   **Surveillance** : Les prochaines heures devront confirmer la stabilité du client CLOB V2 avec Polymarket suite à la mise à jour (fix "Ghost Fills").
+*   **Monitoring** : Exclusif via `pm2 logs poly-engine --raw`.
+
+**Statut du système** : 🟢 **OPÉRATIONNEL**. Engine V2 actif en ligne de mire.
 
 *Ce rapport est mis à jour en temps réel par l'assistant IA Antigravity.*
 ⚓⚡⚓
-
-### ⏸️ Pause Stratégique : Migration CLOBv2
-*   **Dates** : Weekend du 2-3 Mai 2026.
-*   **Cause** : Correctif majeur Polymarket pour les "Ghost Fills" prévu Lundi 4 Mai.
-*   **Status** : `poly-engine` stoppé sur AWS Lightsail. 
-*   **Objectif** : Éviter les instabilités API (403) et les erreurs d'exécution CLOB pendant la stabilisation du réseau.
