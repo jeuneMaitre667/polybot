@@ -11,6 +11,7 @@ import axios from 'axios';
 
 const slotStrikeLock = new Map();
 let lastBalanceFetchTime = 0;
+let lastBookFetchTime = 0;
 
 export async function reportingLoop() {
     if (STATE.isReporting) {
@@ -53,34 +54,39 @@ export async function reportingLoop() {
         const sig = signalData.signals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec)));
 
         if (sig) {
-            let bestAskUp = sig.priceYes || 0.5;
-            let bestAskDown = sig.priceNo || 0.5;
+            // Persistent Cache for HUD
+            if (!STATE.hudPrices) STATE.hudPrices = { up: sig.priceYes || 0.5, down: sig.priceNo || 0.5 };
 
-            const stealthOpts = getStealthProfile();
-            if (process.env.PROXY_URL) stealthOpts.proxyUrl = process.env.PROXY_URL;
+            // Refresh Book every 5s
+            if (now - lastBookFetchTime > 5000) {
+                lastBookFetchTime = now;
+                const stealthOpts = getStealthProfile();
+                if (process.env.PROXY_URL) stealthOpts.proxyUrl = process.env.PROXY_URL;
 
-            // Optional Book Refresh for HUD accuracy
-            if (sig.tokenIdYes && (now % 5000 < 1000)) {
-                const res = await gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdYes}`, { ...stealthOpts, retry: { limit: 1 } }).catch(() => null);
-                if (res) {
-                    const asks = res.body?.asks || [];
-                    if (asks.length > 0) bestAskUp = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p < 0.999));
+                if (sig.tokenIdYes) {
+                    gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdYes}`, { ...stealthOpts, retry: { limit: 1 } })
+                        .then(res => {
+                            const asks = res.body?.asks || [];
+                            if (asks.length > 0) STATE.hudPrices.up = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p < 0.999));
+                        }).catch(() => {});
+                }
+                if (sig.tokenIdNo) {
+                    gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdNo}`, { ...stealthOpts, retry: { limit: 1 } })
+                        .then(res => {
+                            const asks = res.body?.asks || [];
+                            if (asks.length > 0) STATE.hudPrices.down = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p < 0.999));
+                        }).catch(() => {});
                 }
             }
-            if (sig.tokenIdNo && (now % 5000 < 1000)) {
-                const res = await gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdNo}`, { ...stealthOpts, retry: { limit: 1 } }).catch(() => null);
-                if (res) {
-                    const asks = res.body?.asks || [];
-                    if (asks.length > 0) bestAskDown = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p < 0.999));
-                }
-            }
+
+            const bestAskUp = STATE.hudPrices.up;
+            const bestAskDown = STATE.hudPrices.down;
 
             const currentSlotLabel = sig.slug ? sig.slug.split('-').pop() : '000';
             const deltaUsd = bSpot - effectiveStrike;
             const deltaPct = effectiveStrike > 0 ? (deltaUsd / effectiveStrike) * 100 : 0;
             const deltaSign = deltaUsd >= 0 ? '+' : '';
             
-            const isDeltaMet = Math.abs(deltaPct) >= CONFIG.SNIPER_DELTA_THRESHOLD_PCT;
             const upLabel = '🛡️🛰️⚓ UP';
             const downLabel = '🛡️🛰️⚓ DOWN';
 
