@@ -150,37 +150,10 @@ const AUTO_STOP_TIME = null; // V2: Maintenance complete, no auto-stop needed
 
 // v50.5.7: V2 APPROVAL SHIELD
 // v50.7.0: CRITICAL UPDATE — New V2 contract addresses per Polymarket announcement 2026-05-01
+// v50.7.4: V2 APPROVAL SHIELD (DEACTIVATED - BACK TO 100% GASLESS)
 async function ensureV2Approvals(client, wallet) {
-    try {
-        // v50.7.0: Official V2 Exchange addresses (from docs.polymarket.com/resources/contracts)
-        const exchangeV2 = ethers.utils.getAddress('0xE111180000d2663C0091e4f400237545B87B996B'.toLowerCase());
-        const negRiskV2 = ethers.utils.getAddress('0xe2222d279d744050d28e00520010520000310F59'.toLowerCase());
-        const negRiskAdapter = ethers.utils.getAddress('0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296'.toLowerCase());
-        // v50.7.0: NEW Collateral Adapters (MUST be updated by May 1 @ 3pm UTC per @PolymarketDevs)
-        const ctfCollateralAdapter = ethers.utils.getAddress('0xAdA100Db00Ca00073811820692005400218FcE1f'.toLowerCase());
-        const negRiskCollateralAdapter = ethers.utils.getAddress('0xadA2005600Dec949baf300f4C6120000bDB6eAab'.toLowerCase());
-        
-        const pusd = new ethers.Contract(PUSD_ADDRESS, [
-            "function allowance(address owner, address spender) view returns (uint256)",
-            "function approve(address spender, uint256 amount) returns (bool)"
-        ], wallet.connect(new ethers.providers.JsonRpcProvider(PRIMARY_RPC)));
-
-        const spenders = [exchangeV2, negRiskV2, negRiskAdapter, ctfCollateralAdapter, negRiskCollateralAdapter];
-        for (const spender of spenders) {
-            if (!spender) continue;
-            const allowance = await pusd.allowance(wallet.address, spender);
-            if (allowance.lt(ethers.utils.parseUnits("1000000", 6))) {
-                console.log(`[V2-Shield] 🛡️⚓ Approving ${spender} for pUSD...`);
-                const tx = await pusd.approve(spender, ethers.constants.MaxUint256);
-                await tx.wait();
-                console.log(`[V2-Shield] ✅ Approval successful for ${spender}`);
-            } else {
-                console.log(`[V2-Shield] 🛡️⚓ Allowance OK for ${spender}`);
-            }
-        }
-    } catch (err) {
-        console.warn(`[V2-Shield] 🛡️⚠️ Approval check failed:`, err.message);
-    }
+    // Gasless signatures only. No on-chain MATIC required.
+    return;
 }
 
 
@@ -543,20 +516,19 @@ async function getUnifiedMarketState(asset = 'BTC') {
     let strikeSource = bStrike ? 'LOCKED-MEM' : 'POLY-GAMMA';
 
     if (!bStrike) {
-        // Try Gamma First (Local Cache)
-        bStrike = getStrike(asset, strikeTime);
-        if (bStrike) {
-            strikeSource = 'POLY-GAMMA';
+        // v50.7.4: PRIORITY 1 - Fresh Binance Memory (Atomic Sync)
+        const isSlotMatch = global.lastBinanceOpenSlot === (strikeTime > 10000000000 ? strikeTime : strikeTime * 1000);
+        
+        if (isSlotMatch && global.lastBinanceOpen) {
+            bStrike = global.lastBinanceOpen;
+            strikeSource = 'BINANCE-OPEN-MEM';
         } else {
-            // Try Binance Fallback (Live Open)
-            // v50.7.2: Ensure we only use Binance if it matches the CURRENT slot
-            const isSlotMatch = global.lastBinanceOpenSlot === (strikeTime > 10000000000 ? strikeTime : strikeTime * 1000);
-            
-            if (isSlotMatch && global.lastBinanceOpen) {
-                bStrike = global.lastBinanceOpen;
-                strikeSource = 'BINANCE-OPEN';
+            // PRIORITY 2 - Gamma / Local Cache
+            bStrike = getStrike(asset, strikeTime);
+            if (bStrike) {
+                strikeSource = 'POLY-GAMMA';
             } else {
-                // Try async fetch as backup
+                // PRIORITY 3 - REST Backfill
                 bStrike = await getBinanceStrike(asset, strikeTime);
                 if (bStrike) {
                     strikeSource = 'BINANCE-OPEN-REST';
@@ -569,10 +541,8 @@ async function getUnifiedMarketState(asset = 'BTC') {
         }
         
         // LOCK IT if found (Crucial to prevent mid-slot Delta jumps)
-        // v50.7.2: Only lock if we are 100% sure it's not a leaked value from previous slot
-        if (bStrike) {
-            const isCorrectSlot = (strikeSource !== 'MEMORY-SYNC');
-            if (isCorrectSlot) slotStrikeLock.set(strikeTime, bStrike);
+        if (bStrike && strikeSource !== 'MEMORY-SYNC') {
+            slotStrikeLock.set(strikeTime, bStrike);
         }
     }
 
