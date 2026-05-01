@@ -7,7 +7,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { captureStrikeAtSlotOpen } from './chainlink-price.js';
-import { saveStrike, fetchStrikeFromPolymarket } from './src/core/strike-manager.js';
+import { saveStrike } from './src/core/strike-manager.js';
 import { SUPPORTED_ASSETS } from './config.js';
 
 let lastCapturedMinute = -1;
@@ -66,31 +66,7 @@ export const runBoundaryCapture = async (isStartup = false) => {
             }
         }
 
-        // v50.5.4: Multi-Attempt Strike Sync for startup resilience
-        (async () => {
-            const maxAttempts = isStartup ? 3 : 1;
-            for (let i = 0; i < maxAttempts; i++) {
-                let allDone = true;
-                for (const asset of SUPPORTED_ASSETS) {
-                    try {
-                        const apiStrike = await fetchStrikeFromPolymarket(asset, targetSlotStartMs);
-                        if (apiStrike != null) {
-                            console.log(`[Strike-Worker] 🏆 API SYNC SUCCESS for ${asset}: ${apiStrike}`);
-                            continue; 
-                        }
-                        allDone = false;
-                        const strikeData = await captureStrikeAtSlotOpen(asset, 'system_capture', targetSlotStartMs);
-                        if (strikeData && strikeData.price) {
-                            saveStrike(asset, strikeData.price, targetSlotStartMs);
-                        }
-                    } catch (err) {
-                        console.error(`[Strike-Worker] ❌ ERROR ${asset}:`, err.message);
-                    }
-                }
-                if (allDone) break;
-                if (isStartup && i < maxAttempts - 1) await new Promise(r => setTimeout(r, 5000));
-            }
-        })();
+        // v50.7.9: Polymarket Gamma Sync Loop REMOVED (Binance-Only Strategy)
 
     } catch (e) {
         console.error('[Strike-Worker] 💀 CRITICAL:', e.message);

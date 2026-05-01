@@ -510,13 +510,13 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // v35.0.0: Global export for SLSentinel & RiskManager
     global.lastBinanceSpot = bSpot;
 
-    // 2. Fetch or Backfill Strike (v50.7.1: LOCKED -> GAMMA -> BINANCE -> MEMORY Fallback Chain)
+    // 2. Fetch or Backfill Strike (v50.7.9: BINANCE-Only Truth)
     const strikeTime = slotStart; 
     let bStrike = slotStrikeLock.get(strikeTime);
-    let strikeSource = bStrike ? 'LOCKED-MEM' : 'POLY-GAMMA';
+    let strikeSource = bStrike ? 'LOCKED-MEM' : 'INIT';
 
     if (!bStrike) {
-        // v50.7.8: PRIORITY 1 - Binance Open (Source of Truth for V2)
+        // v50.7.9: PRIORITY 1 - Binance Open (Pure Strategy)
         bStrike = await getBinanceStrike(asset, strikeTime);
         if (bStrike) {
             strikeSource = 'BINANCE-OPEN-REST';
@@ -526,16 +526,10 @@ async function getUnifiedMarketState(asset = 'BTC') {
             if (isSlotMatch && global.lastBinanceOpen) {
                 bStrike = global.lastBinanceOpen;
                 strikeSource = 'BINANCE-OPEN-MEM';
-            } else {
-                // PRIORITY 3 - Gamma / Local Cache (Last Resort)
-                bStrike = getStrike(asset, strikeTime);
-                if (bStrike) {
-                    strikeSource = 'POLY-GAMMA';
-                } else if (global.lastBinanceOpen) {
-                    // Last resort memory (even if slot mismatch, better than 0)
-                    bStrike = global.lastBinanceOpen;
-                    strikeSource = 'MEMORY-SYNC';
-                }
+            } else if (global.lastBinanceOpen) {
+                // Last resort memory (even if slot mismatch, better than 0)
+                bStrike = global.lastBinanceOpen;
+                strikeSource = 'MEMORY-SYNC';
             }
         }
         
@@ -1109,7 +1103,7 @@ async function mainLoop() {
         // 5. Execution
         console.log(`[Engine] 🎯 Sniper Triggered! Dashboard=$${dashboardPrice.toFixed(3)} | BestAsk=$${executionPrice.toFixed(3)} | Side:${side} | Size:$${tradeAmountUsd.toFixed(2)}`);
         
-        // v17.29.5: High visibility on target market expiration
+        // v50.7.9: Polymarket Gamma Strike Logic REMOVED (Binance-Only Strategy)
         console.log(`[Engine] 🛡️🛰️⚓ Execution ID: ${tokenId} | Market: ${currentSig.slug} | Ends: ${currentSig.m?.endDate} | Side: ${side}`);
 
         // Mark slot as processed (v17.54.0 Persistent)

@@ -92,36 +92,7 @@ export const resolveStrikeLate = async (asset, startTime, getChainlinkPrice) => 
     return null;
 };
 
-/**
- * fetchStrikeFromPolymarket(asset, startTime)
- * v10.0.0 : Direct metadata sync with robust retry loop (60s)
- */
-export const fetchStrikeFromPolymarket = async (asset, startTime) => {
-    const cleanAsset = asset.trim().toUpperCase();
-    const sec = startTime > 10000000000 ? Math.floor(startTime / 1000) : startTime;
-    const slug = `${cleanAsset.toLowerCase()}-updown-5m-${sec}`;
-    const url = `https://gamma-api.polymarket.com/events/slug/${slug}`;
-
-    console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
-
-    // v50.7.7: FAST-FAIL (Polymarket Gamma removed priceToBeat field)
-    try {
-        const response = await axios.get(url, { timeout: 3000 }); // 3s timeout
-        const strike = response.data?.eventMetadata?.priceToBeat;
-
-        if (strike != null) {
-            const numericStrike = Number(strike);
-            console.log(`[Strike] [API] ✅ SUCCÈS : Strike extrait = ${numericStrike}`);
-            saveStrike(asset, numericStrike, sec * 1000);
-            return numericStrike;
-        }
-    } catch (e) {
-        console.warn(`[Strike] [API] Skip: ${e.message}`);
-    }
-
-    console.log(`[Strike] [API] ⚠️ Strike non disponible via Gamma. Bascule immédiate.`);
-    return null;
-};
+// v50.7.9: Polymarket Gamma Strike Logic REMOVED (Binance-Only Strategy)
 
 // v24.2.4: High-Speed Memory Cache (Zero Disk Lag)
 const binanceStrikeCache = {};
