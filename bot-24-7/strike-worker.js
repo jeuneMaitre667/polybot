@@ -45,7 +45,8 @@ export const runBoundaryCapture = async (isStartup = false) => {
                 
                 if (kRes.data && kRes.data[0]) {
                     const openPrice = parseFloat(kRes.data[0][1]); // Index 1 is Open Price
-                    global.lastBinanceOpen = openPrice; // v50.7.1: Immediate memory sync for fallback
+                    global.lastBinanceOpen = openPrice; // v50.7.2: Atomic Sync with slot-awareness
+                    global.lastBinanceOpenSlot = targetSlotStartMs;
                     saveBinanceStrike(asset, openPrice, targetSlotStartMs);
                     console.log(`[Strike-Worker] 🔸 BINANCE USDC OPEN: ${openPrice.toFixed(2)} (${asset})`);
                 } else {
@@ -55,7 +56,8 @@ export const runBoundaryCapture = async (isStartup = false) => {
                         httpsAgent: null 
                     });
                     const bPrice = parseFloat(bRes.data.price);
-                    global.lastBinanceOpen = bPrice; // v50.7.1: Immediate memory sync for fallback
+                    global.lastBinanceOpen = bPrice; // v50.7.2: Immediate memory sync for fallback
+                    global.lastBinanceOpenSlot = targetSlotStartMs;
                     saveBinanceStrike(asset, bPrice, targetSlotStartMs);
                     console.log(`[Strike-Worker] ⚠️ BINANCE TICK (Kline Fail): ${bPrice.toFixed(2)}`);
                 }

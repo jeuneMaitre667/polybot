@@ -546,18 +546,31 @@ async function getUnifiedMarketState(asset = 'BTC') {
             strikeSource = 'POLY-GAMMA';
         } else {
             // Try Binance Fallback (Live Open)
-            bStrike = await getBinanceStrike(asset, strikeTime);
-            if (bStrike) {
-                strikeSource = 'BINANCE-OPEN';
-            } else if (global.lastBinanceOpen) {
-                // Ultimate Memory Fallback
+            // v50.7.2: Ensure we only use Binance if it matches the CURRENT slot
+            const isSlotMatch = global.lastBinanceOpenSlot === (strikeTime > 10000000000 ? strikeTime : strikeTime * 1000);
+            
+            if (isSlotMatch && global.lastBinanceOpen) {
                 bStrike = global.lastBinanceOpen;
-                strikeSource = 'MEMORY-SYNC';
+                strikeSource = 'BINANCE-OPEN';
+            } else {
+                // Try async fetch as backup
+                bStrike = await getBinanceStrike(asset, strikeTime);
+                if (bStrike) {
+                    strikeSource = 'BINANCE-OPEN-REST';
+                } else if (global.lastBinanceOpen) {
+                    // Last resort memory (even if slot mismatch, better than 0)
+                    bStrike = global.lastBinanceOpen;
+                    strikeSource = 'MEMORY-SYNC';
+                }
             }
         }
         
         // LOCK IT if found (Crucial to prevent mid-slot Delta jumps)
-        if (bStrike) slotStrikeLock.set(strikeTime, bStrike);
+        // v50.7.2: Only lock if we are 100% sure it's not a leaked value from previous slot
+        if (bStrike) {
+            const isCorrectSlot = (strikeSource !== 'MEMORY-SYNC');
+            if (isCorrectSlot) slotStrikeLock.set(strikeTime, bStrike);
+        }
     }
 
     const effectiveStrike = bStrike;
