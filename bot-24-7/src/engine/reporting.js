@@ -22,28 +22,6 @@ export async function reportingLoop() {
         const now = timeKeeper.getNow();
         const slotStart = Math.floor(now / 300000) * 300000;
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
-
-        // --- 🛡️🛰️⚓ HEARTBEAT STATUS TELEGRAM ---
-        if (secondsLeft <= 90 && secondsLeft >= 10 && STATE.lastHeartbeatSlot !== slotStart) {
-            STATE.lastHeartbeatSlot = slotStart;
-            const displayTime = new Date(now).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-            let engineStatus = (STATE.userBalance === null && !CONFIG.IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
-            
-            const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
-                          `• Window: OPEN 🛡️🛰️⚓\n` +
-                          `• Capital: $${(STATE.userBalance || 0).toFixed(2)} 🛡️🛰️⚓\n` +
-                          `• Engine: ${engineStatus}`;
-
-            const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
-            const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
-            const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
-            import('axios').then(axios => {
-                axios.default.post(url, { chat_id: chatId, text: hbMsg, parse_mode: 'Markdown', disable_web_page_preview: true }, { timeout: 10000 })
-                    .then(() => console.log(`[Heartbeat] 🛡️🛰️⚓ Telegram Status Sent.`))
-                    .catch(e => console.error(`[Heartbeat] Telegram Error:`, e.message));
-            });
-        }
         
         // 0. Fetch Real Blockchain Balance
         if (now - lastBalanceFetchTime > CONFIG.BALANCE_REFRESH_MS || STATE.userBalance === null) {
@@ -68,7 +46,7 @@ export async function reportingLoop() {
         const marketState = await getUnifiedMarketState('BTC', slotStrikeLock);
         const { bSpot, effectiveStrike, bDeltaPct } = marketState;
 
-        // 2. HUD
+        // 2. HUD & Signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
         const currentSlotSec = Math.floor(slotStart / 1000);
         const sig = signalData.signals.find(s => s.slug && s.slug.endsWith(String(currentSlotSec)));
@@ -80,14 +58,15 @@ export async function reportingLoop() {
             const stealthOpts = getStealthProfile();
             if (process.env.PROXY_URL) stealthOpts.proxyUrl = process.env.PROXY_URL;
 
-            if (sig.tokenIdYes) {
+            // Optional Book Refresh for HUD accuracy
+            if (sig.tokenIdYes && (now % 5000 < 1000)) {
                 const res = await gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdYes}`, { ...stealthOpts, retry: { limit: 1 } }).catch(() => null);
                 if (res) {
                     const asks = res.body?.asks || [];
                     if (asks.length > 0) bestAskUp = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p < 0.999));
                 }
             }
-            if (sig.tokenIdNo) {
+            if (sig.tokenIdNo && (now % 5000 < 1000)) {
                 const res = await gotScraping.get(`https://clob.polymarket.com/book?token_id=${sig.tokenIdNo}`, { ...stealthOpts, retry: { limit: 1 } }).catch(() => null);
                 if (res) {
                     const asks = res.body?.asks || [];
@@ -101,14 +80,40 @@ export async function reportingLoop() {
             const deltaSign = deltaUsd >= 0 ? '+' : '';
             
             const isDeltaMet = Math.abs(deltaPct) >= CONFIG.SNIPER_DELTA_THRESHOLD_PCT;
-            const upLabel = (bestAskUp > 0.80 && isDeltaMet && deltaPct > 0) ? '🛡️🛰️⚓ UP' : '🛡️🛰️⚓ UP';
-            const downLabel = (bestAskDown > 0.80 && isDeltaMet && deltaPct < 0) ? '🛡️🛰️⚓ DOWN' : '🛡️🛰️⚓ DOWN';
+            const upLabel = '🛡️🛰️⚓ UP';
+            const downLabel = '🛡️🛰️⚓ DOWN';
 
             const displayBalance = CONFIG.IS_SIMULATION_ENABLED ? getVirtualBalance() : STATE.userBalance;
+            const pipelineLine = `[PIPELINE] | T-${secondsLeft}s | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${(displayBalance||0).toFixed(2)} | Open:${(effectiveStrike||0).toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`;
             
-            console.log(`[PIPELINE] | T-${secondsLeft}s | slot:${currentSlotLabel} | ${upLabel}:${(bestAskUp * 100).toFixed(1)}% | ${downLabel}:${(bestAskDown * 100).toFixed(1)}% | Bal:$${(displayBalance||0).toFixed(2)} | Open:${(effectiveStrike||0).toFixed(2)} | Spot:${bSpot.toFixed(2)} | Δ:${deltaSign}$${deltaUsd.toFixed(2)} (${deltaSign}${deltaPct.toFixed(3)}%)`);
+            console.log(pipelineLine);
+
+            // --- 🛡️🛰️⚓ HEARTBEAT STATUS TELEGRAM ---
+            if (secondsLeft <= 90 && secondsLeft >= 10 && STATE.lastHeartbeatSlot !== slotStart) {
+                STATE.lastHeartbeatSlot = slotStart;
+                const displayTime = new Date(now).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                let engineStatus = (STATE.userBalance === null && !CONFIG.IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
+                
+                const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}* 🛡️🛰️⚓\n\n` +
+                              `• Window: OPEN 🛡️🛰️⚓\n` +
+                              `• Capital: $${(STATE.userBalance || 0).toFixed(2)} 🛡️🛰️⚓\n` +
+                              `• Engine: ${engineStatus}\n\n` +
+                              `\`${pipelineLine}\``;
+
+                const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+                const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+                const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+                import('axios').then(axios => {
+                    axios.default.post(url, { chat_id: chatId, text: hbMsg, parse_mode: 'Markdown', disable_web_page_preview: true }, { timeout: 10000 })
+                        .then(() => console.log(`[Heartbeat] 🛡️🛰️⚓ Telegram Status Sent.`))
+                        .catch(e => console.error(`[Heartbeat] Telegram Error:`, e.message));
+                });
+            }
         }
-    } catch (err) {} finally {
+    } catch (err) {
+        console.error("[Reporting] Loop Error:", err.message);
+    } finally {
         STATE.isReporting = false;
         setTimeout(reportingLoop, 1000);
     }
