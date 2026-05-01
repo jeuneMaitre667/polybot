@@ -178,7 +178,7 @@ export const getBinanceStrike = async (asset, startTime) => {
             // --- FALLBACK: Backfill via Binance Klines API ---
             console.log(`[Strike] [BACKFILL] Fetching ${asset} open price (USDC) for ${new Date(ms).toISOString()}...`);
             const symbol = `${cleanAsset}USDC`;
-            const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 10000 });
+            const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${ms}&limit=1`, { timeout: 2000 });
             
             if (res.data && res.data[0]) {
                 const openPrice = parseFloat(res.data[0][1]); // 1 is Open Price
