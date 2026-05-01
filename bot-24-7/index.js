@@ -451,10 +451,14 @@ async function init() {
     // v17.16.0: Initial Heartbeat Pulse (Eliminate Dashboard Skeletons)
     updateHealth({ status: 'starting', sniperHUD: 'INITIALIZING...' });
 
-    // v17.36.0: Initialize RiskManager with Virtual or Real Balance
-    const initialBal = IS_SIMULATION_ENABLED ? getVirtualBalance() : (userBalance || 0);
-    RiskManager.initSession(initialBal);
-    console.log(`[Init] 🛡️🛰️⚓ Risk Strategy: ${IS_SIMULATION_ENABLED ? 'LAB (Virtual $' + initialBal + ')' : 'LIVE (Real)'}`);
+    // v17.36.0: Initialize RiskManager with Virtual or Real Balance (if available)
+    const initialBal = IS_SIMULATION_ENABLED ? getVirtualBalance() : userBalance;
+    if (initialBal !== null && initialBal > 0) {
+        RiskManager.initSession(initialBal);
+        console.log(`[Init] 🛡️🛰️⚓ Risk Strategy: ${IS_SIMULATION_ENABLED ? 'LAB (Virtual $' + initialBal + ')' : 'LIVE (Real)'}`);
+    } else {
+        console.log(`[Init] ⏳ Risk Baseline pending (waiting for first balance fetch)`);
+    }
 
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY is missing in .env");
@@ -494,8 +498,7 @@ async function init() {
         }
     }, 10000);
     
-    // v16.16.0: Initialize Risk Baseline
-    RiskManager.initSession(memoryHealth.totalUsd || 0);
+    // v16.16.0: Initialize Risk Baseline (moved to first balance fetch for reliability)
     console.log("[Init] All systems synchronized.");
 }
 

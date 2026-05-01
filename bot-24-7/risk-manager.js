@@ -56,8 +56,11 @@ export function shouldTriggerStopLoss(buyPrice, currentBid, currentAsk, side, en
     return true;
 }
 
-export function initSession(initialBalance) {
-    console.log('[RiskManager] 🛡️🛰️⚓ Switch to REAL TRADING Mode. Fixed $2.50 Stake Active.');
+let sessionBaseline = 0;
+export function initSession(balance) {
+    if (!balance || balance <= 0) return; // v50.7.3: Ignore null/zero startup pulses
+    sessionBaseline = balance;
+    console.log(`[RiskManager] 🛡️🛰️⚓ Session Baseline Locked: $${balance.toFixed(2)}`);
     console.log('[RiskManager] 🛡️⚓ Delta Shield v50.4.8 (Delta 0.04%) + RAW-EXIT Active.');
 }
 
