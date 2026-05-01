@@ -1,5 +1,5 @@
 /**
- * Master Controller (v2025 MODULAR - v50.7.0 V2-CONTRACT-UPDATE)
+ * Master Controller (v2025 MODULAR - v50.7.1 GAMMA-BYPASS-ACTIVE)
  * Orchestrates market sync, strategy filtering, and trading execution.
  * BUILT FOR DUAL-ASK REALTIME SYNC
  */
@@ -533,13 +533,22 @@ async function getUnifiedMarketState(asset = 'BTC') {
     // v35.0.0: Global export for SLSentinel & RiskManager
     global.lastBinanceSpot = bSpot;
 
-    // 2. Fetch or Backfill Strike (v24.3.0: PURE BINANCE REFERENCE)
+    // 2. Fetch or Backfill Strike (v50.7.1: GAMMA -> BINANCE -> MEMORY Fallback Chain)
     const strikeTime = slotStart; 
-    let bStrike = await getBinanceStrike(asset, strikeTime);
+    let bStrike = getStrike(asset, strikeTime); // Try local cache (Polymarket Sync)
+    let strikeSource = 'POLY-GAMMA';
+
+    if (!bStrike) {
+        bStrike = await getBinanceStrike(asset, strikeTime); // Try Binance Open
+        strikeSource = 'BINANCE-OPEN';
+    }
+
+    if (!bStrike && global.lastBinanceOpen) {
+        bStrike = global.lastBinanceOpen; // Ultimate Memory Fallback
+        strikeSource = 'MEMORY-SYNC';
+    }
     
-    // v24.3.0: Strategy strictly follows Binance Open for better signal sensitivity
     const effectiveStrike = bStrike;
-    const strikeSource = bStrike ? 'BINANCE-SPOT-OPEN' : 'MISSING';
     source = `${strikeSource} (${source})`;
     
     // 3. Calculate Delta

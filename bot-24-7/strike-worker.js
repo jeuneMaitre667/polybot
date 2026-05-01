@@ -33,29 +33,29 @@ export const runBoundaryCapture = async (isStartup = false) => {
         console.log(`[Strike-Worker] 🎯 ${isStartup ? "COLD-START" : "TRIGGER"} detected for slot ${new Date(targetSlotStartMs).toISOString()}`);
 
         // --- 🔵 BINANCE USDC ALIGNMENT ---
-        // Capture du prix "Ouverture" (Open) de la bougie
         for (const asset of SUPPORTED_ASSETS) {
             try {
-                // On utilise USDC comme demandé
                 const symbol = `${asset.toUpperCase()}USDC`;
                 
                 // On récupère le kline 5m pour avoir l' "Ouverture" exacte du graphique
                 const kRes = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${targetSlotStartMs}&limit=1`, { 
                     timeout: 5000,
-                    httpsAgent: null // v34.3: Direct connection to Binance
+                    httpsAgent: null 
                 });
                 
                 if (kRes.data && kRes.data[0]) {
                     const openPrice = parseFloat(kRes.data[0][1]); // Index 1 is Open Price
+                    global.lastBinanceOpen = openPrice; // v50.7.1: Immediate memory sync for fallback
                     saveBinanceStrike(asset, openPrice, targetSlotStartMs);
                     console.log(`[Strike-Worker] 🔸 BINANCE USDC OPEN: ${openPrice.toFixed(2)} (${asset})`);
                 } else {
                     // Fallback Tick si kline pas encore prêt
                     const bRes = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`, { 
                         timeout: 5000,
-                        httpsAgent: null // v34.3: Direct connection to Binance
+                        httpsAgent: null 
                     });
                     const bPrice = parseFloat(bRes.data.price);
+                    global.lastBinanceOpen = bPrice; // v50.7.1: Immediate memory sync for fallback
                     saveBinanceStrike(asset, bPrice, targetSlotStartMs);
                     console.log(`[Strike-Worker] ⚠️ BINANCE TICK (Kline Fail): ${bPrice.toFixed(2)}`);
                 }
@@ -103,10 +103,8 @@ function saveBinanceStrike(asset, price, timestamp) {
             data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         }
         if (!data[asset]) data[asset] = [];
-        // v50.5.4: Avoid duplicates
         if (data[asset].some(p => p.at === timestamp)) return;
         data[asset].push({ at: timestamp, price });
-        // Garder les 50 derniers points
         data[asset] = data[asset].slice(-50);
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
     } catch (e) {
@@ -117,5 +115,5 @@ function saveBinanceStrike(asset, price, timestamp) {
 export const startStrikeWorker = () => {
     console.log('[Strike-Worker] 🚀 Starting High-Precision 5m Capture Sync (v50.5.4 COLD-START Enabled)...');
     setInterval(() => runBoundaryCapture(false), 5000);
-    setTimeout(() => runBoundaryCapture(true), 2000); // Startup trigger with COLD-START
+    setTimeout(() => runBoundaryCapture(true), 2000);
 };
