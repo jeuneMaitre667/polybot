@@ -2,12 +2,13 @@
 
 Moteur de trading algorithmique optimisé pour le protocole **pUSD** de Polymarket V2. Spécialisé sur l'arbitrage de latence Bitcoin (Binance vs Polymarket).
 
-## 📊 Stratégie de Production (v50.5.10)
+## 📊 Stratégie de Production (v50.7.9)
 
 | Paramètre | Valeur | Description |
 |-----------|--------|-------------|
 | **Price Range** | `0.88 - 0.95` | Zone d'entrée sécurisée (Probabilité > 90%) |
-| **Delta Seuil** | `0.07%` | Écart Binance-Spot vs Polymarket-Strike pour déclencher |
+| **Delta Seuil** | `0.067%` | Écart Binance-Spot vs Binance-Open pour déclencher |
+| **Strike Source** | `Binance Open` | Le bot se fie à 100% à l'ouverture de la bougie 5m Binance |
 | **Mise Fixe** | `$2.50 pUSD` | Gestion de risque conservative (Safety Mode) |
 | **Stop-Loss** | `-14%` | Sortie de sécurité nette (Protocol Fees incl.) |
 | **Delta Shield** | `0.04%` | Bloque le SL si l'asset progresse en faveur du trade |
@@ -18,6 +19,7 @@ Moteur de trading algorithmique optimisé pour le protocole **pUSD** de Polymark
 - **Collatéral** : pUSD (Contrat `0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb`).
 - **Signature** : EIP-712 v2 via `viem` (WalletAccount).
 - **Execution** : `@polymarket/clob-client-v2` + Manual HMAC Headers.
+- **Monitoring** : Exclusif via **Logs PM2** (Pipeline temps réel), Dashboard supprimé.
 - **Sentinel** : Monitoring Turbo (200ms) indépendant du flux principal.
 - **V2-Shield** : Vérification et approbation automatique (Allowance) des contrats V2 au démarrage.
 
@@ -30,21 +32,21 @@ pm2 list
 # Lancement officiel
 pm2 start ecosystem.config.cjs --name poly-engine
 
-# Logs temps réel
+# Logs temps réel (seule méthode de monitoring)
 pm2 logs poly-engine
 ```
 
 ## 📈 Monitoring & Diagnostics
 
-- **Internal Health** : `cat health-v17.json`
+Le monitoring s'effectue **exclusivement via les logs de la pipeline** :
+- **Visualiser la pipeline** : `pm2 logs poly-engine --lines 10`
 - **Active Positions** : `cat active-positions.json`
 - **V2 Approval Status** : Vérifier les logs au démarrage ("Allowance OK").
 
 ## 🛡️ Sécurité & Proxy
-Le bot tourne sous proxy **Dublin-Ghost** (AWS `eu-west-1`) pour contourner le geoblock `403/405`. 
+Le bot tourne en **connexion directe** (AWS `eu-west-1` Ireland) pour éviter les bannissements de proxy. 
 - **Vérification** : `GET https://clob.polymarket.com/time` doit renvoyer un statut 200.
 
 ---
-*Dernière mise à jour : v50.5.10 "FULL-V2-SHIELD-FIX"*
+*Dernière mise à jour : v50.7.9 "PURE-BINANCE & DASHBOARD-FREE"*
 ⚓⚡⚓
-
