@@ -82,6 +82,7 @@ export function recordTradeResult(isWin) {
 
 export function isTradingSuspended(currentBalance) {
     if (tradingSuspended) return true;
+    // v50.7.2: Skip check during initialization (null) to avoid race condition deaths
     if (currentBalance !== null && currentBalance < MIN_BALANCE_THRESHOLD) {
         console.error(`[RiskManager] 🚨 SAFETY STOP: Balance ($${currentBalance}) below threshold ($${MIN_BALANCE_THRESHOLD}).`);
         tradingSuspended = true;
