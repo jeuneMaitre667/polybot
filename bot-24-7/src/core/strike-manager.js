@@ -104,30 +104,22 @@ export const fetchStrikeFromPolymarket = async (asset, startTime) => {
 
     console.log(`[Strike] [API] Synchronisation via Polymarket Gamma pour ${slug}...`);
 
-    // Retry loop : tenter toutes les 10s pendant 1 minute (6 tentatives)
-    for (let attempt = 1; attempt <= 6; attempt++) {
-        try {
-            const response = await axios.get(url, { timeout: 10000 });
-            const strike = response.data?.eventMetadata?.priceToBeat;
+    // v50.7.7: FAST-FAIL (Polymarket Gamma removed priceToBeat field)
+    try {
+        const response = await axios.get(url, { timeout: 3000 }); // 3s timeout
+        const strike = response.data?.eventMetadata?.priceToBeat;
 
-            if (strike != null) {
-                const numericStrike = Number(strike);
-                console.log(`[Strike] [API] ✅ SUCCÈS (Tentative ${attempt}) : Strike extrait = ${numericStrike}`);
-                saveStrike(asset, numericStrike, sec * 1000);
-                return numericStrike;
-            }
-
-            if (attempt < 6) {
-                console.warn(`[Strike] [API] ⏳ Tentative ${attempt}/6 : Strike non encore publié. Attente 10s...`);
-                await new Promise(r => setTimeout(r, 10000));
-            }
-        } catch (e) {
-            console.warn(`[Strike] [API] ❌ Tentative ${attempt}/6 échouée (${e.message}).`);
-            if (attempt < 6) await new Promise(r => setTimeout(r, 10000));
+        if (strike != null) {
+            const numericStrike = Number(strike);
+            console.log(`[Strike] [API] ✅ SUCCÈS : Strike extrait = ${numericStrike}`);
+            saveStrike(asset, numericStrike, sec * 1000);
+            return numericStrike;
         }
+    } catch (e) {
+        console.warn(`[Strike] [API] Skip: ${e.message}`);
     }
 
-    console.error(`[Strike] [API] 💀 Échec définitif pour ${slug} après 1 minute.`);
+    console.log(`[Strike] [API] ⚠️ Strike non disponible via Gamma. Bascule immédiate.`);
     return null;
 };
 
