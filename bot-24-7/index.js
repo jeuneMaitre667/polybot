@@ -969,7 +969,7 @@ async function mainLoop() {
         
         // v17.22.13: FORCED REAL-TIME DEPTH (Eliminate 3s Health-Sync Lag)
         // Dès que le signal Binance est bon, on va chercher le prix REEL sur l'Orderbook
-        console.log(`[Engine] 🛡️🛰️⚓ Binance Signal Met (${fmt(bDeltaPct, 3)}%). Checking Polymarket Depth for ${side}...`);
+        // console.log(`[Engine] 🛡️🛰️⚓ Binance Signal Met (${fmt(bDeltaPct, 3)}%). Checking Polymarket Depth for ${side}...`);
         
         // Fetch specific tokenId from signals
         const signalData = await fetchSignals('BTC').catch(() => ({ signals: [] }));
@@ -1030,7 +1030,7 @@ async function mainLoop() {
 
         // v49.8.1: Restore dashboardPrice definition (Critical fix for entry regression)
         const dashboardPrice = (liveClobPrice > 0) ? liveClobPrice : staleGammaPrice;
-        console.log(`[Engine] 🛡️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
+        // console.log(`[Engine] 🛡️⚓ Signal Price Sync (TURBO+): CLOB=$${liveClobPrice.toFixed(3)} | Dashboard=$${staleGammaPrice.toFixed(3)} | Bid=$${currentBestBid.toFixed(3)} | Target=$${dashboardPrice.toFixed(3)}`);
 
         // v22.4.1: CRITICAL TRIGGER DECISION (Non-blocking fallback)
         if (!dashboardPrice || dashboardPrice < SNIPER_PRICE_MIN || dashboardPrice > SNIPER_PRICE_MAX) {
