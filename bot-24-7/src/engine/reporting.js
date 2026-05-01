@@ -7,6 +7,7 @@ import { getVirtualBalance } from '../../src/core/virtual-wallet.js';
 import { timeKeeper } from '../../src/core/ntp-client.js';
 import * as RiskManager from '../../risk-manager.js';
 import { ethers } from 'ethers';
+import axios from 'axios';
 
 const slotStrikeLock = new Map();
 let lastBalanceFetchTime = 0;
@@ -90,6 +91,7 @@ export async function reportingLoop() {
 
             // --- 🛡️🛰️⚓ HEARTBEAT STATUS TELEGRAM ---
             if (secondsLeft <= 90 && secondsLeft >= 10 && STATE.lastHeartbeatSlot !== slotStart) {
+                console.log(`[Heartbeat] 🛡️🛰️⚓ Window detected (T-${secondsLeft}s). Sending Telegram...`);
                 STATE.lastHeartbeatSlot = slotStart;
                 const displayTime = new Date(now).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
                 let engineStatus = (STATE.userBalance === null && !CONFIG.IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
@@ -104,11 +106,9 @@ export async function reportingLoop() {
                 const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
                 const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
-                import('axios').then(axios => {
-                    axios.default.post(url, { chat_id: chatId, text: hbMsg, parse_mode: 'Markdown', disable_web_page_preview: true }, { timeout: 10000 })
-                        .then(() => console.log(`[Heartbeat] 🛡️🛰️⚓ Telegram Status Sent.`))
-                        .catch(e => console.error(`[Heartbeat] Telegram Error:`, e.message));
-                });
+                axios.post(url, { chat_id: chatId, text: hbMsg, parse_mode: 'Markdown', disable_web_page_preview: true }, { timeout: 10000 })
+                    .then(() => console.log(`[Heartbeat] 🛡️🛰️⚓ Telegram Status Sent.`))
+                    .catch(e => console.error(`[Heartbeat] Telegram Error:`, e.message));
             }
         }
     } catch (err) {
