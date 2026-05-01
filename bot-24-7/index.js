@@ -516,22 +516,21 @@ async function getUnifiedMarketState(asset = 'BTC') {
     let strikeSource = bStrike ? 'LOCKED-MEM' : 'POLY-GAMMA';
 
     if (!bStrike) {
-        // v50.7.4: PRIORITY 1 - Fresh Binance Memory (Atomic Sync)
-        const isSlotMatch = global.lastBinanceOpenSlot === (strikeTime > 10000000000 ? strikeTime : strikeTime * 1000);
-        
-        if (isSlotMatch && global.lastBinanceOpen) {
-            bStrike = global.lastBinanceOpen;
-            strikeSource = 'BINANCE-OPEN-MEM';
+        // v50.7.8: PRIORITY 1 - Binance Open (Source of Truth for V2)
+        bStrike = await getBinanceStrike(asset, strikeTime);
+        if (bStrike) {
+            strikeSource = 'BINANCE-OPEN-REST';
         } else {
-            // PRIORITY 2 - Gamma / Local Cache
-            bStrike = getStrike(asset, strikeTime);
-            if (bStrike) {
-                strikeSource = 'POLY-GAMMA';
+            // PRIORITY 2 - Fresh Binance Memory (Atomic Sync)
+            const isSlotMatch = global.lastBinanceOpenSlot === (strikeTime > 10000000000 ? strikeTime : strikeTime * 1000);
+            if (isSlotMatch && global.lastBinanceOpen) {
+                bStrike = global.lastBinanceOpen;
+                strikeSource = 'BINANCE-OPEN-MEM';
             } else {
-                // PRIORITY 3 - REST Backfill
-                bStrike = await getBinanceStrike(asset, strikeTime);
+                // PRIORITY 3 - Gamma / Local Cache (Last Resort)
+                bStrike = getStrike(asset, strikeTime);
                 if (bStrike) {
-                    strikeSource = 'BINANCE-OPEN-REST';
+                    strikeSource = 'POLY-GAMMA';
                 } else if (global.lastBinanceOpen) {
                     // Last resort memory (even if slot mismatch, better than 0)
                     bStrike = global.lastBinanceOpen;
