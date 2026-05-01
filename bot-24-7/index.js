@@ -540,23 +540,23 @@ async function getUnifiedMarketState(asset = 'BTC') {
     let strikeSource = bStrike ? 'LOCKED-MEM' : 'POLY-GAMMA';
 
     if (!bStrike) {
-        // Try Gamma First
+        // Try Gamma First (Local Cache)
         bStrike = getStrike(asset, strikeTime);
         if (bStrike) {
             strikeSource = 'POLY-GAMMA';
         } else {
-            // Try Binance Fallback
-            bStrike = global.lastBinanceOpen;
+            // Try Binance Fallback (Live Open)
+            bStrike = await getBinanceStrike(asset, strikeTime);
             if (bStrike) {
                 strikeSource = 'BINANCE-OPEN';
-            } else {
-                // Last Resort: Memory Sync
-                bStrike = boundaryStrikes[strikeTime] || null;
-                if (bStrike) strikeSource = 'MEMORY-SYNC';
+            } else if (global.lastBinanceOpen) {
+                // Ultimate Memory Fallback
+                bStrike = global.lastBinanceOpen;
+                strikeSource = 'MEMORY-SYNC';
             }
         }
         
-        // LOCK IT if found
+        // LOCK IT if found (Crucial to prevent mid-slot Delta jumps)
         if (bStrike) slotStrikeLock.set(strikeTime, bStrike);
     }
 
