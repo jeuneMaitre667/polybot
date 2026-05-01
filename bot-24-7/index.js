@@ -1626,13 +1626,13 @@ async function executeEmergencyExit(info) {
 async function fetchStrikeFromPolymarket(asset, slotStartMs) {
     try {
         const slotSec = Math.floor(slotStartMs / 1000);
-        const url = `https://gamma-api.polymarket.com/events?slug=btc-updown-5m-${slotSec}`;
+        const url = `https://gamma-api.polymarket.com/events/slug/btc-updown-5m-${slotSec}`;
         const res = await axios.get(url, { 
             httpsAgent: proxyAgent,
             timeout: 5000 
         });
-        if (res.data && res.data[0] && res.data[0].markets) {
-            const m = res.data[0].markets[0];
+        if (res.data && res.data.markets) {
+            const m = res.data.markets[0];
             const strike = m?.eventMetadata?.priceToBeat;
             return strike ? parseFloat(strike) : null;
         }

@@ -50,9 +50,9 @@ export async function fetchSignals(asset, context = {}) {
         const slugRequests = slotsToFetch.map(slotMs => {
             const slotSec = Math.floor(slotMs / 1000);
             const slug = `btc-updown-5m-${slotSec}`;
-            const url = `https://gamma-api.polymarket.com/events?slug=${slug}`;
+            const url = `https://gamma-api.polymarket.com/events/slug/${slug}`;
             return axios.get(url, { timeout: 5000, httpsAgent: null })
-                .then(r => r.data?.[0] || null)
+                .then(r => r.data || null)
                 .catch(() => null);
         });
         
