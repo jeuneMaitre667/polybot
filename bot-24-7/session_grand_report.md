@@ -77,15 +77,15 @@ Ce document fait office de rapport opérationnel fusionnant les performances his
 
 #### 2. État Technique & Configuration
 *   **Version** : `v51.0.0` (Modular V2).
-*   **Statut** : 🟢 **EN PRODUCTION (Trading Réel)**.
+*   **Statut** : 🔴 **STOPPÉ (Pause Stratégique Weekend)**.
 *   **Sniper** : Delta 0.067%, Fenêtre T-90s à T-30s.
 
-#### 3. Levée de la Pause Stratégique
-*   **Action** : Le bot a été relancé en mode Trading Réel après validation de la structure V2.
-*   **Surveillance** : Les prochaines heures devront confirmer la stabilité du client CLOB V2 avec Polymarket suite à la mise à jour (fix "Ghost Fills").
-*   **Monitoring** : Exclusif via `pm2 logs poly-engine --raw`.
+#### 3. Pause Stratégique (Weekend)
+*   **Action** : Le bot a été mis en pause après validation complète de l'Engine V2 (HUD & Telegram Heartbeat OK).
+*   **Raison** : En attente du tweet officiel de Polymarket confirmant le fix complet de la CLOB V2.
+*   **Prêt pour Lundi** : La nouvelle architecture est déployée et testée ; il suffira d'un `pm2 start poly-engine` pour reprendre instantanément.
 
-**Statut du système** : 🟢 **OPÉRATIONNEL**. Engine V2 actif en ligne de mire.
+**Statut du système** : ⏸️ **EN PAUSE**. Engine V2 prêt pour le déploiement massif lundi.
 
 *Ce rapport est mis à jour en temps réel par l'assistant IA Antigravity.*
 ⚓⚡⚓
