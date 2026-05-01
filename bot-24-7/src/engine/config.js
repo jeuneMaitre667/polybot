@@ -54,5 +54,6 @@ export const STATE = {
     isResolving: false,
     isReporting: false,
     isMainLoopRunning: false,
+    lastHeartbeatSlot: 0,
     lastPulseTime: Date.now()
 };

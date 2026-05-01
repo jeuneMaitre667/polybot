@@ -22,6 +22,28 @@ export async function reportingLoop() {
         const now = timeKeeper.getNow();
         const slotStart = Math.floor(now / 300000) * 300000;
         const secondsLeft = Math.floor((slotStart + 300000 - now) / 1000);
+
+        // --- 🛡️🛰️⚓ HEARTBEAT STATUS TELEGRAM ---
+        if (secondsLeft <= 90 && secondsLeft >= 10 && STATE.lastHeartbeatSlot !== slotStart) {
+            STATE.lastHeartbeatSlot = slotStart;
+            const displayTime = new Date(now).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            let engineStatus = (STATE.userBalance === null && !CONFIG.IS_SIMULATION_ENABLED) ? "SYNCING... ⏳" : "READY 🛡️🛰️⚓";
+            
+            const hbMsg = `🛡️🛰️⚓ *SNIPER STATUS : ${displayTime}*🛡️🛰️⚓\n\n` +
+                          `• Window: OPEN 🛡️🛰️⚓\n` +
+                          `• Capital: $${(STATE.userBalance || 0).toFixed(2)} 🛡️🛰️⚓\n` +
+                          `• Engine: ${engineStatus}`;
+
+            const token = (process.env.ALERT_TELEGRAM_BOT_TOKEN || '').trim();
+            const chatId = (process.env.ALERT_TELEGRAM_CHAT_ID || '').trim();
+            const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+            import('axios').then(axios => {
+                axios.default.post(url, { chat_id: chatId, text: hbMsg, parse_mode: 'Markdown', disable_web_page_preview: true }, { timeout: 10000 })
+                    .then(() => console.log(`[Heartbeat] 🛡️🛰️⚓ Telegram Status Sent.`))
+                    .catch(e => console.error(`[Heartbeat] Telegram Error:`, e.message));
+            });
+        }
         
         // 0. Fetch Real Blockchain Balance
         if (now - lastBalanceFetchTime > CONFIG.BALANCE_REFRESH_MS || STATE.userBalance === null) {
